@@ -8,6 +8,7 @@ export const name = 'nico-nico-ranking-ng-v14.1-performance-pager-fix (2).user.j
 export const expectedHash = 'AF382AE50FCF8CDFDFC2AE178F3BE8861AC7ECF1611F30F4E3FB94439A87F371';
 export const baseline = resolve(root, 'baseline', name);
 export const output = resolve(root, 'dist', name);
+export const sourceParts = ['src/legacy/prefix.js', 'src/core/events.js', 'src/core/storage.js', 'src/legacy/remainder.js'];
 export function verify(bytes) {
   const hash = createHash('sha256').update(bytes).digest('hex').toUpperCase();
   if (bytes.length !== 463894 || hash !== expectedHash) {
@@ -18,11 +19,14 @@ export function verify(bytes) {
 export async function build(source = baseline, destination = output) {
   const bytes = await readFile(source);
   verify(bytes);
+  const assembled = Buffer.concat(await Promise.all(sourceParts.map(part => readFile(resolve(root, part)))));
+  // Task 001 only changes file boundaries, so even whitespace must remain identical.
+  if (!assembled.equals(bytes)) throw new Error('Task 001 assembly differs from approved baseline');
   await mkdir(dirname(destination), { recursive: true });
-  await writeFile(destination, bytes);
+  await writeFile(destination, assembled);
   verify(await readFile(destination));
 }
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   await build();
-  console.log('Build PASS: unchanged baseline copied to dist.');
+  console.log('Build PASS: source parts assembled byte-identically to v14.1.');
 }

@@ -6,6 +6,6 @@
   "scripts": {
     "build": "node scripts/build.mjs",
     "check": "node scripts/check.mjs",
-    "test": "node --test tests/baseline.test.mjs"
+    "test": "node scripts/test.mjs"
   }
 }
