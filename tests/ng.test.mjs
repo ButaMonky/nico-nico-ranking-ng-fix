@@ -15,6 +15,36 @@ async function load(path){
 const condition=(field,operator,value,not=false)=>({kind:'condition',field,operator,value,not});
 const group=(op,children,not=false)=>({kind:'group',op,children,not});
 for(const [label,path] of [['baseline',baseline],['generated',output]]){
+  test(`${label}: detail application order, shared models and duplicate IDs`,async()=>{
+    const {Config,Movie,Movies,ThumbInfoListener}=await load(path);
+    const config=new Config((k,d)=>d,()=>{});await config.sync();
+    const movies=new Movies(config),a=new Movie('a','original'),b=new Movie('b','second'),c=new Movie('c','third');
+    movies.setIfAbsent([a,b,c]);const duplicate=new Movie('a','replacement');movies.setIfAbsent([duplicate]);
+    assert.equal(movies.get('a'),a);assert.equal(a.title,'original');
+    const trace=[];for(const event of ['descriptionChanged','tagsChanged','contributorChanged','thumbInfoDone'])a.on(event,()=>trace.push([event,a.thumbInfoDone]));
+    const complete=ThumbInfoListener.forCompleted(movies);
+    const payload=(id,lock=false,name='first',type='user')=>({id,title:'API title',description:'detail',tags:[{name:'shared',lock}],contributor:{type,id:42,name}});
+    complete(payload('a'));complete(payload('b',false,'later'));complete(payload('c',true,'channel','channel'));
+    assert.deepEqual(trace,[['descriptionChanged',false],['tagsChanged',false],['contributorChanged',false],['thumbInfoDone',true]]);
+    assert.equal(a.title,'original');assert.equal(a.description,'detail');
+    assert.equal(a.tags[0],b.tags[0]);assert.notEqual(a.tags[0],c.tags[0]);
+    assert.equal(a.contributor,b.contributor);assert.equal(b.contributor.name,'first');assert.notEqual(a.contributor,c.contributor);
+    config.ngLockedTags.add('shared');assert.deepEqual([a.ng,b.ng,c.ng],[false,false,true]);
+    config.ngTags.add('shared');assert.deepEqual([a.ng,b.ng,c.ng],[true,true,true]);
+    config.ngTags.clear();config.ngLockedTags.clear();assert.deepEqual([a.ng,b.ng,c.ng],[false,false,false]);
+    config.ngChannelIds.add(42);assert.deepEqual([a.ng,b.ng,c.ng],[false,false,true]);
+  });
+  test(`${label}: failed details notify before done and unknown IDs throw`,async()=>{
+    const {Config,Movie,Movies,ThumbInfoListener}=await load(path);
+    const config=new Config((k,d)=>d,()=>{});await config.sync();
+    const movies=new Movies(config),m=new Movie('failure','title');movies.setIfAbsent([m]);
+    const trace=[];m.on('errorChanged',()=>trace.push(['error',m.thumbInfoDone]));m.on('thumbInfoDone',()=>trace.push(['done',m.thumbInfoDone]));
+    const fail=ThumbInfoListener.forErrorOccurred(movies);
+    fail({id:m.id,error:{type:'ERROR',message:'fixture'}});
+    assert.deepEqual(trace,[['error',false],['done',true]]);assert.equal(m.error.type,'ERROR');
+    assert.throws(()=>fail({id:'absent',error:{type:'ERROR'}}));
+    assert.throws(()=>ThumbInfoListener.forCompleted(movies)({id:'absent'}));
+  });
   test(`${label}: tags, configuration changes and notification ordering`,async()=>{
     const {Config,Movie,Movies,ThumbInfoListener}=await load(path);
     const config=new Config((k,d)=>d,()=>{});await config.sync();
