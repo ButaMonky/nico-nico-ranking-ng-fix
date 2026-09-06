@@ -1,0 +1,11 @@
+{
+  "baselineSha256": "AF382AE50FCF8CDFDFC2AE178F3BE8861AC7ECF1611F30F4E3FB94439A87F371",
+  "lock10and11": [false, true],
+  "titleChina": true,
+  "userCounts": [0, 100, 0],
+  "missingSimple": false,
+  "missingStates": [false, true, true],
+  "failedStates": [true, true],
+  "logic": [false, true, true, false],
+  "ruleMatches": ["locked"]
+}
