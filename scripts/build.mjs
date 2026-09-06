@@ -8,7 +8,7 @@ export const name = 'nico-nico-ranking-ng-v14.1-performance-pager-fix (2).user.j
 export const expectedHash = 'AF382AE50FCF8CDFDFC2AE178F3BE8861AC7ECF1611F30F4E3FB94439A87F371';
 export const baseline = resolve(root, 'baseline', name);
 export const output = resolve(root, 'dist', name);
-export const sourceParts = ['src/legacy/prefix.js', 'src/core/events.js', 'src/core/storage.js', 'src/core/config.js', 'src/legacy/before-ng.js', 'src/ng/logic-rules.js', 'src/legacy/remainder.js'];
+export const sourceParts = ['src/legacy/prefix.js', 'src/core/events.js', 'src/core/storage.js', 'src/core/config.js', 'src/data/thumb-info-source.js', 'src/legacy/before-ng.js', 'src/ng/logic-rules.js', 'src/legacy/remainder.js'];
 export function verify(bytes) {
   const hash = createHash('sha256').update(bytes).digest('hex').toUpperCase();
   if (bytes.length !== 463894 || hash !== expectedHash) {
