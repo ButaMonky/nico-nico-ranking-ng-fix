@@ -18,6 +18,51 @@ if (process.env.NRN_TEST_GENERATED) paths.push(new URL('../dist/nico-nico-rankin
 
 for (const [index, path] of paths.entries()) {
   const label = index ? 'generated' : 'v14.1';
+  test(`${label}: Config complete defaults, keys, sync order and transient setting`, async () => {
+    const {Config}=await load(path);
+    const defaults={visitedMovieViewMode:'reduce',visibleContributorType:'all',openNewWindow:true,
+      useGetThumbInfo:true,movieInfoTogglable:true,descriptionTogglable:true,
+      visitedMovies:'[]',ngMovies:'[]',ngTitles:'[]',ngTags:'[]',ngLockedTags:'[]',
+      ngUserIds:'[]',ngUserNames:'[]',ngChannelIds:'[]',addToNgLockedTags:false,
+      unknownContributorMovieVisible:true,ngLockedTagCountEnabled:false,ngLockedTagCountThreshold:5,
+      advancedNgRulesEnabled:false,advancedNgRulesJson:'[]',autoFillEnabled:false,autoFillTargetCount:36,
+      autoFillMaxExtraPages:5,autoFillInfoMode:'legacy',autoFillAdMode:'visible',selfAdWarningEnabled:false,
+      thumbInfoConcurrency:12,developerMode:false,statusPanelMode:'compact',detailUiTheme:'auto',
+      autoFillDetailBatchMax:48,spaNavigationFix:true,autoFillPagerMode:'compactSkip',
+      sessionDetailCacheEnabled:false,statusAnimationEnabled:true,developerDiagnosticMode:'light',
+      pagerPreviewCount:2,sessionDetailCacheTtlMinutes:360,sessionDetailCacheMaxEntries:1500};
+    const reads=[], writes=[];
+    const config=new Config((k,d)=>{reads.push([k,d]);return d;},(k,v)=>writes.push([k,v]));
+    assert.deepEqual(Object.keys(config).sort(),[...Object.keys(defaults),'ngMovieVisible'].sort());
+    for(const [key,value] of Object.entries(defaults)) {
+      assert.equal(config[key].key,key);
+      if ('defaultValue' in config[key]) assert.equal(config[key].value,value);
+      else assert.deepEqual(plain(config[key].array),[]);
+    }
+    assert.deepEqual(Object.keys(defaults).filter(k=>config[k].caseInsensitive),['ngTitles','ngTags','ngLockedTags','ngUserNames']);
+    config.ngMovieVisible.value=true;
+    await config.sync();
+    assert.deepEqual(reads,Object.entries(defaults));
+    assert.deepEqual(writes,[]);
+    assert.equal(config.ngMovieVisible.value,true);
+    assert.equal(new Config(()=>{},()=>{}).ngMovieVisible.value,false);
+  });
+  test(`${label}: Config restores stored values without writes or change events`, async () => {
+    const {Config}=await load(path);
+    const saved=new Map([['autoFillTargetCount',60],['autoFillEnabled',true],
+      ['ngUserIds','["12.9"]'],['advancedNgRulesJson','[{"conditions":[]}]']]);
+    const writes=[], events=[];
+    const config=new Config(async(k,d)=>saved.has(k)?saved.get(k):d,(k,v)=>writes.push([k,v]));
+    for(const key of Object.keys(config)) config[key].on('changed',()=>events.push(key));
+    await config.sync();
+    assert.equal(config.autoFillTargetCount.value,60);
+    assert.equal(config.autoFillEnabled.value,true);
+    assert.deepEqual(plain(config.ngUserIds.array),[12]);
+    assert.equal(config.advancedNgRulesJson.value,'[{"conditions":[]}]');
+    assert.deepEqual(writes,[]); assert.deepEqual(events,[]);
+    const broken=new Config(async(k,d)=>{if(k==='ngMovies')throw new Error('storage unavailable');return d;},()=>{});
+    await assert.rejects(broken.sync(),/storage unavailable/);
+  });
   test(`${label}: listener order, deduplication, unbind and thrown errors`, async () => {
     const {EventEmitter, Listeners} = await load(path);
     const emitter = new EventEmitter();
