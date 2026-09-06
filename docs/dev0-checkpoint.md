@@ -12,7 +12,7 @@
 
 ## 検証
 
-分割前/後71件PASS、FAIL/SKIP 0。構文2件PASS。生成物は原本と完全一致: 463,894 bytes、SHA-256 AF382AE50FCF8CDFDFC2AE178F3BE8861AC7ECF1611F30F4E3FB94439A87F371。末尾の区切り空行は原本の一部として維持する。新しいGitコピーでの結果は追記する。
+分割前/後71件PASS、FAIL/SKIP 0。構文2件PASS。生成物は原本と完全一致: 463,894 bytes、SHA-256 AF382AE50FCF8CDFDFC2AE178F3BE8861AC7ECF1611F30F4E3FB94439A87F371。末尾の区切り空行は原本の一部として維持する。コミット884e89fを../dev0-checkpoint-verificationへgit clone --no-hardlinksし、READMEどおりbuild/check/testを再実行して71件と構文2件が再成功。作業コピーのGit差分なし。
 
 ## 依存例外台帳
 
