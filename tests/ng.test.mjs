@@ -10,11 +10,55 @@ async function load(path){
   const boundary='  var MovieViewMode = (function(_super) {';
   assert.equal(source.split(boundary).length,2);
   return vm.runInNewContext(source.slice(0,source.indexOf(boundary))+
-    'return {Config,Movie,Movies,ThumbInfoListener,AdvancedNgRules}; })()',{}, {timeout:1000});
+    'return {Config,Movie,Movies,Tag,ThumbInfoListener,AdvancedNgRules}; })()',{}, {timeout:1000});
 }
 const condition=(field,operator,value,not=false)=>({kind:'condition',field,operator,value,not});
 const group=(op,children,not=false)=>({kind:'group',op,children,not});
 for(const [label,path] of [['baseline',baseline],['generated',output]]){
+  test(`${label}: tags, configuration changes and notification ordering`,async()=>{
+    const {Config,Movie,Movies,ThumbInfoListener}=await load(path);
+    const config=new Config((k,d)=>d,()=>{});await config.sync();
+    const movies=new Movies(config),m=new Movie('smTags','ordinary');movies.setIfAbsent([m]);
+    ThumbInfoListener.forCompleted(movies)({id:m.id,description:'',tags:[{name:'Alpha',lock:false},{name:'Beta',lock:true}],contributor:{type:'user',id:1,name:'x'}});
+    const trace=[];m.on('ngChanged',v=>trace.push(v));
+    config.ngLockedTags.add('alpha');assert.equal(m.ng,false);
+    config.ngTags.add('alpha');assert.equal(m.ng,true);
+    config.ngTags.remove(['alpha']);assert.equal(m.ng,false);
+    config.ngLockedTags.add('beta');assert.equal(m.ng,true);
+    config.ngLockedTags.remove(['beta']);assert.equal(m.ng,false);
+    assert.deepEqual(trace,[true,false,true,false]);
+    const order=[];m.on('ngTitleChanged',()=>order.push('title'));m.on('ngChanged',()=>order.push('ng'));
+    config.ngTitles.add('ordinary');config.ngTitles.remove(['ordinary']);
+    assert.deepEqual(order,['title','ng','title','ng']);
+  });
+  test(`${label}: advertisement readiness and rule updates preserve event order`,async()=>{
+    const {Movie,AdvancedNgRules}=await load(path);const m=new Movie('smAd','ad');m.setThumbInfoDone();
+    const expr=condition('selfAdIdMatch','isTrue','');
+    m.updateAdvancedRulesConfig(true,JSON.stringify([{id:'ad',expression:expr}]));
+    const state=()=>[AdvancedNgRules.evaluateNode(m,expr),AdvancedNgRules.evaluateNode(m,condition('selfAdIdMatch','isFalse',''))];
+    assert.deepEqual(state(),[false,false]);
+    const trace=[];m.on('nicoadSelfAdChanged',()=>trace.push(['ad',m.ng]));m.on('ngChanged',v=>trace.push(['ng',v]));
+    m.setNicoadSelfAdResult({checked:true,idMatch:true,nameMatch:false});
+    assert.deepEqual(state(),[true,false]);assert.equal(m.ng,true);
+    m.setNicoadSelfAdResult({checked:false,error:'fixture failure'});
+    assert.deepEqual(state(),[false,false]);assert.equal(m.ng,false);
+    assert.deepEqual(trace,[['ad',false],['ng',true],['ad',true],['ng',false]]);
+    m.setNicoadSelfAdResult({checked:true,idMatch:false,nameMatch:true});
+    assert.equal(AdvancedNgRules.evaluateNode(m,condition('selfAdNameMatch','isTrue','')),true);
+    m.updateAdvancedRulesConfig(true,JSON.stringify([{id:'name',expression:condition('selfAdNameMatch','isTrue','')}]));
+    assert.equal(m.ng,true);m.updateAdvancedRulesConfig(false,'[]');assert.equal(m.ng,false);
+  });
+  test(`${label}: comparison boundaries, exact tags and missing numeric IDs`,async()=>{
+    const {Movie,Tag,AdvancedNgRules}=await load(path);const m=new Movie('smCompare','China report');
+    m.tags=[new Tag({name:'Alpha',lock:true}),new Tag({name:'Beta',lock:false})];m.setThumbInfoDone();
+    const evaluate=(f,o,v)=>AdvancedNgRules.evaluateNode(m,condition(f,o,v));
+    assert.deepEqual(['gt','gte','lt','lte','eq','neq'].map(o=>evaluate('tagCount',o,2)),[false,true,false,true,true,false]);
+    assert.deepEqual([evaluate('tag','contains','alpha'),evaluate('tag','contains','alp'),evaluate('lockedTag','contains','beta')],[true,false,false]);
+    assert.deepEqual([evaluate('title','contains','CHINA'),evaluate('title','eq','China'),evaluate('title','notContains','Japan')],[true,false,true]);
+    assert.deepEqual([evaluate('userId','exists',''),evaluate('userId','notExists',''),evaluate('userId','eq',0)],[false,true,true]);
+    assert.equal(AdvancedNgRules.evaluateNode(m,group('AND',[],true)),false);
+    assert.equal(AdvancedNgRules.match(m,true,'{broken',false).length,0);
+  });
   test(`${label}: NG fixture states and shared contributor propagation`,async()=>{
     const {Config,Movie,Movies,ThumbInfoListener,AdvancedNgRules}=await load(path);
     const config=new Config((k,d)=>d,()=>{});
