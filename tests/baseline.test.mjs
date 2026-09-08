@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFile, mkdtemp, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { baseline, build, expectedHash, verify } from '../scripts/build.mjs';
+import { baseline, build, expectedHash, verify, sourceParts, root } from '../scripts/build.mjs';
 
 test('frozen baseline matches the approved fingerprint and manifest', async () => {
   const bytes = await readFile(baseline);
@@ -13,17 +13,17 @@ test('frozen baseline matches the approved fingerprint and manifest', async () =
   assert.equal(manifest.bytes, bytes.length);
 });
 
-test('build preserves all bytes, metadata and repeated output', async () => {
+test('build assembles approved source order and produces repeatable output', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'nrn-build-test-'));
   try {
     const destination = join(dir, 'result.user.js');
     const original = await readFile(baseline);
     await build(baseline, destination);
     const first = await readFile(destination);
-    assert.deepEqual(first, original);
+    assert.deepEqual(first, Buffer.concat(await Promise.all(sourceParts.map(part => readFile(join(root,part))))));
     const metadata = bytes => bytes.toString('utf8').match(/\/\/ ==UserScript==[\s\S]*?\/\/ ==\/UserScript==/)[0];
-    assert.equal(metadata(first), metadata(original));
-    assert.match(metadata(first), /@version\s+141-performance-pager-fix/);
+    assert.equal(metadata(first).replace(/@version[^\r\n]+/, '@version'), metadata(original).replace(/@version[^\r\n]+/, '@version'));
+    assert.match(metadata(first), /@version\s+160\.4/);
     await build(baseline, destination);
     assert.deepEqual(await readFile(destination), first);
   } finally {

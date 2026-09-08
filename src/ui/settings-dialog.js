@@ -1206,6 +1206,7 @@
             <div class=row><label>取得済み範囲の後に表示 <input type=number id=pagerPreviewCount min=0 max=6> ページ（標準 2）</label></div>
             <div class=row><label><input type=checkbox id=statusAnimationEnabled>処理中ステータスをアニメーション表示</label></div>
           </div>
+          <div class=hint>取得方式の変更は保存後にページを再読み込みすると反映されます。API高速でもタグロック・複合NGなどの詳細判定は省略しません。追加取得上限は、従来方式ではHTMLのページ数、API方式では最大100件の取得回数です。</div>
           <div class=sectionTitle>通信・キャッシュ</div>
           <div class=grid2>
             <div class=row><label><input type=checkbox id=sessionDetailCacheEnabled>同一タブ内の動画詳細を再利用する</label></div>
@@ -1215,6 +1216,7 @@
               <select id=autoFillAdMode><option value=all>候補すべて取得</option><option value=visible>表示動画のみ（推奨）</option><option value=none>取得しない</option></select>
             </label></div>
             <div class=row><label><input type=checkbox id=selfAdWarningEnabled>自演広告の可能性を警告する（実験的）</label></div>
+            <div class=hint>広告の見た目と広告者照合は別の通信です。「追加動画の広告」をOFFにしても、警告や広告関連の複合NGが有効なら広告者照合は行います。広告通信は全体で最大4件同時。広告者は最大100件を取得し、上限到達・取得失敗時は判定を保留します。</div>
           </div>
           <div class=hint>APIが現在の検索条件・並びを再現できない場合は自動で従来方式へ戻ります。🔒 タグロック数NGは完全判定が必要です。採用率が低くても異常とは扱いません。ページ番号は「取得済み範囲＋未取得の先頭数ページ＋最終ページ＋次矢印」の順で表示します。詳細キャッシュは同一タブの再読み込みを跨いで再利用し、保存するのはタグ・ロック状態・投稿者などの詳細情報です。NG設定変更時は保存済みの最終判定を使わず、現在の設定で再判定します。</div>
         </div>
@@ -1288,7 +1290,7 @@
     autoFillEnabled: 'NG判定後に表示できる動画が目標件数へ達するまで後続候補を取得します。',
     autoFillTargetCount: '画面上に実際に表示する非NG動画の目標件数です。',
     autoFillMaxExtraPages: '追加取得する上限です。0なら最終ページまで制限しません。',
-    autoFillInfoMode: '従来方式は互換性優先。API併用/高速は検索APIを使いますが、再現できない検索条件では自動的に従来方式へ戻ります。',
+    autoFillInfoMode: '安定性重視なら従来方式。API併用/高速は検索APIを使い、条件や結果を照合できない場合は従来方式へ戻ります。高速方式は明確なNGを事前除外します。変更後はページの再読み込みが必要です。',
     thumbInfoConcurrency: 'GetThumbInfoを同時に取得する本数です。大きすぎると通信失敗が増える場合があります。',
     autoFillDetailBatchMax: '1回に完全NG判定へ送る最大候補数です。低NG率では小さめ、高NG率では大きめが効率的です。',
     statusPanelMode: '右下の進捗パネルの表示量を選択します。',
@@ -1299,7 +1301,7 @@
     sessionDetailCacheEnabled: '同じタブで一度取得したタグ・タグロック・投稿者情報をsessionStorageへ保存し、ページ移動後の再取得を省略します。',
     sessionDetailCacheTtlMinutes: 'キャッシュを何分まで有効とみなすかです。期限切れは自動削除します。',
     sessionDetailCacheMaxEntries: 'キャッシュ件数の上限です。古いものから削除します。',
-    autoFillAdMode: '自動追加動画に対してニコニコ広告情報を取得する範囲です。',
+    autoFillAdMode: '追加動画の広告リボン・提供者表示の取得範囲です。広告者照合の警告・複合NGとは独立しています。無駄を抑えるには「表示動画のみ」を選んでください。',
     selfAdWarningEnabled: '広告者一覧を確認し、投稿者本人によるニコニ広告の可能性を警告します。追加通信が発生します。',
     spaNavigationFix: 'ニコニコのSPAページ移動で古いスクリプト状態が残るのを防ぐため、新URLで安全に再読み込みします。',
     developerMode: '診断ログを増やします。通常利用は軽量またはOFFで十分です。',

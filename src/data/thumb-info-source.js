@@ -77,7 +77,7 @@
     var ThumbInfo = function(httpRequest, concurrent) {
       _super.call(this)
       this.httpRequest = httpRequest
-      this.concurrent = concurrent || 5
+      this.concurrent = Math.max(1, Math.min(20, Math.trunc(Number(concurrent)) || 5))
       this._requestCount = 0
       this._pendingIds = []
       this._requestedIds = new Set()
@@ -85,13 +85,13 @@
     ThumbInfo.prototype = createObject(_super.prototype, {
       _onerror(id) {
         this._requestCount--
-        this._requestNextMovie()
+        this._requestAsPossible()
         this.emit('errorOccurred', error('ERROR', 'エラー', id))
       },
       _ontimeout(id, retried) {
         if (retried) {
           this._requestCount--
-          this._requestNextMovie()
+          this._requestAsPossible()
           this.emit('errorOccurred', error('TIMEOUT', 'タイムアウト', id))
         } else {
           this._requestMovie(id, true)
@@ -99,7 +99,7 @@
       },
       _onload(id, res) {
         this._requestCount--
-        this._requestNextMovie()
+        this._requestAsPossible()
         if (res.status === 200) {
           var thumbInfo = parseResText(res.responseText)
           thumbInfo.id = id
@@ -114,20 +114,32 @@
         }
       },
       _requestMovie(id, retry) {
-        this.httpRequest({
+        var settled = false
+        var once = callback => value => {
+          if (settled) return
+          settled = true
+          callback(value)
+        }
+        var fail = once(this._onerror.bind(this, id))
+        try {
+        var request = this.httpRequest({
           method: 'GET',
           url: 'https://ext.nicovideo.jp/api/getthumbinfo/' + id,
           timeout: 5000,
-          onload: this._onload.bind(this, id),
-          onerror: this._onerror.bind(this, id),
-          ontimeout: this._ontimeout.bind(this, id, retry),
+          onload: once(this._onload.bind(this, id)),
+          onerror: fail,
+          onabort: fail,
+          ontimeout: once(this._ontimeout.bind(this, id, retry)),
         })
+        if (request && typeof request.catch === 'function') request.catch(fail)
+        } catch (e) { fail(e) }
       },
       _requestNextMovie() {
+        if (this._requestCount >= this.concurrent) return
         var id = this._pendingIds.shift()
         if (!id) return
-        this._requestMovie(id)
         this._requestCount++
+        this._requestMovie(id)
       },
       _getNewIds(ids) {
         ids = ids || []
@@ -135,9 +147,11 @@
         return [...new Set(ids)].filter(function(id) { return !m.has(id) })
       },
       _requestAsPossible() {
-        var space = this.concurrent - this._requestCount
-        var c = Math.min(this._pendingIds.length, space)
-        for (var i = 0; i < c; i++) this._requestNextMovie()
+        if (this._draining) return
+        this._draining = true
+        try {
+          while (this._pendingIds.length && this._requestCount < this.concurrent) this._requestNextMovie()
+        } finally { this._draining = false }
       },
       setConcurrent(concurrent) {
         this.concurrent = Math.max(1, Math.min(20, Math.trunc(Number(concurrent)) || 5))
@@ -158,4 +172,3 @@
     })
     return ThumbInfo
   })(EventEmitter)
-

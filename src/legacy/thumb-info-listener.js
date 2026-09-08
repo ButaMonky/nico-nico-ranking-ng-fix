@@ -51,6 +51,7 @@
         var getContributorBy = createContributorBuilder(movies.config)
         return function(thumbInfo) {
           var m = movies.get(thumbInfo.id)
+          if (m.error && m.error.type !== 'NO_ERROR') m.error = Movie.NO_ERROR
           m.description = thumbInfo.description
           m.tags = getTagsBy(thumbInfo.tags)
           m.contributor = getContributorBy(thumbInfo.contributor)
@@ -66,4 +67,3 @@
       },
     }
   })()
-

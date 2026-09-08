@@ -55,8 +55,8 @@ for(const [label,path] of [['baseline',baseline],['generated',output]]){
     const {service,calls}=await setup(path,1);service.request(['a','b','c']);
     service.setConcurrent(2);assert.equal(calls.length,2);
     service.setConcurrent(1);assert.equal(calls.length,2);
-    calls[0].onerror();assert.equal(calls.length,3); // Existing behavior: replaces a finished slot even after lowering limit.
-    assert.equal(service._requestCount,2);
+    calls[0].onerror();assert.equal(calls.length,label==='baseline'?3:2);
+    assert.equal(service._requestCount,label==='baseline'?2:1);
     service.setConcurrent(99);assert.equal(service.concurrent,20);
     service.setConcurrent(-1);assert.equal(service.concurrent,1);
     service.setConcurrent(0);assert.equal(service.concurrent,5);
@@ -74,3 +74,16 @@ for(const [label,path] of [['baseline',baseline],['generated',output]]){
     assert.equal(trace.at(-1)[1].error.type,'PARSING');assert.equal(service._requestCount,0);
   });
 }
+test('generated: duplicate/late callbacks cannot release a slot twice',async()=>{
+ const {service,calls}=await setup(output,1);service.request(['a','b','c']);
+ calls[0].ontimeout();calls[0].onerror();assert.equal(calls.length,2);
+ calls[1].onerror();calls[1].onerror();assert.equal(calls.length,3);
+ assert.equal(service._requestCount,1);
+ calls[2].onabort();assert.equal(calls.length,4);calls[3].onerror();assert.equal(service._requestCount,0);
+});
+test('generated: synchronous transport exceptions and promise rejections release slots',async()=>{
+ const {service}=await setup(output,1);
+ service.httpRequest=()=>{throw Error('transport');};service.request(Array.from({length:10000},(_,i)=>'sync'+i));assert.equal(service._requestCount,0);assert.equal(service._pendingIds.length,0);
+ service.httpRequest=()=>Promise.reject(Error('transport'));service.request(['c']);
+ await new Promise(r=>setImmediate(r));assert.equal(service._requestCount,0);
+});

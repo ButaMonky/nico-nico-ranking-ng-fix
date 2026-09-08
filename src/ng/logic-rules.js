@@ -195,7 +195,7 @@
       if (field === 'title') return movie.title || ''
 
       // 詳細情報依存項目。
-      if (!movie.thumbInfoDone) return {__notReady:true}
+      if (!movie.thumbInfoDone || (movie.error && movie.error.type !== 'NO_ERROR')) return {__notReady:true}
 
       if (field === 'description') return movie.description || ''
       if (field === 'lockedTagCount') {
@@ -236,6 +236,8 @@
       if (operator === 'notExists') return !existsValue(actual)
 
       if (fieldType === 'number' || fieldType === 'numberOrMissing') {
+        if (actual == null || String(actual).trim() === ''
+            || expected == null || String(expected).trim() === '') return false
         var a = Number(actual)
         var b = Number(expected)
         if (!Number.isFinite(a) || !Number.isFinite(b)) return false
@@ -270,16 +272,18 @@
       return false
     }
 
-    var evaluateNode = function(movie, node, trace, depth) {
+    // null is undecided: NOT must not turn unavailable metadata into a match.
+    var evaluateState = function(movie, node, trace, depth) {
       depth = depth || 0
-      if (!node || depth > 12) return false
+      if (!node || depth > 12) return null
 
       if (node.kind === 'condition') {
         var meta = FIELD_META[node.field]
-        if (!meta) return false
+        if (!meta) return null
         var actual = fieldValue(movie, node.field)
-        var raw = compare(actual, node.operator, node.value, meta.type)
-        var result = node.not ? !raw : raw
+        var pending = Boolean(actual && actual.__notReady)
+        var raw = pending ? null : compare(actual, node.operator, node.value, meta.type)
+        var result = raw === null ? null : (node.not ? !raw : raw)
         if (trace) {
           trace.push({
             depth:depth,
@@ -298,16 +302,16 @@
       }
 
       if (node.kind === 'group') {
-        // 空グループは誤爆防止のためfalse。
+        // An empty group remains undecided even underneath another NOT group.
         var children = Array.isArray(node.children) ? node.children : []
-        if (!children.length) return false
+        if (!children.length) return null
         var childResults = children.map(function(child) {
-          return evaluateNode(movie, child, trace, depth + 1)
+          return evaluateState(movie, child, trace, depth + 1)
         })
         var rawGroup = node.op === 'OR'
-          ? childResults.some(Boolean)
-          : childResults.every(Boolean)
-        var groupResult = node.not ? !rawGroup : rawGroup
+          ? (childResults.includes(true) ? true : childResults.includes(null) ? null : false)
+          : (childResults.includes(false) ? false : childResults.includes(null) ? null : true)
+        var groupResult = rawGroup === null ? null : (node.not ? !rawGroup : rawGroup)
         if (trace) {
           trace.push({
             depth:depth,
@@ -321,6 +325,10 @@
         return groupResult
       }
       return false
+    }
+
+    var evaluateNode = function(movie, node, trace, depth) {
+      return evaluateState(movie, node, trace, depth) === true
     }
 
     var match = function(movie, enabled, rawRules, withTrace) {
@@ -389,4 +397,3 @@
       OP_META:OP_META
     }
   })()
-

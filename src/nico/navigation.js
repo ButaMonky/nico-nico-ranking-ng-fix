@@ -10,6 +10,8 @@
       var reloadScheduled = false
       var routeSequence = 0
       var pollTimer = null
+      var resultRouteKey = ''
+      var resultElement = null
 
       var toUrl = function(value) {
         try { return new URL(value, location.href) }
@@ -30,9 +32,27 @@
           && /^\/(?:tag|search)\//.test(u.pathname))
       }
 
+      var findResultElement = function() {
+        return document.querySelector(
+          '[data-decoration-video-id][data-anchor-area="main"], .itemTitle'
+        )
+      }
+      var retainsOriginalResults = function(value) {
+        return routeKey(value) === resultRouteKey
+          && Boolean(resultElement && resultElement.isConnected)
+      }
+
       var scheduleReload = function(source, fromHref, toHref) {
         var fromKey = routeKey(fromHref)
         var toKey = routeKey(toHref)
+
+        // Overlay players replace the URL while retaining the search document.
+        // Capture the current card after any list/tile replacement, before playback.
+        var to = toUrl(toHref)
+        if (fromKey === resultRouteKey && to && to.origin === location.origin
+            && /^\/watch\//.test(to.pathname)) {
+          resultElement = findResultElement()
+        }
 
         lastHref = toHref
         if (!armed || !enabled) {
@@ -45,6 +65,10 @@
         }
         if (!toKey || fromKey === toKey) return
         if (!isSearchRoute(toHref)) return
+        if (retainsOriginalResults(toHref)) {
+          if (developer) console.log(LOG, '元の検索結果へ復帰。再読み込みを省略:', {source:source, to:toHref})
+          return
+        }
         if (reloadScheduled) return
 
         reloadScheduled = true
@@ -60,6 +84,14 @@
 
         // Reactがhistory更新を終えた後、現在の新URLを保持してreload。
         setTimeout(function() {
+          // A player may open/close during the delay. Never reload its watch URL
+          // or the original, still-mounted results because of a stale search event.
+          if (!armed || !enabled || !isSearchRoute(location.href)
+              || retainsOriginalResults(location.href)) {
+            reloadScheduled = false
+            lastHref = location.href
+            return
+          }
           var currentKey = routeKey(location.href)
           if (currentKey !== toKey) {
             // 短時間にさらに別URLへ移動した場合は最終URLを優先。
@@ -128,6 +160,10 @@
         opts = opts || {}
         enabled = opts.enabled !== false
         developer = Boolean(opts.developer)
+        if (!armed && isSearchRoute(location.href)) {
+          resultRouteKey = routeKey(location.href)
+          resultElement = findResultElement()
+        }
         lastHref = location.href
         armed = true
 
@@ -140,4 +176,3 @@
 
       console.log(LOG, 'SPA遷移監視フックを設置しました')
     }
-

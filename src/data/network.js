@@ -1,0 +1,33 @@
+  var Network = (function() {
+    function createQueue(limit) {
+      const pending = new Map(), waiting = [];
+      let active = 0;
+      function drain() {
+        while (active < limit && waiting.length) {
+          const job = waiting.shift();
+          active++;
+          Promise.resolve().then(job.task).then(job.resolve, job.reject).finally(() => {
+            active--; pending.delete(job.key); drain();
+          });
+        }
+      }
+      return function(key, task) {
+        if (pending.has(key)) return pending.get(key);
+        const promise = new Promise((resolve, reject) => waiting.push({key, task, resolve, reject}));
+        pending.set(key, promise); drain();
+        return promise;
+      };
+    }
+    async function fetchResponse(url, options, timeout = 15000) {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), timeout);
+      try {
+        const res = await fetch(url, Object.assign({}, options, {signal:controller.signal}));
+        const body = await res.text(); // Keep timeout active through body download.
+        return {ok:res.ok, status:res.status, statusText:res.statusText, url:res.url,
+          text:async () => body, json:async () => JSON.parse(body)};
+      } finally { clearTimeout(timer); }
+    }
+    return {createQueue, fetchResponse, ads:createQueue(4)};
+  })();
+

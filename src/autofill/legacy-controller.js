@@ -7,15 +7,18 @@
       }
 
       // -------------------- utility --------------------
+      var sourceHref = page._sourceUrl || location.href
       var gmRequest = function(options) {
         return new Promise(function(resolve, reject) {
           var request = typeof GM_xmlhttpRequest === 'undefined'
             ? GM.xmlHttpRequest : GM_xmlhttpRequest
-          request(Object.assign({}, options, {
+          var handle = request(Object.assign({}, options, {
             onload: resolve,
             onerror: reject,
+            onabort: function() { reject(new Error('request aborted')) },
             ontimeout: function() { reject(new Error('timeout')) }
           }))
+          if (handle && typeof handle.catch === 'function') handle.catch(reject)
         })
       }
 
@@ -60,7 +63,11 @@
           return movie && movie.thumbInfoDone && !movie.ng
         })
       }
-      var fetchSelfAdResult = async function(movie) {
+      var fetchSelfAdResult = function(movie) {
+        if (!movie) return Promise.resolve(null)
+        return Network.ads('thanks:' + movie.id, function() { return fetchSelfAdResultUnshared(movie) })
+      }
+      var fetchSelfAdResultUnshared = async function(movie) {
         if (!movie) return null
         if (movie.nicoadSelfAdChecked) return {
           checked:true,
@@ -71,7 +78,11 @@
             ? Number(movie.contributor.id) : null,
           uploaderName:movie.contributor ? movie.contributor.name || '' : ''
         }
-        if (selfAdCache.has(movie.id)) return selfAdCache.get(movie.id)
+        if (selfAdCache.has(movie.id)) {
+          var cached = selfAdCache.get(movie.id)
+          if (cached.checked || Date.now() - cached.failedAt < 30000) return cached
+          selfAdCache.delete(movie.id)
+        }
 
         var contributor = movie.contributor
         var uploaderId = contributor && contributor.type === 'user'
@@ -100,8 +111,11 @@
             throw new Error('HTTP ' + response.status)
           }
           var json = JSON.parse(response.responseText || response.response || '{}')
-          var sponsors = json && json.data && Array.isArray(json.data.sponsors)
-            ? json.data.sponsors : []
+          if (!json || !json.data || !Array.isArray(json.data.sponsors)) {
+            throw new Error('広告者一覧の応答形式が不正です')
+          }
+          var sponsors = json.data.sponsors
+          if (sponsors.length >= 100) throw new Error('広告者一覧が取得上限100件に到達したため、一致・不一致の判定を保留します')
           result.sponsors = sponsors.map(function(s) {
             return {
               userId:s && s.userId != null ? Number(s.userId) : null,
@@ -120,6 +134,7 @@
           result.checked = true
         } catch (e) {
           result.error = String(e && e.message ? e.message : e)
+          result.failedAt = Date.now()
         }
         selfAdCache.set(movie.id, result)
         return result
@@ -1101,7 +1116,7 @@
       }
 
       var createSnapshotDescriptor = function() {
-        var u = new URL(location.href)
+        var u = new URL(sourceHref)
         if (!/^\/(tag|search)\//.test(u.pathname)) {
           return {supported: false, reason: 'tag/search以外'}
         }
@@ -1210,8 +1225,10 @@
 
         if (res.status !== 200) throw new Error('Snapshot API HTTP ' + res.status)
         var json = JSON.parse(res.responseText)
-        var data = Array.isArray(json.data) ? json.data : []
-        var totalCount = json.meta && Number(json.meta.totalCount)
+        if (!json || !Array.isArray(json.data)) throw new Error('Snapshot APIの応答形式が不正です')
+        var data = json.data
+        var rawTotal = json.meta && json.meta.totalCount
+        var totalCount = rawTotal == null ? NaN : Number(rawTotal)
 
         var items = data.map(function(x, i) {
           return {
@@ -1248,9 +1265,9 @@
         var result = {
           items: items,
           totalCount: Number.isFinite(totalCount) ? totalCount : null,
-          hasNextPage: Number.isFinite(totalCount)
+          hasNextPage: data.length > 0 && (Number.isFinite(totalCount)
             ? offset + data.length < totalCount
-            : data.length === 100,
+            : data.length === 100),
           timings: {
             networkMs: Math.round(networkDone - started),
             totalMs: Math.round(finished - started)
@@ -1367,6 +1384,7 @@
       }
 
       var logCandidateTable = function(label, items, extraStatusFn) {
+        if (!model.config.developerMode.value) return
         console.groupCollapsed(LOG + ' ' + label + ' (' + items.length + '件)')
         console.table(items.map(function(item, i) {
           return {
@@ -1393,7 +1411,7 @@
         var domIds = []
         var seen = new Set()
         page.doc.querySelectorAll(
-          '[data-decoration-video-id]:not([data-nrn-autofill="true"])'
+          '[data-decoration-video-id][data-anchor-area="main"]:not([data-nrn-autofill="true"])'
         ).forEach(function(el) {
           var id = el.getAttribute('data-decoration-video-id')
           if (id && !seen.has(id)) {
@@ -1485,7 +1503,7 @@
 
         // exactは広告差などでずれることがあるのでoverlapを主判定にする。
         // 先頭付近の70%未満しか重ならない場合は、検索結果の続きを保証できない。
-        if (compareN >= 10 && overlapRate < 0.70) {
+        if (compareN === 0 || overlapRate < 0.70) {
           useSnapshot = false
           sourceLabel = '従来方式'
           fallbackReason = 'API/DOM一致率 ' + Math.round(overlapRate * 100) + '%'
@@ -1528,7 +1546,7 @@
         fresh.forEach(function(item) { candidatePool.push(item) })
         totalFetchedItems += result.items.length
         fetchedExtraPages++
-        snapshotOffset = 100
+        snapshotOffset = result.offset + result.items.length
         lastFetchedHadNext = result.hasNextPage
 
         logCandidateTable('API候補（検証結果を再利用）', fresh)
@@ -1537,8 +1555,9 @@
       // -------------------- PagerManager --------------------
       var pageNumberFromHref = function(href) {
         try {
-          var u = new URL(href, location.href)
-          if (u.origin !== location.origin || u.pathname !== location.pathname) return null
+          var sourceUrl = new URL(sourceHref)
+          var u = new URL(href, sourceHref)
+          if (u.origin !== sourceUrl.origin || u.pathname !== sourceUrl.pathname) return null
           var p = Number(u.searchParams.get('page') || 1)
           return Number.isFinite(p) && p >= 1 ? Math.trunc(p) : null
         } catch (e) {
@@ -1566,7 +1585,7 @@
       }
 
       var currentPageNumber = function() {
-        var u = new URL(location.href)
+        var u = new URL(sourceHref)
         var p = Number(u.searchParams.get('page') || 1)
         return Number.isFinite(p) && p >= 1 ? Math.trunc(p) : 1
       }
@@ -1581,9 +1600,9 @@
       var makePageHref = function(pageNumber, baseHref) {
         var u
         try {
-          u = new URL(baseHref || location.href, location.href)
+          u = new URL(baseHref || sourceHref, sourceHref)
         } catch (e) {
-          u = new URL(location.href)
+          u = new URL(sourceHref)
         }
         // 検索条件とNicoNicoの rf/rp/ra 等を維持し、pageだけ変更する。
         u.searchParams.set('page', String(pageNumber))
@@ -1972,12 +1991,17 @@
       // -------------------- CandidateSource / pool --------------------
       var fetchMoreCandidates = async function(minNeeded) {
         var fetchStart = performance.now()
+        var mayRequest = function() {
+          var limit = Number(model.config.autoFillMaxExtraPages.value) || 0
+          return model.config.autoFillEnabled.value && (limit <= 0 || fetchedExtraPages < limit)
+        }
 
         if (useSnapshot) {
           if (!snapshotValidated) await validateSnapshotAgainstCurrentDom()
           if (!useSnapshot) return fetchMoreCandidates(minNeeded)
 
           while (candidatePool.length < minNeeded && lastFetchedHadNext !== false) {
+            if (!mayRequest()) break
             var result = await snapshotFetchOffset(snapshotOffset)
             snapshotOffset += 100
             fetchedExtraPages++
@@ -2019,6 +2043,7 @@
           }
         } else {
           while (candidatePool.length < minNeeded && lastFetchedHadNext !== false) {
+            if (!mayRequest()) break
             var pageNumber = nextPageToFetch++
 
             // 現在ページUIから終端が分かっている場合は、存在しないページへ通信しない。
@@ -2074,6 +2099,18 @@
             fetchedPageNumbers.add(pageNumber)
 
             var resultMaxPage = Number(result.maxPage)
+            if (!Array.isArray(result.items)) throw new Error('取得ページの動画一覧が不正です')
+            if (!result.items.length) {
+              // An empty/out-of-range response is not another consumed results page.
+              fetchedExtraPages--
+              fetchedPageNumbers.delete(pageNumber)
+              lastFetchedHadNext = false
+              knownLastPage = Number.isInteger(resultMaxPage) && resultMaxPage > 0
+                ? Math.min(resultMaxPage, pageNumber - 1) : pageNumber - 1
+              endPageDetectionSource = 'empty-page-boundary'
+              updatePagerUi('empty page boundary: ' + pageNumber)
+              break
+            }
             if (result.hasNextPage === false) {
               var previousKnownLastPage = knownLastPage
               knownLastPage = pageNumber
@@ -2085,7 +2122,7 @@
                 knownLastPage:knownLastPage,
                 hasNextPage:false
               })
-            } else if (Number.isFinite(resultMaxPage)
+            } else if (Number.isInteger(resultMaxPage) && resultMaxPage >= pageNumber
                 && (knownLastPage == null || resultMaxPage > knownLastPage)) {
               var previousKnownLastPage2 = knownLastPage
               knownLastPage = resultMaxPage

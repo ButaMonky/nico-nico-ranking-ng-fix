@@ -85,7 +85,7 @@ for(const [label,path] of [['baseline',baseline],['generated',output]]){
     assert.deepEqual(['gt','gte','lt','lte','eq','neq'].map(o=>evaluate('tagCount',o,2)),[false,true,false,true,true,false]);
     assert.deepEqual([evaluate('tag','contains','alpha'),evaluate('tag','contains','alp'),evaluate('lockedTag','contains','beta')],[true,false,false]);
     assert.deepEqual([evaluate('title','contains','CHINA'),evaluate('title','eq','China'),evaluate('title','notContains','Japan')],[true,false,true]);
-    assert.deepEqual([evaluate('userId','exists',''),evaluate('userId','notExists',''),evaluate('userId','eq',0)],[false,true,true]);
+    assert.deepEqual([evaluate('userId','exists',''),evaluate('userId','notExists',''),evaluate('userId','eq',0)],[false,true,label==='baseline']);
     assert.equal(AdvancedNgRules.evaluateNode(m,group('AND',[],true)),false);
     assert.equal(AdvancedNgRules.match(m,true,'{broken',false).length,0);
   });
@@ -119,10 +119,10 @@ for(const [label,path] of [['baseline',baseline],['generated',output]]){
     const absent=condition('userId','notExists','');
     const negated=condition('userId','exists','',true);
     const evaluate=(m,node)=>AdvancedNgRules.evaluateNode(m,node,[]);
-    assert.deepEqual([evaluate(pending,absent),evaluate(missing,absent),evaluate(pending,negated)],fixture.missingStates);
+    assert.deepEqual([evaluate(pending,absent),evaluate(missing,absent),evaluate(pending,negated)],label==='baseline'?fixture.missingStates:[false,true,false]);
     const failed=new Movie('smFailed','普通');movies.setIfAbsent([failed]);
     ThumbInfoListener.forErrorOccurred(movies)({id:failed.id,error:{type:'TEST_ERROR',message:'fixture'}});
-    assert.deepEqual([failed.thumbInfoDone,evaluate(failed,absent)],fixture.failedStates);
+    assert.deepEqual([failed.thumbInfoDone,evaluate(failed,absent)],label==='baseline'?fixture.failedStates:[true,false]);
     const a=condition('title','contains','中国'),b=condition('lockedTagCount','gte',11);
     const nodes=[group('AND',[a,b]),group('OR',[a,b]),group('AND',[a,group('OR',[b,condition('title','eq','中国について')])]),group('OR',[a,b],true)];
     assert.deepEqual(nodes.map(n=>evaluate(title,n)),fixture.logic);

@@ -124,6 +124,8 @@
     var ListPage = function(doc) {
       _super.call(this, doc)
       this.movieRoots = [];
+      this._sourceUrl = location.href;
+      this.resultLayout = ResultLayout.create(this);
     }
     ListPage.prototype = createObject(_super.prototype, {
       createTables() { return [] },
@@ -140,11 +142,11 @@
         return res;
       },
       get _currentPageNumber() {
-        return parseInt(new URLSearchParams(location.search).get('page') || '1', 10) || 1
+        return parseInt(new URL(this._sourceUrl || location.href).searchParams.get('page') || '1', 10) || 1
       },
       _paginationSnapshot() {
         var current = this._currentPageNumber
-        var pathname = location.pathname
+        var pathname = new URL(this._sourceUrl || location.href).pathname
         var rows = []
         var pageNumbers = []
         var itemElements = Array.from(this.doc.querySelectorAll(
@@ -235,7 +237,7 @@
       async fetchPageItems(pageNumber, options) {
         options = options || {}
         var timingStart = performance.now()
-        var url = new URL(location.href)
+        var url = new URL(this._sourceUrl || location.href)
         url.searchParams.set('page', pageNumber)
 
         var fetchScope = String(options.scope || 'RUN').toUpperCase()
@@ -251,7 +253,7 @@
         })
 
         var networkStart = performance.now()
-        var res = await fetch(url.toString(), {
+        var res = await Network.fetchResponse(url.toString(), {
           credentials: 'same-origin',
           cache: 'no-store'
         })
@@ -264,6 +266,16 @@
         }
 
         var responseReceivedAt = performance.now()
+        if (res.url) {
+          var responseUrl = new URL(res.url, url)
+          if (responseUrl.origin !== url.origin || responseUrl.pathname !== url.pathname) {
+            throw new Error('検索結果以外のURLへ転送されました: ' + responseUrl.pathname)
+          }
+          var responsePage = Number(responseUrl.searchParams.get('page') || 1)
+          if (Number.isInteger(responsePage) && responsePage > 0 && responsePage < pageNumber) {
+            return {items:[], hasNextPage:false, maxPage:responsePage, pageNumber:pageNumber}
+          }
+        }
         var html = await res.text()
         var bodyReadAt = performance.now()
         var doc = new DOMParser().parseFromString(html, 'text/html')
@@ -272,6 +284,7 @@
         var items = []
         var maxPage = null
         var hasNextPage = null
+        var hasSearchItems = false
 
         // まず NicoNico の server-response JSON を試す。
         var metaElem = doc.querySelector('meta[name="server-response"]')
@@ -291,11 +304,12 @@
               && parsed.data.response.page.pagination
               && parsed.data.response.page.pagination.maxPage
 
-            if (Number.isFinite(Number(jsonMaxPage))) {
+            if (Number.isInteger(Number(jsonMaxPage)) && Number(jsonMaxPage) > 0) {
               maxPage = Number(jsonMaxPage)
             }
             if (searchData && Array.isArray(searchData.items)) {
               items = searchData.items
+              hasSearchItems = true
             }
           } catch (e) {
             console.warn(fetchLog, 'server-response JSON解析失敗。DOM解析へ切り替えます。', e)
@@ -303,8 +317,8 @@
         }
 
         // JSON側の構造が変更されていた場合は、実際の現行タイルDOMを直接読む。
-        if (!items.length) {
-          var roots = Array.from(doc.querySelectorAll('[data-decoration-video-id]'))
+        if (!hasSearchItems) {
+          var roots = Array.from(doc.querySelectorAll('[data-decoration-video-id][data-anchor-area="main"]'))
           var seen = new Set()
 
           items = roots.map(function(root) {
@@ -455,11 +469,15 @@
           var nextLink = doc.querySelector('link[rel="next"], a[rel="next"]')
           if (nextLink) hasNextPage = true
           else {
-            hasNextPage = pageNumbers.some(function(n){return n > pageNumber})
-            if (!hasNextPage && pageNumbers.length) hasNextPage = false
+            hasNextPage = pageNumbers.some(function(n){return n > pageNumber}) ? true : null
           }
         }
 
+        if (!items.length) {
+          if (!hasSearchItems) throw new Error('検索結果を解析できませんでした。空ページとは判定せず取得を停止します。')
+          hasNextPage = false
+          maxPage = Math.min(maxPage > 0 ? maxPage : pageNumber - 1, pageNumber - 1)
+        }
         var timingEnd = performance.now()
         var timings = {
           networkMs: Math.round(responseReceivedAt - networkStart),
@@ -611,6 +629,12 @@
           root.querySelector('img.bdr_full').alt = ownerName
           root.querySelector('p.fw_bold.lc_1').textContent = ownerName
         }
+        root.firstElementChild.classList.add("nrn-card-body")
+        var description = doc.createElement("div")
+        description.className = "nrn-card-description"
+        description.textContent = item.description || ""
+        titleA.after(description)
+        this.resultLayout.add(root)
         this._appendInjectedTile(root)
         // 自動追加分では1本ごとのニコニコ広告API通信を省略して高速化する。
         // 元ページ側の広告表示には影響しない。
@@ -618,9 +642,14 @@
       },
       async _applyAdDecoration(root, videoId) {
         try {
-          var res = await fetch('https://api.nicoad.nicovideo.jp/v1/contents/video/' + videoId, {credentials: 'omit'})
-          if (!res.ok) return
-          var json = await res.json()
+          if (root.dataset.nrnAdDecorated === 'true') return
+          var json = await Network.ads('decoration:' + videoId, async function() {
+            var res = await Network.fetchResponse('https://api.nicoad.nicovideo.jp/v1/contents/video/' + videoId, {credentials: 'omit'}, 10000)
+            if (!res.ok) throw new Error('広告 HTTP ' + res.status)
+            return res.json()
+          })
+          if (root.dataset.nrnAdDecorated === 'true') return
+          root.dataset.nrnAdDecorated = 'true'
           var data = json && json.data
           var decoration = data && data.decoration
           if (decoration !== 'gold' && decoration !== 'silver') return
@@ -682,6 +711,7 @@
       },
       parse(target) {
         if (!isTargetPage()) return [];
+        this.resultLayout.sync();
         target = target || this.doc
         return this._parseMain(target).concat(this._parseAds(target));
       },
@@ -694,9 +724,9 @@
                 id: movieIdOf(item.href),
                 title: item.lastChild?.textContent,
               },
-              rootElem: SearchPage.is(location)
+              rootElem: item.closest('[data-decoration-video-id]') || (SearchPage.is(location)
                       ? item.parentNode.parentNode
-                      : item.parentNode.parentNode.parentNode.parentNode,
+                      : item.parentNode.parentNode.parentNode.parentNode),
             }
           }).filter(e => e.movie.id && e.movie.title && !e.rootElem.classList.contains('nrn-parsed'));
       },
@@ -730,10 +760,10 @@
             this.unbindUnconnectedMovieRoots();
           }
           this.addConfigBar();
-        }).observe(this.doc.body, {childList: true, subtree: true});
+        }).observe(this.doc.body, {childList: true, subtree: true, attributes: true, attributeFilter: ["class"]});
       },
       get css() {
-        return `#nrn-config-button,
+        return ResultLayout.css + `#nrn-config-button,
 .nrn-visit-button:hover,
 .nrn-movie-ng-button:hover,
 .nrn-title-ng-button:hover,
@@ -1236,4 +1266,3 @@ div:has(> div > a[data-anchor-page="ranking_genre"][href^="/watch/"] > div > p),
     })
     return ListPage
   })(NicoPage)
-
