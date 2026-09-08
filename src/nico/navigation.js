@@ -1,178 +1,121 @@
+    // Observe native routing without intercepting clicks or replacing the document.
     var setupSpaNavigationGuard = function() {
       if (window.__nrnSpaNavigationGuardInstalled) return
       window.__nrnSpaNavigationGuardInstalled = true
-
-      var LOG = '[NicoNicoRankingNG route v14.1]'
-      var enabled = true
-      var developer = false
-      var armed = false
-      var lastHref = location.href
-      var reloadScheduled = false
-      var routeSequence = 0
-      var pollTimer = null
-      var resultRouteKey = ''
-      var resultElement = null
-
-      var toUrl = function(value) {
-        try { return new URL(value, location.href) }
-        catch (e) { return null }
-      }
-
-      var routeKey = function(value) {
-        var u = toUrl(value)
-        if (!u) return ''
-        // hashだけの変更は検索条件変更ではない。
+      var enabled = true, armed = false, lastHref = location.href
+      var activeKey = '', displayedKey = '', suspended = false, timer = null, generation = 0
+      var previous = [], start = function() {}, stop = function() {}
+      var selector = '[data-decoration-video-id][data-anchor-area="main"]:not([data-nrn-autofill="true"]), .itemTitle'
+      var key = function(href) {
+        var u = new URL(href, location.href)
         return u.origin + u.pathname + u.search
       }
-
-      var isSearchRoute = function(value) {
-        var u = toUrl(value)
-        return Boolean(u
-          && u.origin === location.origin
-          && /^\/(?:tag|search)\//.test(u.pathname))
+      var supported = function() {
+        return ListPage.is(location) || SearchPage.is(location)
       }
-
-      var findResultElement = function() {
-        return document.querySelector(
-          '[data-decoration-video-id][data-anchor-area="main"], .itemTitle'
-        )
-      }
-      var retainsOriginalResults = function(value) {
-        return routeKey(value) === resultRouteKey
-          && Boolean(resultElement && resultElement.isConnected)
-      }
-
-      var scheduleReload = function(source, fromHref, toHref) {
-        var fromKey = routeKey(fromHref)
-        var toKey = routeKey(toHref)
-
-        // Overlay players replace the URL while retaining the search document.
-        // Capture the current card after any list/tile replacement, before playback.
-        var to = toUrl(toHref)
-        if (fromKey === resultRouteKey && to && to.origin === location.origin
-            && /^\/watch\//.test(to.pathname)) {
-          resultElement = findResultElement()
-        }
-
-        lastHref = toHref
-        if (!armed || !enabled) {
-          if (developer && fromKey !== toKey) {
-            console.log(LOG, 'URL変更を検出（修正OFF/未準備）:', {
-              source: source, from: fromHref, to: toHref
-            })
-          }
-          return
-        }
-        if (!toKey || fromKey === toKey) return
-        if (!isSearchRoute(toHref)) return
-        if (retainsOriginalResults(toHref)) {
-          if (developer) console.log(LOG, '元の検索結果へ復帰。再読み込みを省略:', {source:source, to:toHref})
-          return
-        }
-        if (reloadScheduled) return
-
-        reloadScheduled = true
-        routeSequence++
-
-        console.warn(LOG, 'SPA検索遷移を検出。新しい検索結果で再初期化します:', {
-          sequence: routeSequence,
-          source: source,
-          from: fromHref,
-          to: toHref,
-          action: 'location.reload()'
+      var cards = function() {
+        return Array.from(document.querySelectorAll(selector)).map(function(node) {
+          return {node:node, id:node.getAttribute('data-decoration-video-id'),
+            text:node.querySelector('a[href*="/watch/"]')?.getAttribute('href') || node.textContent}
         })
-
-        // Reactがhistory更新を終えた後、現在の新URLを保持してreload。
-        setTimeout(function() {
-          // A player may open/close during the delay. Never reload its watch URL
-          // or the original, still-mounted results because of a stale search event.
-          if (!armed || !enabled || !isSearchRoute(location.href)
-              || retainsOriginalResults(location.href)) {
-            reloadScheduled = false
-            lastHref = location.href
-            return
-          }
-          var currentKey = routeKey(location.href)
-          if (currentKey !== toKey) {
-            // 短時間にさらに別URLへ移動した場合は最終URLを優先。
-            console.log(LOG, 'reload直前にURLがさらに変化:', {
-              expected: toHref,
-              current: location.href
-            })
-          }
-          location.reload()
-        }, 120)
       }
-
-      var observeAfterHistory = function(source, beforeHref) {
-        var afterHref = location.href
-        if (routeKey(beforeHref) !== routeKey(afterHref)) {
-          scheduleReload(source, beforeHref, afterHref)
-        } else {
-          lastHref = afterHref
+      var sameCards = function(a, b) {
+        return a.length === b.length && a.every(function(row, i) {
+          return row.node === b[i].node && row.id === b[i].id && row.text === b[i].text
+        })
+      }
+      var clear = function() { clearTimeout(timer); timer = null }
+      var begin = function() {
+        clear()
+        if (!armed || !enabled || !supported()) return
+        var token = generation
+        // React may commit after its history update. Wait for changed results, then
+        // coalesce that commit. Zero results is also a valid mounted route.
+        timer = setTimeout(function() {
+          timer = null
+          if (token !== generation || !supported() || !enabled) return
+          activeKey = key(location.href)
+          displayedKey = activeKey
+          suspended = false
+          start()
+          previous = cards()
+        }, 100)
+      }
+      var changed = function() {
+        var href = location.href, nextKey = key(href)
+        if (key(lastHref) === nextKey) { lastHref = href; return }
+        lastHref = href
+        if (!armed) return
+        if (!enabled) { generation++; clear(); stop(); previous = []; activeKey = ''; return }
+        generation++
+        clear()
+        // ZenzaWatch replaces history while leaving the search DOM mounted.
+        if (/^\/watch\//.test(location.pathname) && previous.length
+            && previous.every(function(row) { return row.node.isConnected })) {
+          suspended = true
+          return
         }
+        if (suspended && nextKey === activeKey && previous.length
+            && sameCards(previous, cards())) {
+          suspended = false
+          return
+        }
+        stop()
+        activeKey = ''
+        suspended = false
+        if (!supported()) { previous = []; activeKey = ''; return }
+        if (nextKey === displayedKey || !sameCards(previous, cards())) begin()
+        // Identical/reused results are recognized by a native DOM commit below.
       }
-
-      ;['pushState', 'replaceState'].forEach(function(methodName) {
-        var original = history[methodName]
-        if (typeof original !== 'function') return
-
-        history[methodName] = function() {
-          var beforeHref = location.href
+      ;['pushState', 'replaceState'].forEach(function(name) {
+        var original = history[name]
+        history[name] = function() {
           var result = original.apply(this, arguments)
-          observeAfterHistory('history.' + methodName, beforeHref)
+          changed()
           return result
         }
       })
-
-      window.addEventListener('popstate', function() {
-        var beforeHref = lastHref
-        setTimeout(function() {
-          observeAfterHistory('popstate', beforeHref)
-        }, 0)
-      })
-
-      // 開発者モードでは、押した検索系リンクそのものも記録する。
-      document.addEventListener('click', function(e) {
-        if (!developer) return
-        var a = e.target && e.target.closest ? e.target.closest('a[href]') : null
-        if (!a) return
-        var u = toUrl(a.href)
-        if (!u || !isSearchRoute(u.href)) return
-        console.log(LOG, '検索系リンククリック:', {
-          text: String(a.textContent || '').trim().slice(0, 100),
-          href: u.href,
-          current: location.href,
-          modifiedClick: Boolean(e.ctrlKey || e.metaKey || e.shiftKey || e.altKey),
-          target: a.target || ''
-        })
-      }, true)
-
-      // History APIを経由しない将来の実装変更にも備える保険。
-      pollTimer = setInterval(function() {
-        if (reloadScheduled) return
-        if (routeKey(lastHref) !== routeKey(location.href)) {
-          scheduleReload('url-poll', lastHref, location.href)
+      window.addEventListener('popstate', changed)
+      setInterval(changed, 250)
+      var observer = new MutationObserver(function(records) {
+        if (!armed || !enabled) return
+        changed()
+        if (!supported()) {
+          if (suspended && previous.some(function(row) { return !row.node.isConnected })) {
+            stop(); suspended = false; previous = []; activeKey = ''
+          }
+          return
         }
-      }, 250)
-
+        if (key(location.href) === activeKey) { previous = cards(); return }
+        // Ignore the userscript's own teardown/status/detail mutations. Native
+        // result replacement or text updates, including empty results, commit a route.
+        var owned = '[id^="nrn-"], .nrn-movie-info-container, .nrn-movie-info-toggle, .nrn-action-pane, .nrn-description, .nrn-movie-title, [data-nrn-autofill="true"]'
+        var nativeCommit = records.some(function(record) {
+          var target = record.target.nodeType === 1 ? record.target : record.target.parentElement
+          if (!target || target.closest(owned)) return false
+          if (previous.length && !previous.some(function(row) {
+            return row.node.contains(target) || target.contains(row.node)
+          })) return false
+          if (record.type === 'characterData' || record.type === 'attributes') return true
+          return Array.from(record.addedNodes).concat(Array.from(record.removedNodes)).some(function(node) {
+            return node.nodeType === 1 && !node.matches(owned)
+          })
+        })
+        if (!sameCards(previous, cards()) || nativeCommit) begin()
+      })
+      observer.observe(document, {childList:true, subtree:true, characterData:true,
+        attributes:true, attributeFilter:['data-decoration-video-id', 'href']})
       window.__nrnConfigureSpaNavigationGuard = function(opts) {
         opts = opts || {}
+        var wasEnabled = enabled
         enabled = opts.enabled !== false
-        developer = Boolean(opts.developer)
-        if (!armed && isSearchRoute(location.href)) {
-          resultRouteKey = routeKey(location.href)
-          resultElement = findResultElement()
-        }
+        if (opts.start) start = opts.start
+        if (opts.stop) stop = opts.stop
+        if (!armed) { activeKey = key(location.href); displayedKey = activeKey; previous = cards(); armed = true }
         lastHref = location.href
-        armed = true
-
-        console.log(LOG, 'SPA遷移監視を開始:', {
-          enabled: enabled,
-          developer: developer,
-          current: lastHref
-        })
+        if (!enabled) clear()
+        if (!wasEnabled && enabled && key(location.href) !== activeKey) {
+          generation++; stop(); begin()
+        }
       }
-
-      console.log(LOG, 'SPA遷移監視フックを設置しました')
     }

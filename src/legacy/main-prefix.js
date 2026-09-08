@@ -26,6 +26,9 @@
     var createMovieRoot = function(resultOfParsing, page, movieViewMode) {
       var movie = movieViewMode.movie
       var result = page.createMovieRoot(resultOfParsing)
+      result._nrnOriginalAnchors = Array.from(result.elem.querySelectorAll('a[href]'), function(a) {
+        return {node:a, target:a.getAttribute('target'), rel:a.getAttribute('rel')}
+      })
       result.movieId = movie.id
       result.actionPane
         = new NicoPage.ActionPane(page.doc, movie).bindToMovie(movie)
@@ -72,7 +75,7 @@
         thumbInfo.setConcurrent(v)
         console.log('[NicoNicoRankingNG ThumbInfo] 同時取得数を変更:', thumbInfo.concurrent)
       })
-      return function(prefer) {
+      var request = function(prefer) {
         var allIds = movieViewModes.sort().map(function(m) { return m.movie.id })
         var pendingIds = allIds.filter(function(id) {
           var movie = movies.get(id)
@@ -88,6 +91,8 @@
         }
         thumbInfo.request(pendingIds, prefer)
       }
+      request.dispose = function() { thumbInfo.dispose() }
+      return request
     }
     var getThumbInfoRequester = function(movies, movieViewModes) {
       return movies.config.useGetThumbInfo.value

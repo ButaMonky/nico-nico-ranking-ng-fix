@@ -1,4 +1,32 @@
     var setupAutoFill = function(model, page, controller) {
+      // Resources belong to one result route. No timer/listener survives disposal.
+      var timers = new Set(), intervals = new Set(), frames = new Set(), handles = new Set()
+      var listeners = []
+      var setTimeout = function(fn, delay) {
+        var id = globalThis.setTimeout(function() { timers.delete(id); if (!page._disposed) fn() }, delay)
+        timers.add(id); return id
+      }
+      var setInterval = function(fn, delay) {
+        var id = globalThis.setInterval(function() { if (!page._disposed) fn() }, delay)
+        intervals.add(id); return id
+      }
+      var requestAnimationFrame = function(fn) {
+        var id = globalThis.requestAnimationFrame(function() { frames.delete(id); if (!page._disposed) fn() })
+        frames.add(id); return id
+      }
+      var listen = function(target, name, fn, capture) {
+        target.addEventListener(name, fn, capture)
+        listeners.push(function() { target.removeEventListener(name, fn, capture) })
+      }
+      page._disposeAutoFill = function() {
+        page._disposed = true
+        timers.forEach(globalThis.clearTimeout); intervals.forEach(globalThis.clearInterval)
+        frames.forEach(globalThis.cancelAnimationFrame)
+        for (var handle of handles) { try { handle.abort?.() } catch (e) {} }
+        handles.clear(); listeners.forEach(function(remove) { remove() })
+        delete model.config._nrnDiagnosticHook
+        if (typeof restorePagerUi === 'function') restorePagerUi()
+      }
       var LOG = '[NicoNicoRankingNG autoFill v14.1]'
 
       if (typeof page.fetchPageItems !== 'function') {
@@ -8,17 +36,25 @@
 
       // -------------------- utility --------------------
       var sourceHref = page._sourceUrl || location.href
+      var requestScope = setupAutoFill.sequence = (setupAutoFill.sequence || 0) + 1
       var gmRequest = function(options) {
         return new Promise(function(resolve, reject) {
           var request = typeof GM_xmlhttpRequest === 'undefined'
             ? GM.xmlHttpRequest : GM_xmlhttpRequest
+          if (page._disposed) { resolve(null); return }
+          var settled = false
+          var finish = function(fn) { return function(value) {
+            if (settled) return
+            settled = true; handles.delete(handle); fn(value)
+          } }
           var handle = request(Object.assign({}, options, {
-            onload: resolve,
-            onerror: reject,
-            onabort: function() { reject(new Error('request aborted')) },
-            ontimeout: function() { reject(new Error('timeout')) }
+            onload: finish(resolve),
+            onerror: finish(reject),
+            onabort: finish(function() { reject(new Error('request aborted')) }),
+            ontimeout: finish(function() { reject(new Error('timeout')) })
           }))
-          if (handle && typeof handle.catch === 'function') handle.catch(reject)
+          if (handle && !settled) handles.add(handle)
+          if (handle && typeof handle.catch === 'function') handle.catch(finish(reject))
         })
       }
 
@@ -65,9 +101,10 @@
       }
       var fetchSelfAdResult = function(movie) {
         if (!movie) return Promise.resolve(null)
-        return Network.ads('thanks:' + movie.id, function() { return fetchSelfAdResultUnshared(movie) })
+        return Network.ads(requestScope + ':thanks:' + movie.id, function() { return fetchSelfAdResultUnshared(movie) })
       }
       var fetchSelfAdResultUnshared = async function(movie) {
+        if (page._disposed) return
         if (!movie) return null
         if (movie.nicoadSelfAdChecked) return {
           checked:true,
@@ -102,6 +139,7 @@
             timeout:10000,
             headers:{'Accept':'application/json'}
           })
+          if (page._disposed) return
           if (Number(response.status) === 404) {
             result.checked = true
             selfAdCache.set(movie.id, result)
@@ -133,6 +171,7 @@
             }))
           result.checked = true
         } catch (e) {
+          if (page._disposed) return
           result.error = String(e && e.message ? e.message : e)
           result.failedAt = Date.now()
         }
@@ -313,16 +352,19 @@
       }
 
       var ensureSelfAdChecks = async function(ids, reason) {
+        if (page._disposed) return
         if (!selfAdCheckRequired()) return {checked:0, matches:0, errors:0}
         var unique = [...new Set(ids)]
         var cursor = 0, checked = 0, matches = 0, errors = 0
         var rows = []
         var worker = async function() {
+          if (page._disposed) return
           while (cursor < unique.length) {
             var id = unique[cursor++]
             var movie = model.movies.get(id)
             if (!movie || !movie.thumbInfoDone) continue
             var result = await fetchSelfAdResult(movie)
+            if (page._disposed) return
             if (!result) continue
             if (result.checked) {
               checked++
@@ -344,6 +386,7 @@
         }
         var started = performance.now()
         await Promise.all(Array.from({length:Math.min(6, Math.max(1, unique.length))}, worker))
+        if (page._disposed) return
         var matchedRows = rows.filter(function(r) { return r.idMatch || r.nameMatch })
         var errorRows = rows.filter(function(r) { return !r.checked || r.error })
         var summary = {
@@ -388,6 +431,7 @@
         try {
           return decodeURIComponent(location.pathname.replace(/^\/(tag|search)\//, ''))
         } catch (e) {
+          if (page._disposed) return
           return location.pathname
         }
       }
@@ -843,6 +887,7 @@
       }
 
       var updateStatus = function() {
+        if (page._disposed) return
         if (!badge) return
 
         var busyPhases = new Set([
@@ -982,7 +1027,7 @@
         return data
       }
 
-      badge.addEventListener('dblclick', function() {
+      listen(badge, 'dblclick', function() {
         var s = logSnapshot('status badge dblclick', {
           domCards: page.doc.querySelectorAll('[data-decoration-video-id]').length,
           domInjected: page.doc.querySelectorAll('[data-nrn-autofill="true"]').length,
@@ -1195,6 +1240,7 @@
       }
 
       var snapshotFetchOffset = async function(offset) {
+        if (page._disposed) return
         var p = new URLSearchParams()
         p.set('q', snapshotDescriptor.q)
         p.set('targets', snapshotDescriptor.isTag ? 'tagsExact' : 'title,description,tags')
@@ -1221,6 +1267,7 @@
           url: SNAPSHOT_ENDPOINT + '?' + p.toString(),
           timeout: 10000
         })
+        if (page._disposed) return
         var networkDone = performance.now()
 
         if (res.status !== 200) throw new Error('Snapshot API HTTP ' + res.status)
@@ -1404,10 +1451,12 @@
       // 現在ページとAPI先頭を比較。
       // 投稿日時等で並びが一致しない場合に、間違った続きを足さないためfallbackする。
       var validateSnapshotAgainstCurrentDom = async function() {
+        if (page._disposed) return
         if (!useSnapshot || snapshotValidated) return
         setPhase('validating-api', '現在ページと検索APIの並び順を照合中')
 
         var result = await snapshotFetchOffset(snapshotValidationOffset)
+        if (page._disposed) return
         var domIds = []
         var seen = new Set()
         page.doc.querySelectorAll(
@@ -1561,6 +1610,7 @@
           var p = Number(u.searchParams.get('page') || 1)
           return Number.isFinite(p) && p >= 1 ? Math.trunc(p) : null
         } catch (e) {
+          if (page._disposed) return
           return null
         }
       }
@@ -1602,6 +1652,7 @@
         try {
           u = new URL(baseHref || sourceHref, sourceHref)
         } catch (e) {
+          if (page._disposed) return
           u = new URL(sourceHref)
         }
         // 検索条件とNicoNicoの rf/rp/ra 等を維持し、pageだけ変更する。
@@ -1775,6 +1826,7 @@
       }
 
       var updatePagerUi = function(reason) {
+        if (page._disposed || model.config.spaNavigationFix.value) return
         var mode = model.config.autoFillPagerMode.value
         if (mode === 'off') return
 
@@ -1915,6 +1967,7 @@
       }
 
       var correctNextControlHref = function(a, reason) {
+        if (page._disposed || model.config.spaNavigationFix.value) return null
         if (model.config.autoFillPagerMode.value !== 'compactSkip') return null
         if (!isLiveNextPagerControl(a)) return null
         var nextPage = firstUnfetchedPageAfterCurrent()
@@ -1949,32 +2002,11 @@
 
       // hover時に補正するので、ブラウザ左下のリンク表示も正しい値になる。
       ;['pointerover', 'focusin'].forEach(function(eventName) {
-        page.doc.addEventListener(eventName, function(e) {
+        listen(page.doc, eventName, function(e) {
           var a = e.target && e.target.closest ? e.target.closest('a[href]') : null
           if (a) correctNextControlHref(a, eventName)
         }, true)
       })
-
-      // click時はhrefを書き換えるだけでなく、NicoNico Reactが古いpage=2を使う前に
-      // 確定した未取得ページURLへ直接遷移させる。
-      page.doc.addEventListener('click', function(e) {
-        if (e.defaultPrevented || e.button !== 0) return
-        if (e.ctrlKey || e.metaKey || e.shiftKey || e.altKey) return
-        var a = e.target && e.target.closest ? e.target.closest('a[href]') : null
-        if (!a || !isLiveNextPagerControl(a)) return
-
-        var desired = correctNextControlHref(a, 'click')
-        if (!desired) return
-
-        e.preventDefault()
-        e.stopPropagation()
-        console.log(LOG, '次リンクを未取得ページへ確定遷移:', {
-          from: location.href,
-          to: desired,
-          fetchedPages: [...fetchedPageNumbers].sort(function(x,y){return x-y})
-        })
-        location.href = desired
-      }, true)
 
       var restorePagerUi = function() {
         page.doc.querySelectorAll('a[href], a[data-nrn-synthetic-next="true"]').forEach(function(a) {
@@ -1990,6 +2022,7 @@
 
       // -------------------- CandidateSource / pool --------------------
       var fetchMoreCandidates = async function(minNeeded) {
+        if (page._disposed) return
         var fetchStart = performance.now()
         var mayRequest = function() {
           var limit = Number(model.config.autoFillMaxExtraPages.value) || 0
@@ -1998,11 +2031,13 @@
 
         if (useSnapshot) {
           if (!snapshotValidated) await validateSnapshotAgainstCurrentDom()
+          if (page._disposed) return
           if (!useSnapshot) return fetchMoreCandidates(minNeeded)
 
           while (candidatePool.length < minNeeded && lastFetchedHadNext !== false) {
             if (!mayRequest()) break
             var result = await snapshotFetchOffset(snapshotOffset)
+            if (page._disposed) return
             snapshotOffset += 100
             fetchedExtraPages++
             totalFetchedItems += result.items.length
@@ -2076,7 +2111,9 @@
                 scope: 'RUN',
                 requestId: 'RUN-autofill-p' + pageNumber
               })
+              if (page._disposed) return
             } catch (e) {
+              if (page._disposed) return
               // 終端情報を読めなかった場合の安全弁。
               // 連番の次ページ取得で400/404なら検索終端として正常終了扱いにする。
               if (e && (e.status === 400 || e.status === 404)
@@ -2260,6 +2297,7 @@
               ageMinutes:Math.round((Date.now() - Number(cached.cachedAt || 0)) / 60000)
             })
           } catch (e) {
+            if (page._disposed) return
             cacheRestoreFailures++
             rows.push({id:id, cache:'HIT', restored:false, note:String(e)})
             console.warn(LOG, 'キャッシュ復元失敗:', {id:id, error:e})
@@ -2325,6 +2363,7 @@
       }
 
       var evaluateCandidateBatch = async function(items) {
+        if (page._disposed) return
         if (!items.length) {
           return {checked: 0, accepted: 0, ng: 0, rows: [], timings: {}}
         }
@@ -2371,6 +2410,7 @@
         var thumbStart = performance.now()
         model.requestThumbInfo(true)
         var completed = await waitForThumbInfo(addedIds, 30000)
+        if (page._disposed) return
         var thumbEnd = performance.now()
 
         if (!completed) {
@@ -2380,6 +2420,7 @@
         var candidateSelfAdStarted = performance.now()
         if (selfAdRuleRequired()) {
           await ensureSelfAdChecks(addedIds, '自動追加候補 / NG条件必須')
+          if (page._disposed) return
         } else if (model.config.selfAdWarningEnabled.value) {
           var warningOnlyIds = visibleNonNgIds(addedIds)
           console.log(LOG, '自演広告監査を表示動画だけに限定:', {
@@ -2389,6 +2430,7 @@
             skippedNg:addedIds.length - warningOnlyIds.length
           })
           await ensureSelfAdChecks(warningOnlyIds, '自動追加候補 / 表示動画のみ')
+          if (page._disposed) return
         }
         var candidateSelfAdMs = Math.round(performance.now() - candidateSelfAdStarted)
 
@@ -2401,6 +2443,7 @@
             requestAnimationFrame(resolve)
           })
         })
+        if (page._disposed) return
 
         renderStoredSelfAdWarnings(addedIds, '自動追加カード表示後')
 
@@ -2536,6 +2579,7 @@
 
       // -------------------- main controller --------------------
       var maybeFetchMore = async function() {
+        if (page._disposed) return
         if (!initialized || fetching || gaveUp) {
           updateStatus()
           return
@@ -2611,6 +2655,7 @@
             setPhase('fetching',
               '候補を補充中（必要 ' + detailBatchSize + '件 / プール ' + candidatePool.length + '件）')
             fetchMs = await fetchMoreCandidates(desiredPool)
+            if (page._disposed) return
           }
 
           if (!candidatePool.length) {
@@ -2645,6 +2690,7 @@
           })
 
           var result = await evaluateCandidateBatch(batch)
+          if (page._disposed) return
           lastTiming = {
             fetchMs: fetchMs,
             domAddMs:result.timings.domAddMs || 0,
@@ -2717,6 +2763,7 @@
             setPhase('stopped', stopReason)
           }
         } catch (e) {
+          if (page._disposed) return
           console.error(LOG, '自動継ぎ足しでエラー:', e)
 
           if (useSnapshot) {
@@ -2735,6 +2782,7 @@
           }
         } finally {
           fetching = false
+          if (page._disposed) return
           updateStatus()
 
           if (!gaveUp && model.config.autoFillEnabled.value) {
@@ -2767,6 +2815,7 @@
       }
 
       var auditUserIdNg = async function(reason) {
+        if (page._disposed) return
         var store = model.config.ngUserIds
         var configured = store.set
         var diagnosticValue = function(entry) {
@@ -3054,6 +3103,7 @@
       }
 
       var developerDryRunSources = async function() {
+        if (page._disposed) return
         var summary = {
           legacy: {supported: true, ok: false},
           hybrid: {supported: Boolean(snapshotDescriptor.supported), ok: false},
@@ -3068,6 +3118,7 @@
             scope: 'DEV',
             requestId: 'DEV-legacy-p' + legacyPage
           })
+          if (page._disposed) return
           var legacyItems = Array.isArray(legacy.items) ? legacy.items : []
           summary.legacy = {
             supported: true,
@@ -3084,6 +3135,7 @@
           }))
           console.groupEnd()
         } catch (e) {
+          if (page._disposed) return
           summary.legacy.error = String(e && e.message || e)
         }
 
@@ -3091,6 +3143,7 @@
           try {
             var s0 = performance.now()
             var snapshot = await snapshotFetchOffset(0)
+            if (page._disposed) return
             var apiItems = snapshot.items || []
             var sourceMs = Math.round(performance.now() - s0)
 
@@ -3166,6 +3219,7 @@
             console.log('API事前判定効果:', {input:apiItems.length,rejected:quickRejected,detailChecksNeeded:quickPassed,reductionPercent:summary.snapshot.prefilterReductionPercent})
             console.groupEnd()
           } catch (e) {
+            if (page._disposed) return
             summary.hybrid.error = String(e && e.message || e)
             summary.snapshot.error = String(e && e.message || e)
           }
@@ -3203,6 +3257,7 @@
       }
 
       var runDeveloperSuite = async function(reason, forcedFull) {
+        if (page._disposed) return
         if (!model.config.developerMode.value || developerSuiteRunning) return
         var diagnosticMode = forcedFull ? 'full' : model.config.developerDiagnosticMode.value
         if (diagnosticMode === 'manual' && !forcedFull) {
@@ -3252,11 +3307,13 @@
 
           setDeveloperProgress(3, 'NGユーザーID監査')
           var userAudit = await auditUserIdNg(reason)
+          if (page._disposed) return
 
           var sourceAudit = null
           if (diagnosticMode === 'full') {
             setDeveloperProgress(4, '3方式取得テスト')
             sourceAudit = await developerDryRunSources()
+            if (page._disposed) return
             setDeveloperProgress(5, '総合判定')
           } else {
             setDeveloperProgress(4, '総合判定（軽量）')
@@ -3285,6 +3342,7 @@
           console.log(LOG, '診断所要時間:', Math.round(performance.now() - developerSuiteLastRunAt) + 'ms')
           console.log(LOG, '===== 開発者モード一括診断 END =====')
         } catch (e) {
+          if (page._disposed) return
           developerSuiteStatus = '診断エラー'
           console.error(LOG, '開発者診断中にエラー:', e)
         } finally {
@@ -3322,6 +3380,7 @@
 
       // -------------------- initialize --------------------
       var initialize = async function() {
+        if (page._disposed) return
         console.log(LOG, '詳細情報UI:', {
           behavior:'クリックで開閉。詳細は動画カード内部の通常レイアウトへ挿入し、マウスアウトでは閉じません。',
           layout:'reserved-space-below-card + pinned-toggle-v2（追加カードは表示後に▲▼を再測定。NG/予備カードは位置監査対象外）',
@@ -3365,6 +3424,7 @@
         var initStart = performance.now()
         var initialDomWaitStarted = performance.now()
         originalRoots = await waitForInitialRoots(15000)
+        if (page._disposed) return
         var initialDomWaitMs = Math.round(performance.now() - initialDomWaitStarted)
 
         // connected + ID重複除去で正規化。
@@ -3426,6 +3486,7 @@
         var thumbStart = performance.now()
         model.requestThumbInfo(true)
         var completed = await waitForThumbInfo([...originalMovieIds], 30000)
+        if (page._disposed) return
         var thumbEnd = performance.now()
 
         if (!completed) {
@@ -3439,6 +3500,7 @@
         var initialSelfAdStarted = performance.now()
         if (selfAdRuleRequired()) {
           await ensureSelfAdChecks([...originalMovieIds], '初期ページ / NG条件必須')
+          if (page._disposed) return
         } else if (model.config.selfAdWarningEnabled.value) {
           var initialWarningIds = visibleNonNgIds([...originalMovieIds])
           console.log(LOG, '自演広告監査を表示動画だけに限定:', {
@@ -3448,6 +3510,7 @@
             skippedNg:originalMovieIds.size - initialWarningIds.length
           })
           await ensureSelfAdChecks(initialWarningIds, '初期ページ / 表示動画のみ')
+          if (page._disposed) return
         }
         var initialSelfAdMs = Math.round(performance.now() - initialSelfAdStarted)
         renderStoredSelfAdWarnings([...originalMovieIds], '初期ページ')
@@ -3618,6 +3681,10 @@
         updatePagerUi('setting changed')
         updateStatus()
       })
+      model.config.spaNavigationFix.on('changed', function() {
+        restorePagerUi()
+        updatePagerUi('SPA setting changed')
+      })
 
       model.config.pagerPreviewCount.on('changed', function(v) {
         console.log(LOG, 'ページャー未取得プレビュー件数変更:', v)
@@ -3670,11 +3737,3 @@
 
       setTimeout(initialize, 0)
     }
-    // ------------------------------------------------------------------
-    // v13.4 NicoNico SPA navigation guard
-    //
-    // 現行 /tag/ /search/ は pushState/replaceState を使ってURLだけ切り替え、
-    // userscript自体は再実行されないことがある。
-    // このスクリプトは旧設計由来の解除不能Listener/Observerが多いため、
-    // 同一document上で再setupするより、新URLで1回だけreloadする方が安全。
-    // ------------------------------------------------------------------

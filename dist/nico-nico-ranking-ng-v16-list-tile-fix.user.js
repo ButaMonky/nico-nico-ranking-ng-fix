@@ -6,7 +6,7 @@
 // @match        *://www.nicovideo.jp/ranking*
 // @match        *://www.nicovideo.jp/search/*
 // @match        *://www.nicovideo.jp/tag/*
-// @version      160.5
+// @version      160.6
 // @grant        GM_getValue
 // @grant        GM_setValue
 // @grant        GM_xmlhttpRequest
@@ -720,13 +720,17 @@
     }
     async function fetchResponse(url, options, timeout = 15000) {
       const controller = new AbortController();
+      const externalSignal = options?.signal;
+      const abort = () => controller.abort();
+      if (externalSignal?.aborted) abort();
+      else externalSignal?.addEventListener('abort', abort, {once:true});
       const timer = setTimeout(() => controller.abort(), timeout);
       try {
         const res = await fetch(url, Object.assign({}, options, {signal:controller.signal}));
         const body = await res.text(); // Keep timeout active through body download.
         return {ok:res.ok, status:res.status, statusText:res.statusText, url:res.url,
           text:async () => body, json:async () => JSON.parse(body)};
-      } finally { clearTimeout(timer); }
+      } finally { clearTimeout(timer); externalSignal?.removeEventListener('abort', abort); }
     }
     return {createQueue, fetchResponse, ads:createQueue(4)};
   })();
@@ -814,6 +818,8 @@
       this._requestCount = 0
       this._pendingIds = []
       this._requestedIds = new Set()
+      this._handles = new Set()
+      this._disposed = false
     }
     ThumbInfo.prototype = createObject(_super.prototype, {
       _onerror(id) {
@@ -847,10 +853,12 @@
         }
       },
       _requestMovie(id, retry) {
+        if (this._disposed) return
         var settled = false
         var once = callback => value => {
-          if (settled) return
+          if (settled || this._disposed) return
           settled = true
+          this._handles.delete(request)
           callback(value)
         }
         var fail = once(this._onerror.bind(this, id))
@@ -864,6 +872,7 @@
           onabort: fail,
           ontimeout: once(this._ontimeout.bind(this, id, retry)),
         })
+        if (!settled && request) this._handles.add(request)
         if (request && typeof request.catch === 'function') request.catch(fail)
         } catch (e) { fail(e) }
       },
@@ -880,7 +889,7 @@
         return [...new Set(ids)].filter(function(id) { return !m.has(id) })
       },
       _requestAsPossible() {
-        if (this._draining) return
+        if (this._draining || this._disposed) return
         this._draining = true
         try {
           while (this._pendingIds.length && this._requestCount < this.concurrent) this._requestNextMovie()
@@ -891,7 +900,17 @@
         this._requestAsPossible()
         return this
       },
+      dispose() {
+        this._disposed = true
+        this._pendingIds.length = 0
+        for (const handle of this._handles) {
+          try { handle.abort?.() } catch (e) {}
+        }
+        this._handles.clear()
+        this._eventNameToListeners.clear()
+      },
       request(ids, prefer) {
+        if (this._disposed) return this
         const newIds = this._getNewIds(ids)
         for (const id of newIds) this._requestedIds.add(id)
         if (prefer) {
@@ -3035,8 +3054,8 @@
           </label></div>
           <div class=hint>「自動」はニコニコ画面の実際の背景色を見てライト/ダークを判定します。ダーク配色は真っ黒・真っ白を避け、暗い青灰色の背景と少し抑えた文字色にして長時間見ても眩しすぎない配色にしています。</div>
           <div class=row><label><input type=checkbox id=openNewWindow>動画を新しいタブで開く</label></div>
-          <div class=row><label><input type=checkbox id=spaNavigationFix>検索・タグ・ページ番号の移動時に確実に再検索する（推奨）</label></div>
-          <div class=hint>現行ニコニコは検索画面内でURLだけを切り替えるSPA遷移を行います。ONではタグ・検索語・ページ番号・並び順などが変わったとき、新しいURLを保ったまま1回だけ再読み込みし、NG判定と自動継ぎ足しを新しい検索結果で最初から実行します。</div>
+          <div class=row><label><input type=checkbox id=spaNavigationFix>SPA移動に合わせてNG判定を更新する（推奨）</label></div>
+          <div class=hint>タグ・検索語・ページ番号・並び順・絞り込みを変えたとき、画面を再読み込みせず新しい検索結果のNG判定を開始します。「戻る・進む」にも対応します。ONではニコニコ本来のページ番号リンクを使うため、取得済みページを飛ばすページャー変更は休止します。</div>
           <div class=row><label><input type=checkbox id=useGetThumbInfo>動画詳細情報を取得する</label></div>
           <div class=row><label><input type=checkbox id=movieInfoTogglable>タグ・ユーザー・チャンネルの表示切替</label></div>
           <div class=row><label><input type=checkbox id=descriptionTogglable>動画説明の表示切替</label></div>
@@ -3087,7 +3106,7 @@
     sessionDetailCacheMaxEntries: 'キャッシュ件数の上限です。古いものから削除します。',
     autoFillAdMode: '追加動画の広告リボン・提供者表示の取得範囲です。広告者照合の警告・複合NGとは独立しています。無駄を抑えるには「表示動画のみ」を選んでください。',
     selfAdWarningEnabled: '広告者一覧を確認し、投稿者本人によるニコニ広告の可能性を警告します。追加通信が発生します。',
-    spaNavigationFix: 'ニコニコのSPAページ移動で古いスクリプト状態が残るのを防ぐため、新URLで安全に再読み込みします。',
+    spaNavigationFix: '画面を再読み込みせず、検索結果の切り替わりに合わせて古い処理を終了しNG判定を開始します。SPA利用時は本来のページ番号リンクを維持します。',
     developerMode: '診断ログを増やします。通常利用は軽量またはOFFで十分です。',
     developerDiagnosticMode: '軽量はローカル監査のみ、完全はAPI通信を含む3方式比較、手動のみはボタンを押した時だけ診断します。',
     ngLockedTagCountEnabled: 'ロックされたタグ数がしきい値以上の動画をNGにします。',
@@ -4106,6 +4125,7 @@ html[data-nrn-ui-theme="dark"] .nrn-contributor-ng-name-button:hover {
           return true
         },
         _pinMovieInfoTogglePosition(force) {
+          if (this._disposed) return
           if (!this.elem || !this.elem.isConnected) return false
           var toggle = this.movieInfo && this.movieInfo.toggle
           if (!toggle || !toggle.isConnected) return false
@@ -4156,6 +4176,7 @@ html[data-nrn-ui-theme="dark"] .nrn-contributor-ng-name-button:hover {
           return false
         },
         _scheduleMovieInfoTogglePin() {
+          if (this._disposed) return
           if (this._nrnTogglePinScheduled) return
           this._nrnTogglePinScheduled = true
           requestAnimationFrame(function() {
@@ -4245,6 +4266,7 @@ html[data-nrn-ui-theme="dark"] .nrn-contributor-ng-name-button:hover {
           return result
         },
         _syncMovieInfoReserve() {
+          if (this._disposed) return
           if (!this.elem || !this.elem.isConnected || !this._movieInfoVisible) return
           var info = this.movieInfo && this.movieInfo.elem
           if (!info || !info.isConnected) return
@@ -4397,7 +4419,9 @@ html[data-nrn-ui-theme="dark"] .nrn-contributor-ng-name-button:hover {
           this._configOpenNewWindowListeners.bind(config.openNewWindow)
         },
         unbind() {
+          this._disposed = true
           this.movieInfo.unbind()
+          this._stopMovieInfoReserve()
           this.description.unbind()
           this._movieListeners.unbind()
           this._movieViewModeListeners.unbind()
@@ -4493,6 +4517,36 @@ html[data-nrn-ui-theme="dark"] .nrn-contributor-ng-name-button:hover {
       this._toggleToMovieRoot = new Map()
     }
     NicoPage.prototype = {
+      dispose() {
+        this._disposed = true
+        this._abortController?.abort()
+        this._observer?.disconnect()
+        for (const observer of this._observers || []) observer.disconnect()
+        for (const root of new Set(this._toggleToMovieRoot.values())) {
+          root.unbind()
+          if (root.elem.dataset.nrnAutofill === 'true') { root.elem.remove(); continue }
+          for (const node of [root.movieInfo.elem, root.movieInfo.toggle, root.description.elem,
+              root.description.openButton, root.description.closeButton]) node?.remove()
+          root.elem.querySelectorAll('.nrn-action-pane, .nrn-self-ad-warning, .nrn-self-ad-inline-badge, .nrn-self-ad-card-badge').forEach(node => node.remove())
+          const title = root.movieTitle?.elem
+          if (title?.classList.contains('nrn-movie-title')) title.replaceWith(this.doc.createTextNode(title.textContent))
+          for (const saved of root._nrnOriginalAnchors || []) {
+            for (const name of ['target', 'rel']) {
+              if (saved[name] == null) saved.node.removeAttribute(name)
+              else saved.node.setAttribute(name, saved[name])
+            }
+          }
+          for (const node of [root.elem, ...root.elem.querySelectorAll('*')]) {
+            for (const name of Array.from(node.classList)) if (name.startsWith('nrn-')) node.classList.remove(name)
+            for (const attr of Array.from(node.attributes)) if (attr.name.startsWith('data-nrn-')) node.removeAttribute(attr.name)
+          }
+        }
+        this._toggleToMovieRoot.clear()
+        this.movieRoots = []
+        for (const node of this._dialogNodes || []) node.remove()
+        this.doc.getElementById('nrn-config-bar')?.remove()
+        this.doc.getElementById('nrn-status-badge')?.remove()
+      },
       createConfigBar() {
         return new ConfigBar(this.doc)
       },
@@ -4550,6 +4604,7 @@ html[data-nrn-ui-theme="dark"] .nrn-contributor-ng-name-button:hover {
         f.style.zIndex = '10001'
         f.srcdoc = ConfigDialog.SRCDOC
         f.addEventListener('load', function loaded() {
+          if (this._disposed) return
           this._configDialogLoaded(f.contentDocument)
           var themeResult = DetailUiTheme.resolve(config, this.doc)
           f.contentDocument.documentElement.dataset.nrnTheme = themeResult.resolved
@@ -4562,6 +4617,7 @@ html[data-nrn-ui-theme="dark"] .nrn-contributor-ng-name-button:hover {
             })
         }.bind(this))
         this.doc.body.appendChild(f)
+        this._dialogNodes = [back, f]
       },
       bindToConfig() {},
       get css() {
@@ -4581,7 +4637,6 @@ html[data-nrn-ui-theme="dark"] .nrn-contributor-ng-name-button:hover {
     })
     return NicoPage
   })()
-
   // Presentation only. Never starts AutoFill, creates Movies or requests metadata.
   var ResultLayout = (function() {
     const nativeSelector = '[data-decoration-video-id][data-anchor-area="main"]:not([data-nrn-autofill="true"])';
@@ -4819,6 +4874,7 @@ html[data-nrn-ui-theme="dark"] .nrn-contributor-ng-name-button:hover {
       _super.call(this, doc)
       this.movieRoots = [];
       this._sourceUrl = location.href;
+      this._abortController = new AbortController();
       this.resultLayout = ResultLayout.create(this);
     }
     ListPage.prototype = createObject(_super.prototype, {
@@ -4949,7 +5005,8 @@ html[data-nrn-ui-theme="dark"] .nrn-contributor-ng-name-button:hover {
         var networkStart = performance.now()
         var res = await Network.fetchResponse(url.toString(), {
           credentials: 'same-origin',
-          cache: 'no-store'
+          cache: 'no-store',
+          signal: this._abortController?.signal
         })
         if (!res.ok) {
           var httpError = new Error('HTTP ' + res.status)
@@ -5336,13 +5393,13 @@ html[data-nrn-ui-theme="dark"] .nrn-contributor-ng-name-button:hover {
       },
       async _applyAdDecoration(root, videoId) {
         try {
-          if (root.dataset.nrnAdDecorated === 'true') return
+          if (this._disposed || root.dataset.nrnAdDecorated === 'true') return
           var json = await Network.ads('decoration:' + videoId, async function() {
             var res = await Network.fetchResponse('https://api.nicoad.nicovideo.jp/v1/contents/video/' + videoId, {credentials: 'omit'}, 10000)
             if (!res.ok) throw new Error('広告 HTTP ' + res.status)
             return res.json()
           })
-          if (root.dataset.nrnAdDecorated === 'true') return
+          if (this._disposed || root.dataset.nrnAdDecorated === 'true') return
           root.dataset.nrnAdDecorated = 'true'
           var data = json && json.data
           var decoration = data && data.decoration
@@ -5446,15 +5503,17 @@ html[data-nrn-ui-theme="dark"] .nrn-contributor-ng-name-button:hover {
         if (togglable) togglable.hidden = true
       },
       observeMutation(callback) {
-        new MutationObserver((records, observer) => {
-          if (!isTargetPage()) return;
+        this._observer = new MutationObserver((records, observer) => {
+          if (this._disposed || !isTargetPage()
+              || new URL(this._sourceUrl).pathname + new URL(this._sourceUrl).search !== location.pathname + location.search) return;
           const parsed = this.parse();
           if (parsed.length > 0) {
             callback(parsed, true);
             this.unbindUnconnectedMovieRoots();
           }
           this.addConfigBar();
-        }).observe(this.doc.body, {childList: true, subtree: true, attributes: true, attributeFilter: ["class"]});
+        });
+        this._observer.observe(this.doc.body, {childList: true, subtree: true, attributes: true, attributeFilter: ["class"]});
       },
       get css() {
         return ResultLayout.css + `#nrn-config-button,
@@ -6179,9 +6238,11 @@ div:has(> div > a[data-anchor-page="ranking_genre"][href^="/watch/"] > div > p),
         }
       },
       observeMutation(callback) {
+        this._observers = []
         const nodeList = document.querySelectorAll('.contentBody.video.uad .item.nicoadVideoItem .itemContent')
         for (const node of Array.from(nodeList)) {
-          new MutationObserver((records, observer) => {
+          const watcher = new MutationObserver((records, observer) => {
+            if (this._disposed) return
             for (const r of records) {
               if (SearchPage._isGettingAdDone(r)) {
                 observer.disconnect()
@@ -6191,7 +6252,9 @@ div:has(> div > a[data-anchor-page="ranking_genre"][href^="/watch/"] > div > p),
                 return
               }
             }
-          }).observe(node, {
+          })
+          this._observers.push(watcher)
+          watcher.observe(node, {
             attributes: true,
             attributeOldValue: true,
             attributeFilter: ['style'],
@@ -6709,7 +6772,6 @@ div:has(> div > a[data-anchor-page="ranking_genre"][href^="/watch/"] > div > p),
   // Runtime services (v14.0)
   // Cross-cutting behavior belongs here instead of individual card classes.
   // ========================================================================
-
   var Diagnostics = (function() {
     var PREFIX = '[NicoNicoRankingNG v14.0]'
     var history = []
@@ -7042,8 +7104,17 @@ div:has(> div > a[data-anchor-page="ranking_genre"][href^="/watch/"] > div > p),
     }
     Controller.prototype = {
       addListenersTo(eventTarget) {
-        eventTarget.addEventListener('change', this._changed.bind(this))
-        eventTarget.addEventListener('click', this._clicked.bind(this))
+        this.dispose()
+        this._eventTarget = eventTarget
+        this._changeListener = this._changed.bind(this)
+        this._clickListener = this._clicked.bind(this)
+        eventTarget.addEventListener('change', this._changeListener)
+        eventTarget.addEventListener('click', this._clickListener)
+      },
+      dispose() {
+        this._eventTarget?.removeEventListener('change', this._changeListener)
+        this._eventTarget?.removeEventListener('click', this._clickListener)
+        this._eventTarget = null
       },
       _changed(event) {
         switch (event.target.id) {
@@ -7375,6 +7446,9 @@ div:has(> div > a[data-anchor-page="ranking_genre"][href^="/watch/"] > div > p),
     var createMovieRoot = function(resultOfParsing, page, movieViewMode) {
       var movie = movieViewMode.movie
       var result = page.createMovieRoot(resultOfParsing)
+      result._nrnOriginalAnchors = Array.from(result.elem.querySelectorAll('a[href]'), function(a) {
+        return {node:a, target:a.getAttribute('target'), rel:a.getAttribute('rel')}
+      })
       result.movieId = movie.id
       result.actionPane
         = new NicoPage.ActionPane(page.doc, movie).bindToMovie(movie)
@@ -7421,7 +7495,7 @@ div:has(> div > a[data-anchor-page="ranking_genre"][href^="/watch/"] > div > p),
         thumbInfo.setConcurrent(v)
         console.log('[NicoNicoRankingNG ThumbInfo] 同時取得数を変更:', thumbInfo.concurrent)
       })
-      return function(prefer) {
+      var request = function(prefer) {
         var allIds = movieViewModes.sort().map(function(m) { return m.movie.id })
         var pendingIds = allIds.filter(function(id) {
           var movie = movies.get(id)
@@ -7437,6 +7511,8 @@ div:has(> div > a[data-anchor-page="ranking_genre"][href^="/watch/"] > div > p),
         }
         thumbInfo.request(pendingIds, prefer)
       }
+      request.dispose = function() { thumbInfo.dispose() }
+      return request
     }
     var getThumbInfoRequester = function(movies, movieViewModes) {
       return movies.config.useGetThumbInfo.value
@@ -7682,6 +7758,34 @@ div:has(> div > a[data-anchor-page="ranking_genre"][href^="/watch/"] > div > p),
     }
 
     var setupAutoFill = function(model, page, controller) {
+      // Resources belong to one result route. No timer/listener survives disposal.
+      var timers = new Set(), intervals = new Set(), frames = new Set(), handles = new Set()
+      var listeners = []
+      var setTimeout = function(fn, delay) {
+        var id = globalThis.setTimeout(function() { timers.delete(id); if (!page._disposed) fn() }, delay)
+        timers.add(id); return id
+      }
+      var setInterval = function(fn, delay) {
+        var id = globalThis.setInterval(function() { if (!page._disposed) fn() }, delay)
+        intervals.add(id); return id
+      }
+      var requestAnimationFrame = function(fn) {
+        var id = globalThis.requestAnimationFrame(function() { frames.delete(id); if (!page._disposed) fn() })
+        frames.add(id); return id
+      }
+      var listen = function(target, name, fn, capture) {
+        target.addEventListener(name, fn, capture)
+        listeners.push(function() { target.removeEventListener(name, fn, capture) })
+      }
+      page._disposeAutoFill = function() {
+        page._disposed = true
+        timers.forEach(globalThis.clearTimeout); intervals.forEach(globalThis.clearInterval)
+        frames.forEach(globalThis.cancelAnimationFrame)
+        for (var handle of handles) { try { handle.abort?.() } catch (e) {} }
+        handles.clear(); listeners.forEach(function(remove) { remove() })
+        delete model.config._nrnDiagnosticHook
+        if (typeof restorePagerUi === 'function') restorePagerUi()
+      }
       var LOG = '[NicoNicoRankingNG autoFill v14.1]'
 
       if (typeof page.fetchPageItems !== 'function') {
@@ -7691,17 +7795,25 @@ div:has(> div > a[data-anchor-page="ranking_genre"][href^="/watch/"] > div > p),
 
       // -------------------- utility --------------------
       var sourceHref = page._sourceUrl || location.href
+      var requestScope = setupAutoFill.sequence = (setupAutoFill.sequence || 0) + 1
       var gmRequest = function(options) {
         return new Promise(function(resolve, reject) {
           var request = typeof GM_xmlhttpRequest === 'undefined'
             ? GM.xmlHttpRequest : GM_xmlhttpRequest
+          if (page._disposed) { resolve(null); return }
+          var settled = false
+          var finish = function(fn) { return function(value) {
+            if (settled) return
+            settled = true; handles.delete(handle); fn(value)
+          } }
           var handle = request(Object.assign({}, options, {
-            onload: resolve,
-            onerror: reject,
-            onabort: function() { reject(new Error('request aborted')) },
-            ontimeout: function() { reject(new Error('timeout')) }
+            onload: finish(resolve),
+            onerror: finish(reject),
+            onabort: finish(function() { reject(new Error('request aborted')) }),
+            ontimeout: finish(function() { reject(new Error('timeout')) })
           }))
-          if (handle && typeof handle.catch === 'function') handle.catch(reject)
+          if (handle && !settled) handles.add(handle)
+          if (handle && typeof handle.catch === 'function') handle.catch(finish(reject))
         })
       }
 
@@ -7748,9 +7860,10 @@ div:has(> div > a[data-anchor-page="ranking_genre"][href^="/watch/"] > div > p),
       }
       var fetchSelfAdResult = function(movie) {
         if (!movie) return Promise.resolve(null)
-        return Network.ads('thanks:' + movie.id, function() { return fetchSelfAdResultUnshared(movie) })
+        return Network.ads(requestScope + ':thanks:' + movie.id, function() { return fetchSelfAdResultUnshared(movie) })
       }
       var fetchSelfAdResultUnshared = async function(movie) {
+        if (page._disposed) return
         if (!movie) return null
         if (movie.nicoadSelfAdChecked) return {
           checked:true,
@@ -7785,6 +7898,7 @@ div:has(> div > a[data-anchor-page="ranking_genre"][href^="/watch/"] > div > p),
             timeout:10000,
             headers:{'Accept':'application/json'}
           })
+          if (page._disposed) return
           if (Number(response.status) === 404) {
             result.checked = true
             selfAdCache.set(movie.id, result)
@@ -7816,6 +7930,7 @@ div:has(> div > a[data-anchor-page="ranking_genre"][href^="/watch/"] > div > p),
             }))
           result.checked = true
         } catch (e) {
+          if (page._disposed) return
           result.error = String(e && e.message ? e.message : e)
           result.failedAt = Date.now()
         }
@@ -7996,16 +8111,19 @@ div:has(> div > a[data-anchor-page="ranking_genre"][href^="/watch/"] > div > p),
       }
 
       var ensureSelfAdChecks = async function(ids, reason) {
+        if (page._disposed) return
         if (!selfAdCheckRequired()) return {checked:0, matches:0, errors:0}
         var unique = [...new Set(ids)]
         var cursor = 0, checked = 0, matches = 0, errors = 0
         var rows = []
         var worker = async function() {
+          if (page._disposed) return
           while (cursor < unique.length) {
             var id = unique[cursor++]
             var movie = model.movies.get(id)
             if (!movie || !movie.thumbInfoDone) continue
             var result = await fetchSelfAdResult(movie)
+            if (page._disposed) return
             if (!result) continue
             if (result.checked) {
               checked++
@@ -8027,6 +8145,7 @@ div:has(> div > a[data-anchor-page="ranking_genre"][href^="/watch/"] > div > p),
         }
         var started = performance.now()
         await Promise.all(Array.from({length:Math.min(6, Math.max(1, unique.length))}, worker))
+        if (page._disposed) return
         var matchedRows = rows.filter(function(r) { return r.idMatch || r.nameMatch })
         var errorRows = rows.filter(function(r) { return !r.checked || r.error })
         var summary = {
@@ -8071,6 +8190,7 @@ div:has(> div > a[data-anchor-page="ranking_genre"][href^="/watch/"] > div > p),
         try {
           return decodeURIComponent(location.pathname.replace(/^\/(tag|search)\//, ''))
         } catch (e) {
+          if (page._disposed) return
           return location.pathname
         }
       }
@@ -8526,6 +8646,7 @@ div:has(> div > a[data-anchor-page="ranking_genre"][href^="/watch/"] > div > p),
       }
 
       var updateStatus = function() {
+        if (page._disposed) return
         if (!badge) return
 
         var busyPhases = new Set([
@@ -8665,7 +8786,7 @@ div:has(> div > a[data-anchor-page="ranking_genre"][href^="/watch/"] > div > p),
         return data
       }
 
-      badge.addEventListener('dblclick', function() {
+      listen(badge, 'dblclick', function() {
         var s = logSnapshot('status badge dblclick', {
           domCards: page.doc.querySelectorAll('[data-decoration-video-id]').length,
           domInjected: page.doc.querySelectorAll('[data-nrn-autofill="true"]').length,
@@ -8878,6 +8999,7 @@ div:has(> div > a[data-anchor-page="ranking_genre"][href^="/watch/"] > div > p),
       }
 
       var snapshotFetchOffset = async function(offset) {
+        if (page._disposed) return
         var p = new URLSearchParams()
         p.set('q', snapshotDescriptor.q)
         p.set('targets', snapshotDescriptor.isTag ? 'tagsExact' : 'title,description,tags')
@@ -8904,6 +9026,7 @@ div:has(> div > a[data-anchor-page="ranking_genre"][href^="/watch/"] > div > p),
           url: SNAPSHOT_ENDPOINT + '?' + p.toString(),
           timeout: 10000
         })
+        if (page._disposed) return
         var networkDone = performance.now()
 
         if (res.status !== 200) throw new Error('Snapshot API HTTP ' + res.status)
@@ -9087,10 +9210,12 @@ div:has(> div > a[data-anchor-page="ranking_genre"][href^="/watch/"] > div > p),
       // 現在ページとAPI先頭を比較。
       // 投稿日時等で並びが一致しない場合に、間違った続きを足さないためfallbackする。
       var validateSnapshotAgainstCurrentDom = async function() {
+        if (page._disposed) return
         if (!useSnapshot || snapshotValidated) return
         setPhase('validating-api', '現在ページと検索APIの並び順を照合中')
 
         var result = await snapshotFetchOffset(snapshotValidationOffset)
+        if (page._disposed) return
         var domIds = []
         var seen = new Set()
         page.doc.querySelectorAll(
@@ -9244,6 +9369,7 @@ div:has(> div > a[data-anchor-page="ranking_genre"][href^="/watch/"] > div > p),
           var p = Number(u.searchParams.get('page') || 1)
           return Number.isFinite(p) && p >= 1 ? Math.trunc(p) : null
         } catch (e) {
+          if (page._disposed) return
           return null
         }
       }
@@ -9285,6 +9411,7 @@ div:has(> div > a[data-anchor-page="ranking_genre"][href^="/watch/"] > div > p),
         try {
           u = new URL(baseHref || sourceHref, sourceHref)
         } catch (e) {
+          if (page._disposed) return
           u = new URL(sourceHref)
         }
         // 検索条件とNicoNicoの rf/rp/ra 等を維持し、pageだけ変更する。
@@ -9458,6 +9585,7 @@ div:has(> div > a[data-anchor-page="ranking_genre"][href^="/watch/"] > div > p),
       }
 
       var updatePagerUi = function(reason) {
+        if (page._disposed || model.config.spaNavigationFix.value) return
         var mode = model.config.autoFillPagerMode.value
         if (mode === 'off') return
 
@@ -9598,6 +9726,7 @@ div:has(> div > a[data-anchor-page="ranking_genre"][href^="/watch/"] > div > p),
       }
 
       var correctNextControlHref = function(a, reason) {
+        if (page._disposed || model.config.spaNavigationFix.value) return null
         if (model.config.autoFillPagerMode.value !== 'compactSkip') return null
         if (!isLiveNextPagerControl(a)) return null
         var nextPage = firstUnfetchedPageAfterCurrent()
@@ -9632,32 +9761,11 @@ div:has(> div > a[data-anchor-page="ranking_genre"][href^="/watch/"] > div > p),
 
       // hover時に補正するので、ブラウザ左下のリンク表示も正しい値になる。
       ;['pointerover', 'focusin'].forEach(function(eventName) {
-        page.doc.addEventListener(eventName, function(e) {
+        listen(page.doc, eventName, function(e) {
           var a = e.target && e.target.closest ? e.target.closest('a[href]') : null
           if (a) correctNextControlHref(a, eventName)
         }, true)
       })
-
-      // click時はhrefを書き換えるだけでなく、NicoNico Reactが古いpage=2を使う前に
-      // 確定した未取得ページURLへ直接遷移させる。
-      page.doc.addEventListener('click', function(e) {
-        if (e.defaultPrevented || e.button !== 0) return
-        if (e.ctrlKey || e.metaKey || e.shiftKey || e.altKey) return
-        var a = e.target && e.target.closest ? e.target.closest('a[href]') : null
-        if (!a || !isLiveNextPagerControl(a)) return
-
-        var desired = correctNextControlHref(a, 'click')
-        if (!desired) return
-
-        e.preventDefault()
-        e.stopPropagation()
-        console.log(LOG, '次リンクを未取得ページへ確定遷移:', {
-          from: location.href,
-          to: desired,
-          fetchedPages: [...fetchedPageNumbers].sort(function(x,y){return x-y})
-        })
-        location.href = desired
-      }, true)
 
       var restorePagerUi = function() {
         page.doc.querySelectorAll('a[href], a[data-nrn-synthetic-next="true"]').forEach(function(a) {
@@ -9673,6 +9781,7 @@ div:has(> div > a[data-anchor-page="ranking_genre"][href^="/watch/"] > div > p),
 
       // -------------------- CandidateSource / pool --------------------
       var fetchMoreCandidates = async function(minNeeded) {
+        if (page._disposed) return
         var fetchStart = performance.now()
         var mayRequest = function() {
           var limit = Number(model.config.autoFillMaxExtraPages.value) || 0
@@ -9681,11 +9790,13 @@ div:has(> div > a[data-anchor-page="ranking_genre"][href^="/watch/"] > div > p),
 
         if (useSnapshot) {
           if (!snapshotValidated) await validateSnapshotAgainstCurrentDom()
+          if (page._disposed) return
           if (!useSnapshot) return fetchMoreCandidates(minNeeded)
 
           while (candidatePool.length < minNeeded && lastFetchedHadNext !== false) {
             if (!mayRequest()) break
             var result = await snapshotFetchOffset(snapshotOffset)
+            if (page._disposed) return
             snapshotOffset += 100
             fetchedExtraPages++
             totalFetchedItems += result.items.length
@@ -9759,7 +9870,9 @@ div:has(> div > a[data-anchor-page="ranking_genre"][href^="/watch/"] > div > p),
                 scope: 'RUN',
                 requestId: 'RUN-autofill-p' + pageNumber
               })
+              if (page._disposed) return
             } catch (e) {
+              if (page._disposed) return
               // 終端情報を読めなかった場合の安全弁。
               // 連番の次ページ取得で400/404なら検索終端として正常終了扱いにする。
               if (e && (e.status === 400 || e.status === 404)
@@ -9943,6 +10056,7 @@ div:has(> div > a[data-anchor-page="ranking_genre"][href^="/watch/"] > div > p),
               ageMinutes:Math.round((Date.now() - Number(cached.cachedAt || 0)) / 60000)
             })
           } catch (e) {
+            if (page._disposed) return
             cacheRestoreFailures++
             rows.push({id:id, cache:'HIT', restored:false, note:String(e)})
             console.warn(LOG, 'キャッシュ復元失敗:', {id:id, error:e})
@@ -10008,6 +10122,7 @@ div:has(> div > a[data-anchor-page="ranking_genre"][href^="/watch/"] > div > p),
       }
 
       var evaluateCandidateBatch = async function(items) {
+        if (page._disposed) return
         if (!items.length) {
           return {checked: 0, accepted: 0, ng: 0, rows: [], timings: {}}
         }
@@ -10054,6 +10169,7 @@ div:has(> div > a[data-anchor-page="ranking_genre"][href^="/watch/"] > div > p),
         var thumbStart = performance.now()
         model.requestThumbInfo(true)
         var completed = await waitForThumbInfo(addedIds, 30000)
+        if (page._disposed) return
         var thumbEnd = performance.now()
 
         if (!completed) {
@@ -10063,6 +10179,7 @@ div:has(> div > a[data-anchor-page="ranking_genre"][href^="/watch/"] > div > p),
         var candidateSelfAdStarted = performance.now()
         if (selfAdRuleRequired()) {
           await ensureSelfAdChecks(addedIds, '自動追加候補 / NG条件必須')
+          if (page._disposed) return
         } else if (model.config.selfAdWarningEnabled.value) {
           var warningOnlyIds = visibleNonNgIds(addedIds)
           console.log(LOG, '自演広告監査を表示動画だけに限定:', {
@@ -10072,6 +10189,7 @@ div:has(> div > a[data-anchor-page="ranking_genre"][href^="/watch/"] > div > p),
             skippedNg:addedIds.length - warningOnlyIds.length
           })
           await ensureSelfAdChecks(warningOnlyIds, '自動追加候補 / 表示動画のみ')
+          if (page._disposed) return
         }
         var candidateSelfAdMs = Math.round(performance.now() - candidateSelfAdStarted)
 
@@ -10084,6 +10202,7 @@ div:has(> div > a[data-anchor-page="ranking_genre"][href^="/watch/"] > div > p),
             requestAnimationFrame(resolve)
           })
         })
+        if (page._disposed) return
 
         renderStoredSelfAdWarnings(addedIds, '自動追加カード表示後')
 
@@ -10219,6 +10338,7 @@ div:has(> div > a[data-anchor-page="ranking_genre"][href^="/watch/"] > div > p),
 
       // -------------------- main controller --------------------
       var maybeFetchMore = async function() {
+        if (page._disposed) return
         if (!initialized || fetching || gaveUp) {
           updateStatus()
           return
@@ -10294,6 +10414,7 @@ div:has(> div > a[data-anchor-page="ranking_genre"][href^="/watch/"] > div > p),
             setPhase('fetching',
               '候補を補充中（必要 ' + detailBatchSize + '件 / プール ' + candidatePool.length + '件）')
             fetchMs = await fetchMoreCandidates(desiredPool)
+            if (page._disposed) return
           }
 
           if (!candidatePool.length) {
@@ -10328,6 +10449,7 @@ div:has(> div > a[data-anchor-page="ranking_genre"][href^="/watch/"] > div > p),
           })
 
           var result = await evaluateCandidateBatch(batch)
+          if (page._disposed) return
           lastTiming = {
             fetchMs: fetchMs,
             domAddMs:result.timings.domAddMs || 0,
@@ -10400,6 +10522,7 @@ div:has(> div > a[data-anchor-page="ranking_genre"][href^="/watch/"] > div > p),
             setPhase('stopped', stopReason)
           }
         } catch (e) {
+          if (page._disposed) return
           console.error(LOG, '自動継ぎ足しでエラー:', e)
 
           if (useSnapshot) {
@@ -10418,6 +10541,7 @@ div:has(> div > a[data-anchor-page="ranking_genre"][href^="/watch/"] > div > p),
           }
         } finally {
           fetching = false
+          if (page._disposed) return
           updateStatus()
 
           if (!gaveUp && model.config.autoFillEnabled.value) {
@@ -10450,6 +10574,7 @@ div:has(> div > a[data-anchor-page="ranking_genre"][href^="/watch/"] > div > p),
       }
 
       var auditUserIdNg = async function(reason) {
+        if (page._disposed) return
         var store = model.config.ngUserIds
         var configured = store.set
         var diagnosticValue = function(entry) {
@@ -10737,6 +10862,7 @@ div:has(> div > a[data-anchor-page="ranking_genre"][href^="/watch/"] > div > p),
       }
 
       var developerDryRunSources = async function() {
+        if (page._disposed) return
         var summary = {
           legacy: {supported: true, ok: false},
           hybrid: {supported: Boolean(snapshotDescriptor.supported), ok: false},
@@ -10751,6 +10877,7 @@ div:has(> div > a[data-anchor-page="ranking_genre"][href^="/watch/"] > div > p),
             scope: 'DEV',
             requestId: 'DEV-legacy-p' + legacyPage
           })
+          if (page._disposed) return
           var legacyItems = Array.isArray(legacy.items) ? legacy.items : []
           summary.legacy = {
             supported: true,
@@ -10767,6 +10894,7 @@ div:has(> div > a[data-anchor-page="ranking_genre"][href^="/watch/"] > div > p),
           }))
           console.groupEnd()
         } catch (e) {
+          if (page._disposed) return
           summary.legacy.error = String(e && e.message || e)
         }
 
@@ -10774,6 +10902,7 @@ div:has(> div > a[data-anchor-page="ranking_genre"][href^="/watch/"] > div > p),
           try {
             var s0 = performance.now()
             var snapshot = await snapshotFetchOffset(0)
+            if (page._disposed) return
             var apiItems = snapshot.items || []
             var sourceMs = Math.round(performance.now() - s0)
 
@@ -10849,6 +10978,7 @@ div:has(> div > a[data-anchor-page="ranking_genre"][href^="/watch/"] > div > p),
             console.log('API事前判定効果:', {input:apiItems.length,rejected:quickRejected,detailChecksNeeded:quickPassed,reductionPercent:summary.snapshot.prefilterReductionPercent})
             console.groupEnd()
           } catch (e) {
+            if (page._disposed) return
             summary.hybrid.error = String(e && e.message || e)
             summary.snapshot.error = String(e && e.message || e)
           }
@@ -10886,6 +11016,7 @@ div:has(> div > a[data-anchor-page="ranking_genre"][href^="/watch/"] > div > p),
       }
 
       var runDeveloperSuite = async function(reason, forcedFull) {
+        if (page._disposed) return
         if (!model.config.developerMode.value || developerSuiteRunning) return
         var diagnosticMode = forcedFull ? 'full' : model.config.developerDiagnosticMode.value
         if (diagnosticMode === 'manual' && !forcedFull) {
@@ -10935,11 +11066,13 @@ div:has(> div > a[data-anchor-page="ranking_genre"][href^="/watch/"] > div > p),
 
           setDeveloperProgress(3, 'NGユーザーID監査')
           var userAudit = await auditUserIdNg(reason)
+          if (page._disposed) return
 
           var sourceAudit = null
           if (diagnosticMode === 'full') {
             setDeveloperProgress(4, '3方式取得テスト')
             sourceAudit = await developerDryRunSources()
+            if (page._disposed) return
             setDeveloperProgress(5, '総合判定')
           } else {
             setDeveloperProgress(4, '総合判定（軽量）')
@@ -10968,6 +11101,7 @@ div:has(> div > a[data-anchor-page="ranking_genre"][href^="/watch/"] > div > p),
           console.log(LOG, '診断所要時間:', Math.round(performance.now() - developerSuiteLastRunAt) + 'ms')
           console.log(LOG, '===== 開発者モード一括診断 END =====')
         } catch (e) {
+          if (page._disposed) return
           developerSuiteStatus = '診断エラー'
           console.error(LOG, '開発者診断中にエラー:', e)
         } finally {
@@ -11005,6 +11139,7 @@ div:has(> div > a[data-anchor-page="ranking_genre"][href^="/watch/"] > div > p),
 
       // -------------------- initialize --------------------
       var initialize = async function() {
+        if (page._disposed) return
         console.log(LOG, '詳細情報UI:', {
           behavior:'クリックで開閉。詳細は動画カード内部の通常レイアウトへ挿入し、マウスアウトでは閉じません。',
           layout:'reserved-space-below-card + pinned-toggle-v2（追加カードは表示後に▲▼を再測定。NG/予備カードは位置監査対象外）',
@@ -11048,6 +11183,7 @@ div:has(> div > a[data-anchor-page="ranking_genre"][href^="/watch/"] > div > p),
         var initStart = performance.now()
         var initialDomWaitStarted = performance.now()
         originalRoots = await waitForInitialRoots(15000)
+        if (page._disposed) return
         var initialDomWaitMs = Math.round(performance.now() - initialDomWaitStarted)
 
         // connected + ID重複除去で正規化。
@@ -11109,6 +11245,7 @@ div:has(> div > a[data-anchor-page="ranking_genre"][href^="/watch/"] > div > p),
         var thumbStart = performance.now()
         model.requestThumbInfo(true)
         var completed = await waitForThumbInfo([...originalMovieIds], 30000)
+        if (page._disposed) return
         var thumbEnd = performance.now()
 
         if (!completed) {
@@ -11122,6 +11259,7 @@ div:has(> div > a[data-anchor-page="ranking_genre"][href^="/watch/"] > div > p),
         var initialSelfAdStarted = performance.now()
         if (selfAdRuleRequired()) {
           await ensureSelfAdChecks([...originalMovieIds], '初期ページ / NG条件必須')
+          if (page._disposed) return
         } else if (model.config.selfAdWarningEnabled.value) {
           var initialWarningIds = visibleNonNgIds([...originalMovieIds])
           console.log(LOG, '自演広告監査を表示動画だけに限定:', {
@@ -11131,6 +11269,7 @@ div:has(> div > a[data-anchor-page="ranking_genre"][href^="/watch/"] > div > p),
             skippedNg:originalMovieIds.size - initialWarningIds.length
           })
           await ensureSelfAdChecks(initialWarningIds, '初期ページ / 表示動画のみ')
+          if (page._disposed) return
         }
         var initialSelfAdMs = Math.round(performance.now() - initialSelfAdStarted)
         renderStoredSelfAdWarnings([...originalMovieIds], '初期ページ')
@@ -11301,6 +11440,10 @@ div:has(> div > a[data-anchor-page="ranking_genre"][href^="/watch/"] > div > p),
         updatePagerUi('setting changed')
         updateStatus()
       })
+      model.config.spaNavigationFix.on('changed', function() {
+        restorePagerUi()
+        updatePagerUi('SPA setting changed')
+      })
 
       model.config.pagerPreviewCount.on('changed', function(v) {
         console.log(LOG, 'ページャー未取得プレビュー件数変更:', v)
@@ -11353,260 +11496,192 @@ div:has(> div > a[data-anchor-page="ranking_genre"][href^="/watch/"] > div > p),
 
       setTimeout(initialize, 0)
     }
-    // ------------------------------------------------------------------
-    // v13.4 NicoNico SPA navigation guard
-    //
-    // 現行 /tag/ /search/ は pushState/replaceState を使ってURLだけ切り替え、
-    // userscript自体は再実行されないことがある。
-    // このスクリプトは旧設計由来の解除不能Listener/Observerが多いため、
-    // 同一document上で再setupするより、新URLで1回だけreloadする方が安全。
-    // ------------------------------------------------------------------
+    // Observe native routing without intercepting clicks or replacing the document.
     var setupSpaNavigationGuard = function() {
       if (window.__nrnSpaNavigationGuardInstalled) return
       window.__nrnSpaNavigationGuardInstalled = true
-
-      var LOG = '[NicoNicoRankingNG route v14.1]'
-      var enabled = true
-      var developer = false
-      var armed = false
-      var lastHref = location.href
-      var reloadScheduled = false
-      var routeSequence = 0
-      var pollTimer = null
-      var resultRouteKey = ''
-      var resultElement = null
-
-      var toUrl = function(value) {
-        try { return new URL(value, location.href) }
-        catch (e) { return null }
-      }
-
-      var routeKey = function(value) {
-        var u = toUrl(value)
-        if (!u) return ''
-        // hashだけの変更は検索条件変更ではない。
+      var enabled = true, armed = false, lastHref = location.href
+      var activeKey = '', displayedKey = '', suspended = false, timer = null, generation = 0
+      var previous = [], start = function() {}, stop = function() {}
+      var selector = '[data-decoration-video-id][data-anchor-area="main"]:not([data-nrn-autofill="true"]), .itemTitle'
+      var key = function(href) {
+        var u = new URL(href, location.href)
         return u.origin + u.pathname + u.search
       }
-
-      var isSearchRoute = function(value) {
-        var u = toUrl(value)
-        return Boolean(u
-          && u.origin === location.origin
-          && /^\/(?:tag|search)\//.test(u.pathname))
+      var supported = function() {
+        return ListPage.is(location) || SearchPage.is(location)
       }
-
-      var findResultElement = function() {
-        return document.querySelector(
-          '[data-decoration-video-id][data-anchor-area="main"], .itemTitle'
-        )
-      }
-      var retainsOriginalResults = function(value) {
-        return routeKey(value) === resultRouteKey
-          && Boolean(resultElement && resultElement.isConnected)
-      }
-
-      var scheduleReload = function(source, fromHref, toHref) {
-        var fromKey = routeKey(fromHref)
-        var toKey = routeKey(toHref)
-
-        // Overlay players replace the URL while retaining the search document.
-        // Capture the current card after any list/tile replacement, before playback.
-        var to = toUrl(toHref)
-        if (fromKey === resultRouteKey && to && to.origin === location.origin
-            && /^\/watch\//.test(to.pathname)) {
-          resultElement = findResultElement()
-        }
-
-        lastHref = toHref
-        if (!armed || !enabled) {
-          if (developer && fromKey !== toKey) {
-            console.log(LOG, 'URL変更を検出（修正OFF/未準備）:', {
-              source: source, from: fromHref, to: toHref
-            })
-          }
-          return
-        }
-        if (!toKey || fromKey === toKey) return
-        if (!isSearchRoute(toHref)) return
-        if (retainsOriginalResults(toHref)) {
-          if (developer) console.log(LOG, '元の検索結果へ復帰。再読み込みを省略:', {source:source, to:toHref})
-          return
-        }
-        if (reloadScheduled) return
-
-        reloadScheduled = true
-        routeSequence++
-
-        console.warn(LOG, 'SPA検索遷移を検出。新しい検索結果で再初期化します:', {
-          sequence: routeSequence,
-          source: source,
-          from: fromHref,
-          to: toHref,
-          action: 'location.reload()'
+      var cards = function() {
+        return Array.from(document.querySelectorAll(selector)).map(function(node) {
+          return {node:node, id:node.getAttribute('data-decoration-video-id'),
+            text:node.querySelector('a[href*="/watch/"]')?.getAttribute('href') || node.textContent}
         })
-
-        // Reactがhistory更新を終えた後、現在の新URLを保持してreload。
-        setTimeout(function() {
-          // A player may open/close during the delay. Never reload its watch URL
-          // or the original, still-mounted results because of a stale search event.
-          if (!armed || !enabled || !isSearchRoute(location.href)
-              || retainsOriginalResults(location.href)) {
-            reloadScheduled = false
-            lastHref = location.href
-            return
-          }
-          var currentKey = routeKey(location.href)
-          if (currentKey !== toKey) {
-            // 短時間にさらに別URLへ移動した場合は最終URLを優先。
-            console.log(LOG, 'reload直前にURLがさらに変化:', {
-              expected: toHref,
-              current: location.href
-            })
-          }
-          location.reload()
-        }, 120)
       }
-
-      var observeAfterHistory = function(source, beforeHref) {
-        var afterHref = location.href
-        if (routeKey(beforeHref) !== routeKey(afterHref)) {
-          scheduleReload(source, beforeHref, afterHref)
-        } else {
-          lastHref = afterHref
+      var sameCards = function(a, b) {
+        return a.length === b.length && a.every(function(row, i) {
+          return row.node === b[i].node && row.id === b[i].id && row.text === b[i].text
+        })
+      }
+      var clear = function() { clearTimeout(timer); timer = null }
+      var begin = function() {
+        clear()
+        if (!armed || !enabled || !supported()) return
+        var token = generation
+        // React may commit after its history update. Wait for changed results, then
+        // coalesce that commit. Zero results is also a valid mounted route.
+        timer = setTimeout(function() {
+          timer = null
+          if (token !== generation || !supported() || !enabled) return
+          activeKey = key(location.href)
+          displayedKey = activeKey
+          suspended = false
+          start()
+          previous = cards()
+        }, 100)
+      }
+      var changed = function() {
+        var href = location.href, nextKey = key(href)
+        if (key(lastHref) === nextKey) { lastHref = href; return }
+        lastHref = href
+        if (!armed) return
+        if (!enabled) { generation++; clear(); stop(); previous = []; activeKey = ''; return }
+        generation++
+        clear()
+        // ZenzaWatch replaces history while leaving the search DOM mounted.
+        if (/^\/watch\//.test(location.pathname) && previous.length
+            && previous.every(function(row) { return row.node.isConnected })) {
+          suspended = true
+          return
         }
+        if (suspended && nextKey === activeKey && previous.length
+            && sameCards(previous, cards())) {
+          suspended = false
+          return
+        }
+        stop()
+        activeKey = ''
+        suspended = false
+        if (!supported()) { previous = []; activeKey = ''; return }
+        if (nextKey === displayedKey || !sameCards(previous, cards())) begin()
+        // Identical/reused results are recognized by a native DOM commit below.
       }
-
-      ;['pushState', 'replaceState'].forEach(function(methodName) {
-        var original = history[methodName]
-        if (typeof original !== 'function') return
-
-        history[methodName] = function() {
-          var beforeHref = location.href
+      ;['pushState', 'replaceState'].forEach(function(name) {
+        var original = history[name]
+        history[name] = function() {
           var result = original.apply(this, arguments)
-          observeAfterHistory('history.' + methodName, beforeHref)
+          changed()
           return result
         }
       })
-
-      window.addEventListener('popstate', function() {
-        var beforeHref = lastHref
-        setTimeout(function() {
-          observeAfterHistory('popstate', beforeHref)
-        }, 0)
-      })
-
-      // 開発者モードでは、押した検索系リンクそのものも記録する。
-      document.addEventListener('click', function(e) {
-        if (!developer) return
-        var a = e.target && e.target.closest ? e.target.closest('a[href]') : null
-        if (!a) return
-        var u = toUrl(a.href)
-        if (!u || !isSearchRoute(u.href)) return
-        console.log(LOG, '検索系リンククリック:', {
-          text: String(a.textContent || '').trim().slice(0, 100),
-          href: u.href,
-          current: location.href,
-          modifiedClick: Boolean(e.ctrlKey || e.metaKey || e.shiftKey || e.altKey),
-          target: a.target || ''
-        })
-      }, true)
-
-      // History APIを経由しない将来の実装変更にも備える保険。
-      pollTimer = setInterval(function() {
-        if (reloadScheduled) return
-        if (routeKey(lastHref) !== routeKey(location.href)) {
-          scheduleReload('url-poll', lastHref, location.href)
+      window.addEventListener('popstate', changed)
+      setInterval(changed, 250)
+      var observer = new MutationObserver(function(records) {
+        if (!armed || !enabled) return
+        changed()
+        if (!supported()) {
+          if (suspended && previous.some(function(row) { return !row.node.isConnected })) {
+            stop(); suspended = false; previous = []; activeKey = ''
+          }
+          return
         }
-      }, 250)
-
+        if (key(location.href) === activeKey) { previous = cards(); return }
+        // Ignore the userscript's own teardown/status/detail mutations. Native
+        // result replacement or text updates, including empty results, commit a route.
+        var owned = '[id^="nrn-"], .nrn-movie-info-container, .nrn-movie-info-toggle, .nrn-action-pane, .nrn-description, .nrn-movie-title, [data-nrn-autofill="true"]'
+        var nativeCommit = records.some(function(record) {
+          var target = record.target.nodeType === 1 ? record.target : record.target.parentElement
+          if (!target || target.closest(owned)) return false
+          if (previous.length && !previous.some(function(row) {
+            return row.node.contains(target) || target.contains(row.node)
+          })) return false
+          if (record.type === 'characterData' || record.type === 'attributes') return true
+          return Array.from(record.addedNodes).concat(Array.from(record.removedNodes)).some(function(node) {
+            return node.nodeType === 1 && !node.matches(owned)
+          })
+        })
+        if (!sameCards(previous, cards()) || nativeCommit) begin()
+      })
+      observer.observe(document, {childList:true, subtree:true, characterData:true,
+        attributes:true, attributeFilter:['data-decoration-video-id', 'href']})
       window.__nrnConfigureSpaNavigationGuard = function(opts) {
         opts = opts || {}
+        var wasEnabled = enabled
         enabled = opts.enabled !== false
-        developer = Boolean(opts.developer)
-        if (!armed && isSearchRoute(location.href)) {
-          resultRouteKey = routeKey(location.href)
-          resultElement = findResultElement()
-        }
+        if (opts.start) start = opts.start
+        if (opts.stop) stop = opts.stop
+        if (!armed) { activeKey = key(location.href); displayedKey = activeKey; previous = cards(); armed = true }
         lastHref = location.href
-        armed = true
-
-        console.log(LOG, 'SPA遷移監視を開始:', {
-          enabled: enabled,
-          developer: developer,
-          current: lastHref
-        })
+        if (!enabled) clear()
+        if (!wasEnabled && enabled && key(location.href) !== activeKey) {
+          generation++; stop(); begin()
+        }
       }
-
-      console.log(LOG, 'SPA遷移監視フックを設置しました')
     }
     var domContentLoaded = async function() {
       try {
-        const page = getPage();
-        addStyle(page.css)
-        addStyle(DetailUiTheme.CSS)
         const config = new Config(gmGetValue(), gmSetValue())
         await config.sync()
         if (typeof nrnSetConsoleConfig === 'function') nrnSetConsoleConfig(config)
-        DetailUiTheme.apply(config, page.doc, 'initial')
-        DetailUiTheme.watch(config, page.doc)
+        DetailUiTheme.apply(config, document, 'initial')
+        DetailUiTheme.watch(config, document)
+        addStyle(DetailUiTheme.CSS)
         config.detailUiTheme.on('changed', function(v) {
-          DetailUiTheme.apply(config, page.doc, 'setting-changed:' + v)
+          DetailUiTheme.apply(config, document, 'setting-changed:' + v)
         })
-        var model = createModel(config)
-        const ctrl = new Controller(model.config, page)
-        ctrl.addListenersTo(page.doc.body)
-
-        // Cross-cutting runtime policies are installed once here.
-        // Individual card classes only expose data/UI; services own global behavior.
-        NewTabService.install(model.config, page.doc)
-        Diagnostics.log('startup', '主要ランタイムサービスを初期化', {
-          version:'14.0',
-          architecture:'runtime-services-v1 (Diagnostics / NewTabService / existing domain modules)',
-          newTab:model.config.openNewWindow.value,
-          developer:model.config.developerMode.value,
-          autoFill:model.config.autoFillEnabled.value
-        })
-
-        var view = createView(page, ctrl)
-        view.addConfigBar()
-        view.bindToModel(model)
-        view.bindToWindow()
-        view.setupAndRequestThumbInfo(model)
-        view.observeMutation(model)
-        setupAutoFill(model, page, ctrl)
-
-        if (typeof window.__nrnConfigureSpaNavigationGuard === 'function') {
-          window.__nrnConfigureSpaNavigationGuard({
-            enabled: model.config.spaNavigationFix.value,
-            developer: model.config.developerMode.value
-          })
-        }
-
-        model.config.spaNavigationFix.on('changed', function(v) {
-          console.log('[NicoNicoRankingNG route v14.1] SPA再検索設定変更:', v)
-          if (typeof window.__nrnConfigureSpaNavigationGuard === 'function') {
-            window.__nrnConfigureSpaNavigationGuard({
-              enabled: v,
-              developer: model.config.developerMode.value
-            })
+        NewTabService.install(config, document)
+        var dispose = function() {}
+        var pageStyle = null
+        var stop = function() { dispose(); dispose = function() {}; removePendingMovieInvisibleStyle() }
+        var start = function() {
+          stop()
+          if (!(ListPage.is(location) || SearchPage.is(location))) return
+          const page = getPage()
+          page._sourceUrl = location.href
+          pageStyle?.remove()
+          pageStyle = document.createElement('style')
+          pageStyle.textContent = page.css
+          document.head.appendChild(pageStyle)
+          // Capture the persistent listeners before binding this route's models.
+          const subscriptions = Object.values(config).filter(store => store?._eventNameToListeners)
+            .map(store => [store, new Map(Array.from(store._eventNameToListeners,
+              ([name, listeners]) => [name, new Set(listeners)]))])
+          var model, ctrl
+          dispose = function() {
+            page._disposed = true
+            page._disposeAutoFill?.()
+            model?.requestThumbInfo.dispose?.()
+            ctrl?.dispose()
+            page.dispose()
+            for (const [store, before] of subscriptions) {
+              for (const [name, listeners] of store._eventNameToListeners) {
+                for (const listener of listeners) if (!before.get(name)?.has(listener)) store.off(name, listener)
+              }
+            }
           }
-        })
-
-        model.config.developerMode.on('changed', function(v) {
-          if (typeof window.__nrnConfigureSpaNavigationGuard === 'function') {
-            window.__nrnConfigureSpaNavigationGuard({
-              enabled: model.config.spaNavigationFix.value,
-              developer: v
-            })
-          }
-        })
-
-        if (!model.config.useGetThumbInfo.value) {
-          removePendingMovieInvisibleStyle();
+          try {
+            if (config.useGetThumbInfo.value) setPendingMoviesInvisible()
+            model = createModel(config)
+            ctrl = new Controller(config, page)
+            ctrl.addListenersTo(page.doc.body)
+            const view = createView(page, ctrl)
+            view.addConfigBar()
+            view.bindToModel(model)
+            view.bindToWindow()
+            view.setupAndRequestThumbInfo(model)
+            view.observeMutation(model)
+            setupAutoFill(model, page, ctrl)
+            console.log('[NicoNicoRankingNG SPA]', 'Start NG checks', page._sourceUrl)
+          } catch (e) { stop(); console.error(e) }
         }
+        const configure = function() {
+          window.__nrnConfigureSpaNavigationGuard?.({enabled:config.spaNavigationFix.value, start, stop})
+        }
+        config.spaNavigationFix.on('changed', configure)
+        start()
+        configure()
       } catch (e) {
         console.error(e)
-        removePendingMovieInvisibleStyle();
+        removePendingMovieInvisibleStyle()
       }
     }
     var getPage = function() {

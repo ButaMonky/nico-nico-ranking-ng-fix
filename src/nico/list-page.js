@@ -125,6 +125,7 @@
       _super.call(this, doc)
       this.movieRoots = [];
       this._sourceUrl = location.href;
+      this._abortController = new AbortController();
       this.resultLayout = ResultLayout.create(this);
     }
     ListPage.prototype = createObject(_super.prototype, {
@@ -255,7 +256,8 @@
         var networkStart = performance.now()
         var res = await Network.fetchResponse(url.toString(), {
           credentials: 'same-origin',
-          cache: 'no-store'
+          cache: 'no-store',
+          signal: this._abortController?.signal
         })
         if (!res.ok) {
           var httpError = new Error('HTTP ' + res.status)
@@ -642,13 +644,13 @@
       },
       async _applyAdDecoration(root, videoId) {
         try {
-          if (root.dataset.nrnAdDecorated === 'true') return
+          if (this._disposed || root.dataset.nrnAdDecorated === 'true') return
           var json = await Network.ads('decoration:' + videoId, async function() {
             var res = await Network.fetchResponse('https://api.nicoad.nicovideo.jp/v1/contents/video/' + videoId, {credentials: 'omit'}, 10000)
             if (!res.ok) throw new Error('広告 HTTP ' + res.status)
             return res.json()
           })
-          if (root.dataset.nrnAdDecorated === 'true') return
+          if (this._disposed || root.dataset.nrnAdDecorated === 'true') return
           root.dataset.nrnAdDecorated = 'true'
           var data = json && json.data
           var decoration = data && data.decoration
@@ -752,15 +754,17 @@
         if (togglable) togglable.hidden = true
       },
       observeMutation(callback) {
-        new MutationObserver((records, observer) => {
-          if (!isTargetPage()) return;
+        this._observer = new MutationObserver((records, observer) => {
+          if (this._disposed || !isTargetPage()
+              || new URL(this._sourceUrl).pathname + new URL(this._sourceUrl).search !== location.pathname + location.search) return;
           const parsed = this.parse();
           if (parsed.length > 0) {
             callback(parsed, true);
             this.unbindUnconnectedMovieRoots();
           }
           this.addConfigBar();
-        }).observe(this.doc.body, {childList: true, subtree: true, attributes: true, attributeFilter: ["class"]});
+        });
+        this._observer.observe(this.doc.body, {childList: true, subtree: true, attributes: true, attributeFilter: ["class"]});
       },
       get css() {
         return ResultLayout.css + `#nrn-config-button,

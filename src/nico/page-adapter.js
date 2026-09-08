@@ -748,6 +748,7 @@
           return true
         },
         _pinMovieInfoTogglePosition(force) {
+          if (this._disposed) return
           if (!this.elem || !this.elem.isConnected) return false
           var toggle = this.movieInfo && this.movieInfo.toggle
           if (!toggle || !toggle.isConnected) return false
@@ -798,6 +799,7 @@
           return false
         },
         _scheduleMovieInfoTogglePin() {
+          if (this._disposed) return
           if (this._nrnTogglePinScheduled) return
           this._nrnTogglePinScheduled = true
           requestAnimationFrame(function() {
@@ -887,6 +889,7 @@
           return result
         },
         _syncMovieInfoReserve() {
+          if (this._disposed) return
           if (!this.elem || !this.elem.isConnected || !this._movieInfoVisible) return
           var info = this.movieInfo && this.movieInfo.elem
           if (!info || !info.isConnected) return
@@ -1039,7 +1042,9 @@
           this._configOpenNewWindowListeners.bind(config.openNewWindow)
         },
         unbind() {
+          this._disposed = true
           this.movieInfo.unbind()
+          this._stopMovieInfoReserve()
           this.description.unbind()
           this._movieListeners.unbind()
           this._movieViewModeListeners.unbind()
@@ -1135,6 +1140,36 @@
       this._toggleToMovieRoot = new Map()
     }
     NicoPage.prototype = {
+      dispose() {
+        this._disposed = true
+        this._abortController?.abort()
+        this._observer?.disconnect()
+        for (const observer of this._observers || []) observer.disconnect()
+        for (const root of new Set(this._toggleToMovieRoot.values())) {
+          root.unbind()
+          if (root.elem.dataset.nrnAutofill === 'true') { root.elem.remove(); continue }
+          for (const node of [root.movieInfo.elem, root.movieInfo.toggle, root.description.elem,
+              root.description.openButton, root.description.closeButton]) node?.remove()
+          root.elem.querySelectorAll('.nrn-action-pane, .nrn-self-ad-warning, .nrn-self-ad-inline-badge, .nrn-self-ad-card-badge').forEach(node => node.remove())
+          const title = root.movieTitle?.elem
+          if (title?.classList.contains('nrn-movie-title')) title.replaceWith(this.doc.createTextNode(title.textContent))
+          for (const saved of root._nrnOriginalAnchors || []) {
+            for (const name of ['target', 'rel']) {
+              if (saved[name] == null) saved.node.removeAttribute(name)
+              else saved.node.setAttribute(name, saved[name])
+            }
+          }
+          for (const node of [root.elem, ...root.elem.querySelectorAll('*')]) {
+            for (const name of Array.from(node.classList)) if (name.startsWith('nrn-')) node.classList.remove(name)
+            for (const attr of Array.from(node.attributes)) if (attr.name.startsWith('data-nrn-')) node.removeAttribute(attr.name)
+          }
+        }
+        this._toggleToMovieRoot.clear()
+        this.movieRoots = []
+        for (const node of this._dialogNodes || []) node.remove()
+        this.doc.getElementById('nrn-config-bar')?.remove()
+        this.doc.getElementById('nrn-status-badge')?.remove()
+      },
       createConfigBar() {
         return new ConfigBar(this.doc)
       },
@@ -1192,6 +1227,7 @@
         f.style.zIndex = '10001'
         f.srcdoc = ConfigDialog.SRCDOC
         f.addEventListener('load', function loaded() {
+          if (this._disposed) return
           this._configDialogLoaded(f.contentDocument)
           var themeResult = DetailUiTheme.resolve(config, this.doc)
           f.contentDocument.documentElement.dataset.nrnTheme = themeResult.resolved
@@ -1204,6 +1240,7 @@
             })
         }.bind(this))
         this.doc.body.appendChild(f)
+        this._dialogNodes = [back, f]
       },
       bindToConfig() {},
       get css() {
@@ -1223,4 +1260,3 @@
     })
     return NicoPage
   })()
-

@@ -21,8 +21,17 @@
     }
     Controller.prototype = {
       addListenersTo(eventTarget) {
-        eventTarget.addEventListener('change', this._changed.bind(this))
-        eventTarget.addEventListener('click', this._clicked.bind(this))
+        this.dispose()
+        this._eventTarget = eventTarget
+        this._changeListener = this._changed.bind(this)
+        this._clickListener = this._clicked.bind(this)
+        eventTarget.addEventListener('change', this._changeListener)
+        eventTarget.addEventListener('click', this._clickListener)
+      },
+      dispose() {
+        this._eventTarget?.removeEventListener('change', this._changeListener)
+        this._eventTarget?.removeEventListener('click', this._clickListener)
+        this._eventTarget = null
       },
       _changed(event) {
         switch (event.target.id) {

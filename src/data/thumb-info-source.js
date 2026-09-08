@@ -81,6 +81,8 @@
       this._requestCount = 0
       this._pendingIds = []
       this._requestedIds = new Set()
+      this._handles = new Set()
+      this._disposed = false
     }
     ThumbInfo.prototype = createObject(_super.prototype, {
       _onerror(id) {
@@ -114,10 +116,12 @@
         }
       },
       _requestMovie(id, retry) {
+        if (this._disposed) return
         var settled = false
         var once = callback => value => {
-          if (settled) return
+          if (settled || this._disposed) return
           settled = true
+          this._handles.delete(request)
           callback(value)
         }
         var fail = once(this._onerror.bind(this, id))
@@ -131,6 +135,7 @@
           onabort: fail,
           ontimeout: once(this._ontimeout.bind(this, id, retry)),
         })
+        if (!settled && request) this._handles.add(request)
         if (request && typeof request.catch === 'function') request.catch(fail)
         } catch (e) { fail(e) }
       },
@@ -147,7 +152,7 @@
         return [...new Set(ids)].filter(function(id) { return !m.has(id) })
       },
       _requestAsPossible() {
-        if (this._draining) return
+        if (this._draining || this._disposed) return
         this._draining = true
         try {
           while (this._pendingIds.length && this._requestCount < this.concurrent) this._requestNextMovie()
@@ -158,7 +163,17 @@
         this._requestAsPossible()
         return this
       },
+      dispose() {
+        this._disposed = true
+        this._pendingIds.length = 0
+        for (const handle of this._handles) {
+          try { handle.abort?.() } catch (e) {}
+        }
+        this._handles.clear()
+        this._eventNameToListeners.clear()
+      },
       request(ids, prefer) {
+        if (this._disposed) return this
         const newIds = this._getNewIds(ids)
         for (const id of newIds) this._requestedIds.add(id)
         if (prefer) {

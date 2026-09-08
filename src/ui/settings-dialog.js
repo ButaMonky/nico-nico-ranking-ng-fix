@@ -1251,8 +1251,8 @@
           </label></div>
           <div class=hint>「自動」はニコニコ画面の実際の背景色を見てライト/ダークを判定します。ダーク配色は真っ黒・真っ白を避け、暗い青灰色の背景と少し抑えた文字色にして長時間見ても眩しすぎない配色にしています。</div>
           <div class=row><label><input type=checkbox id=openNewWindow>動画を新しいタブで開く</label></div>
-          <div class=row><label><input type=checkbox id=spaNavigationFix>検索・タグ・ページ番号の移動時に確実に再検索する（推奨）</label></div>
-          <div class=hint>現行ニコニコは検索画面内でURLだけを切り替えるSPA遷移を行います。ONではタグ・検索語・ページ番号・並び順などが変わったとき、新しいURLを保ったまま1回だけ再読み込みし、NG判定と自動継ぎ足しを新しい検索結果で最初から実行します。</div>
+          <div class=row><label><input type=checkbox id=spaNavigationFix>SPA移動に合わせてNG判定を更新する（推奨）</label></div>
+          <div class=hint>タグ・検索語・ページ番号・並び順・絞り込みを変えたとき、画面を再読み込みせず新しい検索結果のNG判定を開始します。「戻る・進む」にも対応します。ONではニコニコ本来のページ番号リンクを使うため、取得済みページを飛ばすページャー変更は休止します。</div>
           <div class=row><label><input type=checkbox id=useGetThumbInfo>動画詳細情報を取得する</label></div>
           <div class=row><label><input type=checkbox id=movieInfoTogglable>タグ・ユーザー・チャンネルの表示切替</label></div>
           <div class=row><label><input type=checkbox id=descriptionTogglable>動画説明の表示切替</label></div>
@@ -1303,7 +1303,7 @@
     sessionDetailCacheMaxEntries: 'キャッシュ件数の上限です。古いものから削除します。',
     autoFillAdMode: '追加動画の広告リボン・提供者表示の取得範囲です。広告者照合の警告・複合NGとは独立しています。無駄を抑えるには「表示動画のみ」を選んでください。',
     selfAdWarningEnabled: '広告者一覧を確認し、投稿者本人によるニコニ広告の可能性を警告します。追加通信が発生します。',
-    spaNavigationFix: 'ニコニコのSPAページ移動で古いスクリプト状態が残るのを防ぐため、新URLで安全に再読み込みします。',
+    spaNavigationFix: '画面を再読み込みせず、検索結果の切り替わりに合わせて古い処理を終了しNG判定を開始します。SPA利用時は本来のページ番号リンクを維持します。',
     developerMode: '診断ログを増やします。通常利用は軽量またはOFFで十分です。',
     developerDiagnosticMode: '軽量はローカル監査のみ、完全はAPI通信を含む3方式比較、手動のみはボタンを押した時だけ診断します。',
     ngLockedTagCountEnabled: 'ロックされたタグ数がしきい値以上の動画をNGにします。',

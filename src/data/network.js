@@ -20,13 +20,17 @@
     }
     async function fetchResponse(url, options, timeout = 15000) {
       const controller = new AbortController();
+      const externalSignal = options?.signal;
+      const abort = () => controller.abort();
+      if (externalSignal?.aborted) abort();
+      else externalSignal?.addEventListener('abort', abort, {once:true});
       const timer = setTimeout(() => controller.abort(), timeout);
       try {
         const res = await fetch(url, Object.assign({}, options, {signal:controller.signal}));
         const body = await res.text(); // Keep timeout active through body download.
         return {ok:res.ok, status:res.status, statusText:res.statusText, url:res.url,
           text:async () => body, json:async () => JSON.parse(body)};
-      } finally { clearTimeout(timer); }
+      } finally { clearTimeout(timer); externalSignal?.removeEventListener('abort', abort); }
     }
     return {createQueue, fetchResponse, ads:createQueue(4)};
   })();

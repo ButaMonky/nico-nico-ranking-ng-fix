@@ -1,71 +1,68 @@
     var domContentLoaded = async function() {
       try {
-        const page = getPage();
-        addStyle(page.css)
-        addStyle(DetailUiTheme.CSS)
         const config = new Config(gmGetValue(), gmSetValue())
         await config.sync()
         if (typeof nrnSetConsoleConfig === 'function') nrnSetConsoleConfig(config)
-        DetailUiTheme.apply(config, page.doc, 'initial')
-        DetailUiTheme.watch(config, page.doc)
+        DetailUiTheme.apply(config, document, 'initial')
+        DetailUiTheme.watch(config, document)
+        addStyle(DetailUiTheme.CSS)
         config.detailUiTheme.on('changed', function(v) {
-          DetailUiTheme.apply(config, page.doc, 'setting-changed:' + v)
+          DetailUiTheme.apply(config, document, 'setting-changed:' + v)
         })
-        var model = createModel(config)
-        const ctrl = new Controller(model.config, page)
-        ctrl.addListenersTo(page.doc.body)
-
-        // Cross-cutting runtime policies are installed once here.
-        // Individual card classes only expose data/UI; services own global behavior.
-        NewTabService.install(model.config, page.doc)
-        Diagnostics.log('startup', '主要ランタイムサービスを初期化', {
-          version:'14.0',
-          architecture:'runtime-services-v1 (Diagnostics / NewTabService / existing domain modules)',
-          newTab:model.config.openNewWindow.value,
-          developer:model.config.developerMode.value,
-          autoFill:model.config.autoFillEnabled.value
-        })
-
-        var view = createView(page, ctrl)
-        view.addConfigBar()
-        view.bindToModel(model)
-        view.bindToWindow()
-        view.setupAndRequestThumbInfo(model)
-        view.observeMutation(model)
-        setupAutoFill(model, page, ctrl)
-
-        if (typeof window.__nrnConfigureSpaNavigationGuard === 'function') {
-          window.__nrnConfigureSpaNavigationGuard({
-            enabled: model.config.spaNavigationFix.value,
-            developer: model.config.developerMode.value
-          })
-        }
-
-        model.config.spaNavigationFix.on('changed', function(v) {
-          console.log('[NicoNicoRankingNG route v14.1] SPA再検索設定変更:', v)
-          if (typeof window.__nrnConfigureSpaNavigationGuard === 'function') {
-            window.__nrnConfigureSpaNavigationGuard({
-              enabled: v,
-              developer: model.config.developerMode.value
-            })
+        NewTabService.install(config, document)
+        var dispose = function() {}
+        var pageStyle = null
+        var stop = function() { dispose(); dispose = function() {}; removePendingMovieInvisibleStyle() }
+        var start = function() {
+          stop()
+          if (!(ListPage.is(location) || SearchPage.is(location))) return
+          const page = getPage()
+          page._sourceUrl = location.href
+          pageStyle?.remove()
+          pageStyle = document.createElement('style')
+          pageStyle.textContent = page.css
+          document.head.appendChild(pageStyle)
+          // Capture the persistent listeners before binding this route's models.
+          const subscriptions = Object.values(config).filter(store => store?._eventNameToListeners)
+            .map(store => [store, new Map(Array.from(store._eventNameToListeners,
+              ([name, listeners]) => [name, new Set(listeners)]))])
+          var model, ctrl
+          dispose = function() {
+            page._disposed = true
+            page._disposeAutoFill?.()
+            model?.requestThumbInfo.dispose?.()
+            ctrl?.dispose()
+            page.dispose()
+            for (const [store, before] of subscriptions) {
+              for (const [name, listeners] of store._eventNameToListeners) {
+                for (const listener of listeners) if (!before.get(name)?.has(listener)) store.off(name, listener)
+              }
+            }
           }
-        })
-
-        model.config.developerMode.on('changed', function(v) {
-          if (typeof window.__nrnConfigureSpaNavigationGuard === 'function') {
-            window.__nrnConfigureSpaNavigationGuard({
-              enabled: model.config.spaNavigationFix.value,
-              developer: v
-            })
-          }
-        })
-
-        if (!model.config.useGetThumbInfo.value) {
-          removePendingMovieInvisibleStyle();
+          try {
+            if (config.useGetThumbInfo.value) setPendingMoviesInvisible()
+            model = createModel(config)
+            ctrl = new Controller(config, page)
+            ctrl.addListenersTo(page.doc.body)
+            const view = createView(page, ctrl)
+            view.addConfigBar()
+            view.bindToModel(model)
+            view.bindToWindow()
+            view.setupAndRequestThumbInfo(model)
+            view.observeMutation(model)
+            setupAutoFill(model, page, ctrl)
+            console.log('[NicoNicoRankingNG SPA]', 'Start NG checks', page._sourceUrl)
+          } catch (e) { stop(); console.error(e) }
         }
+        const configure = function() {
+          window.__nrnConfigureSpaNavigationGuard?.({enabled:config.spaNavigationFix.value, start, stop})
+        }
+        config.spaNavigationFix.on('changed', configure)
+        start()
+        configure()
       } catch (e) {
         console.error(e)
-        removePendingMovieInvisibleStyle();
+        removePendingMovieInvisibleStyle()
       }
     }
     var getPage = function() {

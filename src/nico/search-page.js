@@ -214,9 +214,11 @@
         }
       },
       observeMutation(callback) {
+        this._observers = []
         const nodeList = document.querySelectorAll('.contentBody.video.uad .item.nicoadVideoItem .itemContent')
         for (const node of Array.from(nodeList)) {
-          new MutationObserver((records, observer) => {
+          const watcher = new MutationObserver((records, observer) => {
+            if (this._disposed) return
             for (const r of records) {
               if (SearchPage._isGettingAdDone(r)) {
                 observer.disconnect()
@@ -226,7 +228,9 @@
                 return
               }
             }
-          }).observe(node, {
+          })
+          this._observers.push(watcher)
+          watcher.observe(node, {
             attributes: true,
             attributeOldValue: true,
             attributeFilter: ['style'],
@@ -744,4 +748,3 @@
   // Runtime services (v14.0)
   // Cross-cutting behavior belongs here instead of individual card classes.
   // ========================================================================
-

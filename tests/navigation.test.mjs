@@ -2,86 +2,72 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import vm from 'node:vm';
 import {readFile} from 'node:fs/promises';
-import {baseline,output} from '../scripts/build.mjs';
-async function setup(path){
- const source=await readFile(path,'utf8'),a='    var setupSpaNavigationGuard = function() {',b='    var domContentLoaded = async function() {';
- assert.equal(source.split(a).length,2);assert.equal(source.split(b).length,2);
- const timers=[],intervals=[],events={},reloads=[];
- const location={href:'https://www.nicovideo.jp/tag/first',origin:'https://www.nicovideo.jp',host:'www.nicovideo.jp',reload:()=>reloads.push(location.href)};
- const history={pushState(_s,_t,url){location.href=new URL(url,location.href).href;return 'original';},replaceState(_s,_t,url){location.href=new URL(url,location.href).href;}};
- const results={isConnected:true};
+import {output} from '../scripts/build.mjs';
+async function setup(){
+ const source=await readFile(output,'utf8');
+ const a=source.indexOf('    var setupSpaNavigationGuard = function() {'),b=source.indexOf('    var domContentLoaded = async function() {');
+ const timers=new Map(), intervals=[],events={},starts=[],stops=[];
+ let id=0,observe;
+ const location=new URL('https://www.nicovideo.jp/tag/first');
+ const history={pushState(_s,_t,url){location.href=new URL(url,location).href;return 'native';},replaceState(_s,_t,url){location.href=new URL(url,location).href;}};
+ const card=n=>({isConnected:true,contains:()=>true,getAttribute:()=>n,querySelector:()=>({getAttribute:()=>'/watch/'+n})});
+ let results=[card('sm1')];
  const window={addEventListener:(k,v)=>events[k]=v};
- const context=vm.createContext({window,location,history,URL,document:{title:'Search',addEventListener:()=>{},querySelector:()=>results},console:{log:()=>{},warn:()=>{}},setTimeout:(f,ms)=>timers.push({f,ms}),setInterval:(f,ms)=>intervals.push({f,ms})});
- const install=vm.runInContext(source.slice(source.indexOf(a),source.indexOf(b))+';setupSpaNavigationGuard',context,{timeout:1000});
- install();return {install,window,history,location,timers,intervals,events,reloads,results,context};
+ const document={title:'test',querySelectorAll:()=>results};
+ const context=vm.createContext({window,location,history,URL,document,
+  ListPage:{is:l=>l.pathname.startsWith('/ranking/genre')},SearchPage:{is:l=>/^\/(tag|search)\//.test(l.pathname)},
+  MutationObserver:class{constructor(fn){observe=fn;}observe(){}},
+  setTimeout:(f)=>{timers.set(++id,f);return id;},clearTimeout:n=>timers.delete(n),setInterval:f=>intervals.push(f)});
+ vm.runInContext(source.slice(a,b)+';setupSpaNavigationGuard()',context);
+ window.__nrnConfigureSpaNavigationGuard({start:()=>starts.push(location.href),stop:()=>stops.push(location.href)});
+ return {window,history,location,starts,stops,intervals,events,context,timers,
+  flush(){const fs=[...timers.values()];timers.clear();fs.forEach(f=>f());},
+  commit(ids=['sm2']){results.forEach(n=>n.isConnected=false);results=ids.map(card);observe([]);},
+  mutate(){observe([{type:'characterData',target:{nodeType:1,closest:()=>null,contains:()=>true}}]);}};
 }
-
-test('generated: ZenzaWatch replaceState playback, playlist and restore keep existing results',async()=>{
- const h=await setup(output);h.window.__nrnConfigureSpaNavigationGuard({});
- for(let i=0;i<3;i++){
-  h.history.replaceState(null,'','/watch/sm1');h.history.replaceState(null,'','/watch/sm2');
-  h.history.replaceState(null,'','/tag/first');h.intervals[0].f();
- }
- assert.equal(h.timers.length,0);assert.equal(h.reloads.length,0);
- h.history.pushState(null,'','/tag/first?page=2');assert.equal(h.timers.length,1);
+test('SPA: native history return value, delayed DOM and no document reload',async()=>{
+ const h=await setup();assert.equal(h.history.pushState(null,'','/search/second'),'native');
+ h.flush();assert.equal(h.starts.length,0);assert.equal(h.stops.length,1);
+ h.commit();h.flush();assert.deepEqual(h.starts,['https://www.nicovideo.jp/search/second']);
 });
-test('generated: polling detects player restoration without reloading',async()=>{
- const h=await setup(output);h.window.__nrnConfigureSpaNavigationGuard({});
- h.location.href='https://www.nicovideo.jp/watch/sm1';h.intervals[0].f();
- h.location.href='https://www.nicovideo.jp/tag/first';h.intervals[0].f();
- assert.equal(h.timers.length,0);
+test('SPA: rapid queries discard stale scheduled startup',async()=>{
+ const h=await setup();h.history.pushState(null,'','/tag/second');h.commit();
+ h.history.pushState(null,'','/tag/final?sort=registeredAt&page=2');h.commit(['sm3']);h.flush();
+ assert.deepEqual(h.starts,['https://www.nicovideo.jp/tag/final?sort=registeredAt&page=2']);
 });
-test('generated: supplied ZenzaWatch history module opens, restores after 30s and closes without reload',async()=>{
- const h=await setup(output);h.window.__nrnConfigureSpaNavigationGuard({});
- h.window.location=h.location;h.window.document=h.context.document;
- let restore;
+test('SPA: back to still-mounted results before the next query commits restarts their checks',async()=>{
+ const h=await setup();h.history.pushState(null,'','/search/pending');
+ h.history.replaceState(null,'','/tag/first');h.flush();
+ assert.deepEqual(h.starts,['https://www.nicovideo.jp/tag/first']);
+});
+test('SPA: same cards, zero results, unsupported page and return',async()=>{
+ const h=await setup();h.history.pushState(null,'','/tag/same');h.mutate();h.flush();assert.equal(h.starts.length,1);
+ h.history.pushState(null,'','/tag/empty');h.commit([]);h.flush();assert.equal(h.starts.length,2);
+ h.history.pushState(null,'','/my');h.commit([]);h.flush();assert.equal(h.starts.length,2);
+ h.history.pushState(null,'','/ranking/genre/all');h.commit(['sm4']);h.flush();assert.equal(h.starts.length,3);
+});
+test('SPA: hash is ignored; popstate and polling start new routes',async()=>{
+ const h=await setup();h.history.pushState(null,'','#details');h.flush();assert.equal(h.stops.length,0);
+ h.location.href='https://www.nicovideo.jp/tag/back';h.events.popstate();h.commit();h.flush();assert.equal(h.starts.length,1);
+ h.location.href='https://www.nicovideo.jp/tag/poll';h.intervals[0]();h.commit();h.flush();assert.equal(h.starts.length,2);
+});
+test('SPA: disabled setting clears scheduled start and re-enabling catches up',async()=>{
+ const h=await setup();h.history.pushState(null,'','/search/new');h.commit();
+ h.window.__nrnConfigureSpaNavigationGuard({enabled:false});h.flush();assert.equal(h.starts.length,0);
+ h.window.__nrnConfigureSpaNavigationGuard({enabled:true});h.flush();assert.equal(h.starts.length,1);
+});
+test('SPA: retained ZenzaWatch results survive playback, playlist and close',async()=>{
+ const h=await setup();h.window.location=h.location;h.window.document=h.context.document;let restore;
  h.context._={debounce(fn,delay){const run=delay?()=>{restore=fn;}:fn;run.cancel=()=>{};return run;}};
  h.context.nicoUtil={isGinzaWatchUrl:()=>false};h.context.PRODUCT='ZenzaWatch';
  const snippet=await readFile(new URL('./fixtures/zenza-watch-history.js',import.meta.url),'utf8');
- const player=vm.runInContext(snippet+';WatchPageHistory',h.context,{timeout:1000});
- const handlers={};player.initialize({on:(name,fn)=>handlers[name]=fn});
- handlers.open();handlers.loadVideoInfo({watchId:'sm1',title:'test',owner:{name:'owner'}});
- assert.equal(h.location.href,'https://www.nicovideo.jp/watch/sm1');
- restore();assert.equal(h.location.href,'https://www.nicovideo.jp/tag/first');
- handlers.loadVideoInfo({watchId:'sm2',title:'next',owner:{name:'owner'}});
- handlers.close();assert.equal(h.location.href,'https://www.nicovideo.jp/tag/first');
- assert.equal(h.timers.length,0);assert.equal(h.reloads.length,0);
+ const player=vm.runInContext(snippet+';WatchPageHistory',h.context);const handlers={};
+ player.initialize({on:(name,fn)=>handlers[name]=fn});handlers.open();handlers.loadVideoInfo({watchId:'sm1',title:'test',owner:{name:'owner'}});
+ restore();handlers.loadVideoInfo({watchId:'sm2',title:'next',owner:{name:'owner'}});handlers.close();h.flush();
+ assert.equal(h.stops.length,0);assert.equal(h.starts.length,0);
 });
-test('generated: replaced result DOM or a different search still reloads',async()=>{
- for(const changedDom of [true,false]){
-  const h=await setup(output);h.window.__nrnConfigureSpaNavigationGuard({});
-  h.history.replaceState(null,'','/watch/sm1');
-  if(changedDom)h.results.isConnected=false;
-  h.history.replaceState(null,'',changedDom?'/tag/first':'/search/other');
-  assert.equal(h.timers.length,1);h.timers[0].f();assert.equal(h.reloads.length,1);
- }
+test('SPA: real watch navigation unmounts results and cleans up',async()=>{
+ const h=await setup();h.history.pushState(null,'','/watch/sm2');h.commit([]);h.flush();
+ assert.equal(h.stops.length,1);assert.equal(h.starts.length,0);
+ h.history.pushState(null,'','/tag/first');h.commit();h.flush();assert.equal(h.starts.length,1);
 });
-test('generated: pending reload is cancelled on player URL, original results, or disabled guard',async()=>{
- for(const target of ['/watch/sm1','/tag/first','disabled']){
-  const h=await setup(output);h.window.__nrnConfigureSpaNavigationGuard({});
-  h.history.pushState(null,'','/search/next');
-  if(target==='disabled')h.window.__nrnConfigureSpaNavigationGuard({enabled:false});
-  else h.history.replaceState(null,'',target);
-  h.timers[0].f();assert.equal(h.reloads.length,0);
-  h.window.__nrnConfigureSpaNavigationGuard({enabled:true});
-  h.history.pushState(null,'','/search/later');assert.equal(h.timers.length,2);
- }
-});
-for(const [label,path] of [['baseline',baseline],['generated',output]]){
- test(`${label}: navigation guards readiness, hash and disabled setting`,async()=>{
-  const h=await setup(path);h.history.pushState(null,'','/tag/before');assert.equal(h.timers.length,0);
-  h.window.__nrnConfigureSpaNavigationGuard({enabled:false});h.history.pushState(null,'','/search/off');assert.equal(h.timers.length,0);
-  h.window.__nrnConfigureSpaNavigationGuard({enabled:true});h.history.pushState(null,'','#hash');assert.equal(h.timers.length,0);
-  h.history.pushState(null,'','/watch/sm1');assert.equal(h.timers.length,0);
-  assert.equal(h.history.pushState(null,'','/tag/next'),'original');assert.equal(h.timers.length,1);assert.equal(h.timers[0].ms,120);
-  h.history.replaceState(null,'','/search/final');assert.equal(h.timers.length,1);h.timers[0].f();
-  assert.deepEqual(h.reloads,['https://www.nicovideo.jp/search/final']);
- });
- test(`${label}: popstate, polling and repeated installation`,async()=>{
-  const h=await setup(path),wrapped=h.history.pushState;h.install();assert.equal(h.history.pushState,wrapped);assert.equal(h.intervals.length,1);
-  h.window.__nrnConfigureSpaNavigationGuard({});h.location.href='https://www.nicovideo.jp/tag/back';h.events.popstate();
-  assert.equal(h.timers[0].ms,0);h.timers[0].f();assert.equal(h.timers[1].ms,120);h.timers[1].f();assert.equal(h.reloads.length,1);
-  const p=await setup(path);p.window.__nrnConfigureSpaNavigationGuard({});p.location.href='https://www.nicovideo.jp/search/poll';
-  assert.equal(p.intervals[0].ms,250);p.intervals[0].f();p.intervals[0].f();assert.equal(p.timers.length,1);
- });
-}

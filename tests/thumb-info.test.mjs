@@ -87,3 +87,11 @@ test('generated: synchronous transport exceptions and promise rejections release
  service.httpRequest=()=>Promise.reject(Error('transport'));service.request(['c']);
  await new Promise(r=>setImmediate(r));assert.equal(service._requestCount,0);
 });
+test('generated: disposal aborts active requests, drops queued IDs and ignores late replies',async()=>{
+ const {service,trace}=await setup(output,1);let aborted=0;const calls=[];
+ service.httpRequest=options=>{calls.push(options);return {abort(){aborted++;options.onabort();}};};
+ service.request(['old','queued']);service.dispose();calls[0].onerror();
+ calls[0].ontimeout();service.request(['later']);
+ assert.equal(aborted,1);assert.equal(calls.length,1);assert.equal(service._pendingIds.length,0);
+ assert.equal(trace.length,0);assert.equal(service._handles.size,0);
+});
