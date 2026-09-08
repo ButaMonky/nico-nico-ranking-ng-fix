@@ -3,6 +3,26 @@ import assert from 'node:assert/strict';
 import vm from 'node:vm';
 import {readFile} from 'node:fs/promises';
 import {baseline,output} from '../scripts/build.mjs';
+test('generated: diagnostic console is quiet until enabled, follows settings, preserves errors and host console',async()=>{
+ const source=await readFile(output,'utf8');
+ const start=source.indexOf('  var nrnConsoleConfig = null');
+ const end=source.indexOf('  var createObject',start);
+ assert.ok(start>0 && end>start);
+ const calls=[],host={};
+ for(const key of ['log','info','warn','error','table','group','groupCollapsed','groupEnd'])host[key]=(...args)=>calls.push([key,...args]);
+ const sandbox={console:host};
+ const api=vm.runInNewContext('(function(){'+source.slice(start,end)+';return {console,set:nrnSetConsoleConfig}})()',sandbox);
+ const keys=Object.keys(host).filter(k=>k!=='error');
+ keys.forEach(k=>api.console[k]('startup'));
+ assert.equal(calls.length,0);
+ const config={developerMode:{value:false}};api.set(config);
+ keys.forEach(k=>api.console[k]('off'));assert.equal(calls.length,0);
+ api.console.error('failure');assert.deepEqual(calls.pop(),['error','failure']);
+ config.developerMode.value=true;
+ keys.forEach(k=>api.console[k]('on'));assert.equal(calls.length,keys.length);
+ config.developerMode.value=false;api.console.log('off again');assert.equal(calls.length,keys.length);
+ assert.equal(sandbox.console,host);host.log('other script');assert.deepEqual(calls.at(-1),['log','other script']);
+});
 async function load(path,extra={}){
  const source=await readFile(path,'utf8'),start='  var Diagnostics = (function() {',end='  var Controller = (function() {';
  assert.equal(source.split(start).length,2);assert.equal(source.split(end).length,2);

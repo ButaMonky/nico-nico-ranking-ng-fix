@@ -6,7 +6,7 @@
 // @match        *://www.nicovideo.jp/ranking*
 // @match        *://www.nicovideo.jp/search/*
 // @match        *://www.nicovideo.jp/tag/*
-// @version      160.4
+// @version      160.5
 // @grant        GM_getValue
 // @grant        GM_setValue
 // @grant        GM_xmlhttpRequest
@@ -198,6 +198,20 @@
 
 ;(function() {
   'use strict'
+
+  // This facade is scoped to this userscript; other scripts keep their console.
+  var nrnConsoleConfig = null
+  var nrnSetConsoleConfig = function(config) { nrnConsoleConfig = config }
+  var console = (function(nativeConsole) {
+    var local = {}
+    ;['log', 'info', 'warn', 'error', 'table', 'group', 'groupCollapsed', 'groupEnd'].forEach(function(method) {
+      local[method] = function() {
+        if (method !== 'error' && !(nrnConsoleConfig && nrnConsoleConfig.developerMode.value)) return
+        if (typeof nativeConsole[method] === 'function') nativeConsole[method].apply(nativeConsole, arguments)
+      }
+    })
+    return local
+  })(globalThis.console)
 
   var createObject = function(prototype, properties) {
     var descriptors = function() {

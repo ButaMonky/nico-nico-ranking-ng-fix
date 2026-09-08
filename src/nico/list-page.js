@@ -1027,18 +1027,21 @@
 }
 .nrn-movie-info-toggle {
   position: absolute;
+  z-index: 20;
+  pointer-events: auto;
+  cursor: pointer;
   display: block;
   inset: auto 0 0 auto;
-  width: 22px;
-  min-width: 22px;
-  height: 20px;
+  width: 26px;
+  min-width: 26px;
+  height: 24px;
   padding: 0;
   color: #777f89;
   background: transparent;
   border: 0;
   border-radius: 4px;
   font-size: 12px;
-  line-height: 20px;
+  line-height: 24px;
   text-align: center;
   user-select: none;
 }

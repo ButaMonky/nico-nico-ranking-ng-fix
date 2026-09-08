@@ -6,7 +6,7 @@
 // @match        *://www.nicovideo.jp/ranking*
 // @match        *://www.nicovideo.jp/search/*
 // @match        *://www.nicovideo.jp/tag/*
-// @version      160.4
+// @version      160.5
 // @grant        GM_getValue
 // @grant        GM_setValue
 // @grant        GM_xmlhttpRequest
@@ -198,6 +198,20 @@
 
 ;(function() {
   'use strict'
+
+  // This facade is scoped to this userscript; other scripts keep their console.
+  var nrnConsoleConfig = null
+  var nrnSetConsoleConfig = function(config) { nrnConsoleConfig = config }
+  var console = (function(nativeConsole) {
+    var local = {}
+    ;['log', 'info', 'warn', 'error', 'table', 'group', 'groupCollapsed', 'groupEnd'].forEach(function(method) {
+      local[method] = function() {
+        if (method !== 'error' && !(nrnConsoleConfig && nrnConsoleConfig.developerMode.value)) return
+        if (typeof nativeConsole[method] === 'function') nativeConsole[method].apply(nativeConsole, arguments)
+      }
+    })
+    return local
+  })(globalThis.console)
 
   var createObject = function(prototype, properties) {
     var descriptors = function() {
@@ -5707,18 +5721,21 @@ html[data-nrn-ui-theme="dark"] .nrn-contributor-ng-name-button:hover {
 }
 .nrn-movie-info-toggle {
   position: absolute;
+  z-index: 20;
+  pointer-events: auto;
+  cursor: pointer;
   display: block;
   inset: auto 0 0 auto;
-  width: 22px;
-  min-width: 22px;
-  height: 20px;
+  width: 26px;
+  min-width: 26px;
+  height: 24px;
   padding: 0;
   color: #777f89;
   background: transparent;
   border: 0;
   border-radius: 4px;
   font-size: 12px;
-  line-height: 20px;
+  line-height: 24px;
   text-align: center;
   user-select: none;
 }
@@ -11529,6 +11546,7 @@ div:has(> div > a[data-anchor-page="ranking_genre"][href^="/watch/"] > div > p),
         addStyle(DetailUiTheme.CSS)
         const config = new Config(gmGetValue(), gmSetValue())
         await config.sync()
+        if (typeof nrnSetConsoleConfig === 'function') nrnSetConsoleConfig(config)
         DetailUiTheme.apply(config, page.doc, 'initial')
         DetailUiTheme.watch(config, page.doc)
         config.detailUiTheme.on('changed', function(v) {
@@ -11646,6 +11664,5 @@ div:has(> div > a[data-anchor-page="ranking_genre"][href^="/watch/"] > div > p),
     }
     return {main}
   })()
-
   Main.main()
 })()

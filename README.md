@@ -1,4 +1,6 @@
-最新160.4: [通信・安定性の改善報告](docs/network-stability-1604.md)。自動テスト95件。
+最新160.5: [詳細ボタン・診断ログの修正](docs/toggle-console-1605.md)。自動テスト96件。
+
+160.4: [通信・安定性の改善報告](docs/network-stability-1604.md)。自動テスト95件。
 
 # Nico Nico Ranking NG — リスト／タイル表示修正版
 

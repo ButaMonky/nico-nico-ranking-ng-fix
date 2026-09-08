@@ -5,6 +5,7 @@
         addStyle(DetailUiTheme.CSS)
         const config = new Config(gmGetValue(), gmSetValue())
         await config.sync()
+        if (typeof nrnSetConsoleConfig === 'function') nrnSetConsoleConfig(config)
         DetailUiTheme.apply(config, page.doc, 'initial')
         DetailUiTheme.watch(config, page.doc)
         config.detailUiTheme.on('changed', function(v) {
@@ -122,4 +123,3 @@
     }
     return {main}
   })()
-

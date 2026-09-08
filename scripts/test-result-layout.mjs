@@ -47,6 +47,26 @@ try {
   parsed.slice(1).forEach(r=>r.rootElem.classList.add('nrn-parsed'));
  });
  await page.waitForTimeout(100);
+ // A site advertisement overlay must not intercept the detail toggle, even before pinning.
+ await page.evaluate(()=>{
+  native.classList.remove('nrn-hide');
+  window.ad=document.createElement('span');ad.textContent='160,300pt';
+  ad.style.cssText='position:absolute;right:0;bottom:0;width:90px;height:24px;z-index:10';
+  native.append(ad);
+ });
+ for(const pinned of [false,true]) {
+  await page.evaluate(pinned=>{
+   toggle.classList.remove('nrn-toggle-pinned');
+   toggle.style.removeProperty('--nrn-toggle-top');
+   if(pinned){toggle.style.setProperty('--nrn-toggle-top',(toggle.getBoundingClientRect().top-native.getBoundingClientRect().top)+'px');toggle.classList.add('nrn-toggle-pinned');}
+  },pinned);
+  const hit=await page.evaluate(()=>{
+   const r=toggle.getBoundingClientRect();
+   return {width:r.width,height:r.height,hits:[[2,2],[r.width-2,r.height-2],[r.width/2,r.height/2]].every(([x,y])=>document.elementFromPoint(r.left+x,r.top+y)===toggle)};
+  });
+  assert.equal(hit.width,26);assert.equal(hit.height,24);assert.equal(hit.hits,true,'advertisement cannot cover toggle hit area');
+ }
+ await page.evaluate(()=>{ad.remove();native.classList.add('nrn-hide');});
  assert.equal(await page.evaluate(()=>extra.querySelector('.nrn-thumb-anchor-wrap').getBoundingClientRect().width),320);
  assert.equal(await page.evaluate(()=>extra.querySelector('.nrn-thumb-anchor-wrap').getBoundingClientRect().height),180);
  assert.equal(await page.evaluate(()=>extra.querySelector('.nrn-movie-title').getBoundingClientRect().left-extra.querySelector('.nrn-thumb-anchor-wrap').getBoundingClientRect().right),16);
