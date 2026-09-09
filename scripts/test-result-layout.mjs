@@ -9,7 +9,7 @@ const browser=await playwright.chromium.launch({headless:true,executablePath:pro
 try {
  const page=await browser.newPage({viewport:{width:1280,height:1000}});
  await page.route('**/*',r=>r.fulfill({body:'<html><body></body></html>',contentType:'text/html'}));
- await page.goto('https://www.nicovideo.jp/tag/test');
+ await page.goto('http://nrn.test/tag/test');
  const fixtures={};
  for(const mode of ['list','tile']) fixtures[mode]=await readFile(new URL(`../tests/fixtures/layout-${mode}.html`,import.meta.url),'utf8');
  // Captured markup has no stylesheet: model only the site's relevant utility rules.

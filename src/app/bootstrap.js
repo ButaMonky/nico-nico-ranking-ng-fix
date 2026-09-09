@@ -6,6 +6,7 @@
         DetailUiTheme.apply(config, document, 'initial')
         DetailUiTheme.watch(config, document)
         addStyle(DetailUiTheme.CSS)
+        addStyle(CardEnhancements.css)
         config.detailUiTheme.on('changed', function(v) {
           DetailUiTheme.apply(config, document, 'setting-changed:' + v)
         })

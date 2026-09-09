@@ -5,6 +5,10 @@
     //
     // 旧v11 conditions[] は parse() 時に root AND group へ自動移行する。
     var FIELD_META = {
+      pageContributorCount: {
+        label:'同じ投稿者の動画数（元の1ページ）', type:'number',
+        operators:['gt','gte','lt','lte','eq','neq']
+      },
       lockedTagCount: {
         label:'🔒 タグロック数', type:'number',
         operators:['gt','gte','lt','lte','eq','neq']
@@ -193,6 +197,8 @@
     var fieldValue = function(movie, field) {
       if (field === 'movieId') return movie.id || ''
       if (field === 'title') return movie.title || ''
+      if (field === 'pageContributorCount') return Number.isFinite(movie.pageContributorCount)
+        ? movie.pageContributorCount : {__notReady:true}
 
       // 詳細情報依存項目。
       if (!movie.thumbInfoDone || (movie.error && movie.error.type !== 'NO_ERROR')) return {__notReady:true}
@@ -331,9 +337,19 @@
       return evaluateState(movie, node, trace, depth) === true
     }
 
+    var ruleCache = new Map()
     var match = function(movie, enabled, rawRules, withTrace) {
       if (!enabled) return []
-      return parse(rawRules).map(function(rule) {
+      var rules
+      if (typeof rawRules === 'string') {
+        rules = ruleCache.get(rawRules)
+        if (!rules) {
+          rules = parse(rawRules)
+          if (ruleCache.size >= 8) ruleCache.delete(ruleCache.keys().next().value)
+          ruleCache.set(rawRules, rules)
+        }
+      } else rules = parse(rawRules)
+      return rules.map(function(rule) {
         if (!rule.enabled) return null
         var trace = withTrace ? [] : null
         var matched = evaluateNode(movie, rule.expression, trace, 0)

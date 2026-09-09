@@ -39,6 +39,7 @@
       result.bindToMovieViewMode(movieViewMode)
       result.bindToConfig(movieViewMode.config)
       result.bindToMovie(movie)
+      CardEnhancements.attach(result, movie, page)
       return result
     }
     var createMovieRoots = function(resultsOfParsing, model, page, controller) {
@@ -65,11 +66,19 @@
         return GM.xmlHttpRequest
       return GM_xmlhttpRequest
     }
+    // Short-lived successful metadata only; NG decisions always use current settings.
+    var recentDetails = new Map()
     var createThumbInfoRequester = function(movies, movieViewModes) {
+      var applyDetails = ThumbInfoListener.forCompleted(movies)
       var thumbInfo = new ThumbInfo(
           gmXmlHttpRequest(),
           movies.config.thumbInfoConcurrency.value)
-        .on('completed', ThumbInfoListener.forCompleted(movies))
+        .on('completed', function(info) {
+          recentDetails.delete(info.id)
+          recentDetails.set(info.id, {info:info, at:Date.now()})
+          if (recentDetails.size > 512) recentDetails.delete(recentDetails.keys().next().value)
+          applyDetails(info)
+        })
         .on('errorOccurred', ThumbInfoListener.forErrorOccurred(movies))
       movies.config.thumbInfoConcurrency.on('changed', function(v) {
         thumbInfo.setConcurrent(v)
@@ -77,6 +86,11 @@
       })
       var request = function(prefer) {
         var allIds = movieViewModes.sort().map(function(m) { return m.movie.id })
+        for (var id of allIds) {
+          var cached = recentDetails.get(id)
+          if (cached && Date.now() - cached.at > 120000) { recentDetails.delete(id); cached = null }
+          if (cached && !movies.get(id).thumbInfoDone) applyDetails(cached.info)
+        }
         var pendingIds = allIds.filter(function(id) {
           var movie = movies.get(id)
           return movie && !movie.thumbInfoDone
@@ -112,6 +126,10 @@
           movies.setIfAbsent(resultsOfParsing.map(function(r) {
             return new Movie(r.movie.id, r.movie.title)
           }))
+          for (var row of resultsOfParsing) {
+            var count = Number(row.rootElem.dataset.nrnPageContributorCount)
+            if (Number.isFinite(count) && count > 0) movies.get(row.movie.id).setPageContributorCount(count)
+          }
         },
       }
     }

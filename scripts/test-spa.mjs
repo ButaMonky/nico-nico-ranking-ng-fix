@@ -5,7 +5,7 @@ import {build, output} from './build.mjs';
 const require = createRequire(import.meta.url);
 const {chromium} = require(process.env.NRN_PLAYWRIGHT || 'playwright');
 await build();
-const source = await readFile(output, 'utf8');
+const source = (await readFile(output, 'utf8')).replace('model = createModel(config)', 'model = createModel(config); window.testModel = model');
 const fixture = await readFile(new URL('../tests/fixtures/layout-list.html', import.meta.url), 'utf8');
 const browser = await chromium.launch({headless:true, executablePath:process.env.NRN_BROWSER});
 try {
@@ -75,6 +75,12 @@ try {
   await page.evaluate(() => history.replaceState({}, '', '/search/query4?sort=registeredAt&order=desc'));
   await page.waitForTimeout(200);
   assert.equal(await page.evaluate(() => savedToggle === document.querySelector('.nrn-movie-info-toggle')), true);
+  // A repeated result on a new route reuses successful metadata, not its NG decision.
+  const requestCount = await page.evaluate(() => requests.length);
+  await render('/tag/cached', 'sm900004');
+  assert.equal(await page.evaluate(() => requests.length), requestCount, 'recent metadata avoids duplicate requests on SPA');
+  await page.evaluate(() => testModel.config.ngMovies.add('sm900004'));
+  assert.equal(await page.evaluate(() => testModel.movies.get('sm900004').ng), true, 'cached metadata uses current NG settings');
   // Leave with requests still in flight; deliver them late despite abort.
   await page.evaluate(() => { hold = true; });
   await page.evaluate(({fixture}) => {
@@ -115,7 +121,7 @@ try {
   await page.evaluate(() => fetches.filter(r => r.url.includes('/tag/after-empty?')).forEach(r => r.deliver()));
   assert.ok(await page.evaluate(() => fetchAborts > 0), 'route disposal aborts AutoFill fetch');
   assert.equal(await page.evaluate(() => savedIdentity === documentIdentity), true);
-  assert.equal(await page.evaluate(() => storageWrites), 0, 'routing never rewrites user settings');
+  assert.equal(await page.evaluate(() => storageWrites), 1, 'only the explicit fixture NG edit writes settings; routing never does');
   assert.deepEqual(errors, []);
   console.log('SPA Chrome fixture PASS: native links, queries, pre/post history commits, overlay, cancellation, reused/empty results, leave/return, no reload or duplicate controls.');
 } finally { await browser.close(); }

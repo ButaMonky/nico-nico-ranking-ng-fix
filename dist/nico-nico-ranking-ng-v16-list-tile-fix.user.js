@@ -6,7 +6,7 @@
 // @match        *://www.nicovideo.jp/ranking*
 // @match        *://www.nicovideo.jp/search/*
 // @match        *://www.nicovideo.jp/tag/*
-// @version      160.6
+// @version      160.7
 // @grant        GM_getValue
 // @grant        GM_setValue
 // @grant        GM_xmlhttpRequest
@@ -966,6 +966,7 @@
         var pre = this.ng
         this.ng = this.ngId || Boolean(this.ngName)
         if (pre !== this.ng) this.emit('ngChanged', this.ng)
+        else this.emit('ngReasonsChanged')
       },
       updateNgId(ngIdSet) {
         var pre = this.ngId
@@ -1048,6 +1049,10 @@
     //
     // 旧v11 conditions[] は parse() 時に root AND group へ自動移行する。
     var FIELD_META = {
+      pageContributorCount: {
+        label:'同じ投稿者の動画数（元の1ページ）', type:'number',
+        operators:['gt','gte','lt','lte','eq','neq']
+      },
       lockedTagCount: {
         label:'🔒 タグロック数', type:'number',
         operators:['gt','gte','lt','lte','eq','neq']
@@ -1236,6 +1241,8 @@
     var fieldValue = function(movie, field) {
       if (field === 'movieId') return movie.id || ''
       if (field === 'title') return movie.title || ''
+      if (field === 'pageContributorCount') return Number.isFinite(movie.pageContributorCount)
+        ? movie.pageContributorCount : {__notReady:true}
 
       // 詳細情報依存項目。
       if (!movie.thumbInfoDone || (movie.error && movie.error.type !== 'NO_ERROR')) return {__notReady:true}
@@ -1374,9 +1381,19 @@
       return evaluateState(movie, node, trace, depth) === true
     }
 
+    var ruleCache = new Map()
     var match = function(movie, enabled, rawRules, withTrace) {
       if (!enabled) return []
-      return parse(rawRules).map(function(rule) {
+      var rules
+      if (typeof rawRules === 'string') {
+        rules = ruleCache.get(rawRules)
+        if (!rules) {
+          rules = parse(rawRules)
+          if (ruleCache.size >= 8) ruleCache.delete(ruleCache.keys().next().value)
+          ruleCache.set(rawRules, rules)
+        }
+      } else rules = parse(rawRules)
+      return rules.map(function(rule) {
         if (!rule.enabled) return null
         var trace = withTrace ? [] : null
         var matched = evaluateNode(movie, rule.expression, trace, 0)
@@ -1458,6 +1475,7 @@
       this._lockedTagCountEnabled = false
       this._lockedTagCountThreshold = Infinity
       this.ngByAdvancedRule = false
+      this.pageContributorCount = null
       this.advancedRuleMatches = []
       this._advancedRulesEnabled = false
       this._advancedRulesJson = '[]'
@@ -1551,11 +1569,19 @@
       },
       get contributor() { return this._contributor },
       set contributor(contributor) {
+        if (this._contributorNgListener) {
+          this._contributor.off('ngChanged', this._contributorNgListener)
+          this._contributor.off('ngReasonsChanged', this._contributorNgListener)
+        }
         this._contributor = contributor
         this.emit('contributorChanged', this._contributor)
         this._updateAdvancedRule()
         this._updateNg()
-        this._contributor.on('ngChanged', this._updateNg.bind(this))
+        if (contributor.type !== 'unknown') {
+          this._contributorNgListener = this._updateNg.bind(this)
+          contributor.on('ngChanged', this._contributorNgListener)
+          contributor.on('ngReasonsChanged', this._contributorNgListener)
+        }
       },
       get error() { return this._error },
       set error(error) {
@@ -1572,6 +1598,12 @@
         this.emit('thumbInfoDone')
       },
       get ng() { return this._ng },
+      setPageContributorCount(value) {
+        if (this.pageContributorCount === value) return
+        this.pageContributorCount = value
+        this._updateAdvancedRule()
+        this._updateNg()
+      },
       _updateNg() {
         var pre = this._ng
         this._ng = this.ngId
@@ -1581,6 +1613,7 @@
           || this.ngByLockedTagCount
           || this.ngByAdvancedRule
         if (pre !== this._ng) this.emit('ngChanged', this._ng)
+        this.emit('ngReasonsChanged')
       },
       addListenerToConfig(config) {
         config.ngMovies.on('changed', this.updateNgId.bind(this))
@@ -1637,7 +1670,6 @@
     }
     return Movies
   })()
-
   var ThumbInfoListener = (function() {
     var createTagBuilder = function(config) {
       var map = new Map()
@@ -2707,6 +2739,8 @@
   .row.stack { align-items:flex-start; flex-direction:column; }
   .row > label { display:flex; align-items:center; gap:7px; }
   .muted, small { color:var(--muted); }
+  .grid2 .row label:has(select) { display:block; min-width:0; width:100%; }
+  .grid2 .row select { display:block; width:100%; min-width:0; max-width:100%; margin-top:4px; }
   .hint { background:var(--panel2); border-left:3px solid var(--accent); padding:9px 11px; border-radius:7px; color:var(--muted); font-size:12px; line-height:1.55; }
   .grid2 { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; }
   .grid2 > .row {
@@ -2915,7 +2949,7 @@
         <summary><span class=inlineLockIcon aria-hidden=true><svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24"><path d="M18 7h-1V5.98a4 4 0 0 0-4-4h-2a4 4 0 0 0-4 4V7H6a3 3 0 0 0-3 3v8a3 3 0 0 0 3 3h12a3 3 0 0 0 3-3v-8a3 3 0 0 0-3-3M9.53 17.16l1.14-1.97.51-.87a2 2 0 0 1 .83-3.82c.7 0 1.32.36 1.67.91q.32.48.33 1.09a2 2 0 0 1-1.17 1.82l1.64 2.84a.23.23 0 0 1-.2.34H9.74a.23.23 0 0 1-.2-.34zM9 5.98c0-1.1.9-2 2-2h2a2 2 0 0 1 2 2V7H9z"></path></svg></span>論理NGルール <span id=advancedRuleCount class=pill>0件</span></summary>
         <div class=sectionBody>
           <div class=row><label><input type=checkbox id=advancedNgRulesEnabled>複合NGルールを有効にする</label></div>
-          <div class=hint>
+          <div class=hint>同じ投稿者の動画数は、広告を除く元の検索結果1ページ内の件数です。追加分は取得元のページごとに数えます。投稿者が不明な動画があるページは、この条件の判定を保留します。
             <b>論理NGルール</b>は、複数の条件を組み合わせて「この条件に当てはまる動画だけNG」にする機能です。<br>
             <b>AND（論理積）</b> = すべて満たす / <b>OR（論理和）</b> = どれか1つ以上満たす / <b>NOT（論理否定）</b> = 条件の結果を反対にする、という意味です。<br>
             タイトル・説明文などは<b>文字列の部分一致 / 完全一致</b>、タグ・🔒タグロックは<b>タグ名1個との完全一致</b>、タグ数は<b>数値比較</b>として扱います。普通はまず <b>AND（すべて満たす）</b> を使えば十分です。
@@ -3003,13 +3037,13 @@
               <select id=autoFillPagerMode>
                 <option value=off>変更しない</option>
                 <option value=mark>取得済みページに斜線だけ付ける</option>
-                <option value=compactSkip>取得済みをまとめて未取得ページへ送る（推奨）</option>
+                <option value=compactSkip>走査範囲を表示（SPA OFFでは圧縮・スキップ）</option>
               </select>
             </label></div>
             <div class=row><label>取得済み範囲の後に表示 <input type=number id=pagerPreviewCount min=0 max=6> ページ（標準 2）</label></div>
             <div class=row><label><input type=checkbox id=statusAnimationEnabled>処理中ステータスをアニメーション表示</label></div>
           </div>
-          <div class=hint>取得方式の変更は保存後にページを再読み込みすると反映されます。API高速でもタグロック・複合NGなどの詳細判定は省略しません。追加取得上限は、従来方式ではHTMLのページ数、API方式では最大100件の取得回数です。</div>
+          <div class=hint>取得方式の変更は、次の検索移動または再読み込みから反映されます。API高速でもタグロック・複合NGなどの詳細判定は省略しません。追加取得上限は、従来方式ではHTMLのページ数、API方式では最大100件の取得回数です。</div>
           <div class=sectionTitle>通信・キャッシュ</div>
           <div class=grid2>
             <div class=row><label><input type=checkbox id=sessionDetailCacheEnabled>同一タブ内の動画詳細を再利用する</label></div>
@@ -3021,7 +3055,7 @@
             <div class=row><label><input type=checkbox id=selfAdWarningEnabled>自演広告の可能性を警告する（実験的）</label></div>
             <div class=hint>広告の見た目と広告者照合は別の通信です。「追加動画の広告」をOFFにしても、警告や広告関連の複合NGが有効なら広告者照合は行います。広告通信は全体で最大4件同時。広告者は最大100件を取得し、上限到達・取得失敗時は判定を保留します。</div>
           </div>
-          <div class=hint>APIが現在の検索条件・並びを再現できない場合は自動で従来方式へ戻ります。🔒 タグロック数NGは完全判定が必要です。採用率が低くても異常とは扱いません。ページ番号は「取得済み範囲＋未取得の先頭数ページ＋最終ページ＋次矢印」の順で表示します。詳細キャッシュは同一タブの再読み込みを跨いで再利用し、保存するのはタグ・ロック状態・投稿者などの詳細情報です。NG設定変更時は保存済みの最終判定を使わず、現在の設定で再判定します。</div>
+          <div class=hint>APIが現在の検索条件・並びを再現できない場合は自動で従来方式へ戻ります。🔒 タグロック数NGは完全判定が必要です。採用率が低くても異常とは扱いません。SPA対応がOFFのときはページ番号を「取得済み範囲＋未取得の番号＋最終ページ」に整理できます。ONでは元の番号を保ちます。詳細キャッシュは同一タブの再読み込みを跨いで再利用し、保存するのはタグ・ロック状態・投稿者などの詳細情報です。NG設定変更時は保存済みの最終判定を使わず、現在の設定で再判定します。</div>
         </div>
       </details></div>
 
@@ -3055,7 +3089,7 @@
           <div class=hint>「自動」はニコニコ画面の実際の背景色を見てライト/ダークを判定します。ダーク配色は真っ黒・真っ白を避け、暗い青灰色の背景と少し抑えた文字色にして長時間見ても眩しすぎない配色にしています。</div>
           <div class=row><label><input type=checkbox id=openNewWindow>動画を新しいタブで開く</label></div>
           <div class=row><label><input type=checkbox id=spaNavigationFix>SPA移動に合わせてNG判定を更新する（推奨）</label></div>
-          <div class=hint>タグ・検索語・ページ番号・並び順・絞り込みを変えたとき、画面を再読み込みせず新しい検索結果のNG判定を開始します。「戻る・進む」にも対応します。ONではニコニコ本来のページ番号リンクを使うため、取得済みページを飛ばすページャー変更は休止します。</div>
+          <div class=hint>タグ・検索語・ページ番号・並び順・絞り込みを変えたとき、画面を再読み込みせず新しい検索結果のNG判定を開始します。「戻る・進む」にも対応します。ONでは元のページ番号リンクを保ち、走査済みの番号に斜線と範囲を表示します。次へリンクの行き先は変えません。</div>
           <div class=row><label><input type=checkbox id=useGetThumbInfo>動画詳細情報を取得する</label></div>
           <div class=row><label><input type=checkbox id=movieInfoTogglable>タグ・ユーザー・チャンネルの表示切替</label></div>
           <div class=row><label><input type=checkbox id=descriptionTogglable>動画説明の表示切替</label></div>
@@ -3090,30 +3124,30 @@
   });
 
   var help = {
-    autoFillEnabled: 'NG判定後に表示できる動画が目標件数へ達するまで後続候補を取得します。',
-    autoFillTargetCount: '画面上に実際に表示する非NG動画の目標件数です。',
-    autoFillMaxExtraPages: '追加取得する上限です。0なら最終ページまで制限しません。',
-    autoFillInfoMode: '安定性重視なら従来方式。API併用/高速は検索APIを使い、条件や結果を照合できない場合は従来方式へ戻ります。高速方式は明確なNGを事前除外します。変更後はページの再読み込みが必要です。',
+    autoFillEnabled: 'NGで減った分を、次のページから自動で補います。OFFでは現在のページだけをNG判定します。',
+    autoFillTargetCount: '表示したい動画数です。例：60なら、NGを除いて60件になるまで補充します。検索結果の終わりでは60件未満になることがあります。',
+    autoFillMaxExtraPages: '1回の検索で追加取得してよい上限です。少なくすると通信量を抑えられます。0は制限なしなので、NGが多い検索では取得が長く続くことがあります。',
+    autoFillInfoMode: '従来方式はニコニコのページ順を使います。API方式はまとめて候補を取得しますが、検索条件や並び順を再現できない場合は従来方式に戻ります。「同じ投稿者の動画数」を使う場合も従来方式です。変更は次の検索移動または再読み込みから反映します。',
     thumbInfoConcurrency: 'GetThumbInfoを同時に取得する本数です。大きすぎると通信失敗が増える場合があります。',
     autoFillDetailBatchMax: '1回に完全NG判定へ送る最大候補数です。低NG率では小さめ、高NG率では大きめが効率的です。',
     statusPanelMode: '右下の進捗パネルの表示量を選択します。',
     detailUiTheme: 'タグ・投稿者情報、操作ボタン、設定画面などスクリプト独自UIの配色です。自動はニコニコ本体の実背景色から判定します。',
-    autoFillPagerMode: '自動取得済みのページを斜線・圧縮し、次矢印を最初の未取得ページへ変更できます。',
-    pagerPreviewCount: '取得済み範囲の直後に通常リンクとして残す未取得ページ数です。2なら 20–31 32 33 … 157 → のように表示します。',
+    autoFillPagerMode: 'SPA対応がONのときは、走査済みのページに斜線と範囲の説明を表示します。番号・次へリンクの行き先は変わりません。SPA対応がOFFのときだけ、従来の範囲圧縮・取得済みページのスキップを使います。OFFならページ番号を装飾しません。',
+    pagerPreviewCount: 'SPA対応がOFFのとき、走査済み範囲のあとに何ページ分の番号を残すかを指定します。SPA対応がONのときは元の番号をすべて残すため、この設定は使いません。',
     statusAnimationEnabled: '処理中だけ右下ステータスに回転インジケーターを表示します。',
-    sessionDetailCacheEnabled: '同じタブで一度取得したタグ・タグロック・投稿者情報をsessionStorageへ保存し、ページ移動後の再取得を省略します。',
+    sessionDetailCacheEnabled: '取得済みのタグ・投稿者情報を同じタブに保存して、再読み込み後も再利用します。保存中に情報が変わると、有効期限まで古い情報で判定する場合があります。OFFでもSPA移動中は直近2分・最大512件をメモリに保持します。NG判定は常に現在の設定でやり直します。',
     sessionDetailCacheTtlMinutes: 'キャッシュを何分まで有効とみなすかです。期限切れは自動削除します。',
     sessionDetailCacheMaxEntries: 'キャッシュ件数の上限です。古いものから削除します。',
     autoFillAdMode: '追加動画の広告リボン・提供者表示の取得範囲です。広告者照合の警告・複合NGとは独立しています。無駄を抑えるには「表示動画のみ」を選んでください。',
     selfAdWarningEnabled: '広告者一覧を確認し、投稿者本人によるニコニ広告の可能性を警告します。追加通信が発生します。',
     spaNavigationFix: '画面を再読み込みせず、検索結果の切り替わりに合わせて古い処理を終了しNG判定を開始します。SPA利用時は本来のページ番号リンクを維持します。',
-    developerMode: '診断ログを増やします。通常利用は軽量またはOFFで十分です。',
+    developerMode: '不具合を調べるためのログをコンソールに表示します。通常はOFFで使えます。他の拡張機能やニコニコ本体のログには影響しません。',
     developerDiagnosticMode: '軽量はローカル監査のみ、完全はAPI通信を含む3方式比較、手動のみはボタンを押した時だけ診断します。',
     ngLockedTagCountEnabled: 'ロックされたタグ数がしきい値以上の動画をNGにします。',
-    ngLockedTagCountThreshold: 'ニコニコのタグ上限に合わせ1～11で指定します。',
-    advancedNgRulesEnabled: 'AND / OR / NOT を自由に入れ子にし、比較演算子まで指定できる論理NG判定を有効にします。',
-    openNewWindow: '動画のサムネイルやタイトルを左クリックしたとき、新しいタブで開きます。Ctrl/Cmd/中クリックなどブラウザ標準操作も維持します。Consoleの [new-tab] で動作監査できます。',
-    useGetThumbInfo: 'タグのロック状態・投稿者など完全NG判定に必要な詳細情報を取得します。'
+    ngLockedTagCountThreshold: 'NGにするロックタグ数の境界です。例：11なら11個以上の動画が対象です。タグの内容は問いません。',
+    advancedNgRulesEnabled: '複数の条件を組み合わせます。AND＝すべて満たす、OR＝どれか満たす、NOT＝結果を反転。例：タイトルに「実況」を含み、ロックタグが11個以上。必要な情報が取得できない条件は保留し、NOTでも勝手にNGにしません。',
+    openNewWindow: '動画のタイトル・サムネイルをクリックすると新しいタブで開きます。▼、あとで見る、メニューなどのボタンには適用しません。Ctrlキーや中央ボタンの標準操作も使えます。',
+    useGetThumbInfo: 'タグ・ロック状態・投稿者を取得して判定します。OFFでは、詳細情報が必要なNG条件を判定できません。通信を減らしたい場合は、まず広告照合や追加取得上限を見直してください。'
   };
   Object.keys(help).forEach(function(id) {
     var el = document.getElementById(id);
@@ -3126,6 +3160,16 @@
     icon.textContent = '?';
     icon.title = help[id];
     row.appendChild(icon);
+    var explanation = document.createElement('div');
+    explanation.className = 'settingExplanation';
+    explanation.id = id + '-explanation';
+    explanation.textContent = help[id];
+    explanation.style.cssText = 'font-size:12px;line-height:1.6;color:var(--muted);margin:3px 0 12px';
+    if (row.parentElement.classList.contains('grid2')) {
+      var field = document.createElement('div');
+      row.replaceWith(field); field.append(row, explanation);
+    } else row.after(explanation);
+    el.setAttribute('aria-describedby', explanation.id);
   });
 })();
 </script>
@@ -3686,7 +3730,7 @@ html[data-nrn-ui-theme="dark"] .nrn-contributor-ng-name-button:hover {
           b.dataset.type = ngName ? 'remove' : 'add'
           b.dataset.matched = ngName
           emphasizeMatchedText(
-            this.elem.querySelector('.nrn-contributor-link'),
+            this.elem.querySelector('.nrn-owner-name') || this.elem.querySelector('.nrn-contributor-link'),
             ngName,
             function(text) {
               var result = this.elem.ownerDocument.createElement('span')
@@ -4420,6 +4464,7 @@ html[data-nrn-ui-theme="dark"] .nrn-contributor-ng-name-button:hover {
         },
         unbind() {
           this._disposed = true
+          this._disposeEnhancements?.()
           this.movieInfo.unbind()
           this._stopMovieInfoReserve()
           this.description.unbind()
@@ -4521,13 +4566,14 @@ html[data-nrn-ui-theme="dark"] .nrn-contributor-ng-name-button:hover {
         this._disposed = true
         this._abortController?.abort()
         this._observer?.disconnect()
+        cancelAnimationFrame(this._mutationFrame)
         for (const observer of this._observers || []) observer.disconnect()
         for (const root of new Set(this._toggleToMovieRoot.values())) {
           root.unbind()
           if (root.elem.dataset.nrnAutofill === 'true') { root.elem.remove(); continue }
           for (const node of [root.movieInfo.elem, root.movieInfo.toggle, root.description.elem,
               root.description.openButton, root.description.closeButton]) node?.remove()
-          root.elem.querySelectorAll('.nrn-action-pane, .nrn-self-ad-warning, .nrn-self-ad-inline-badge, .nrn-self-ad-card-badge').forEach(node => node.remove())
+          root.elem.querySelectorAll('.nrn-action-pane, .nrn-self-ad-warning, .nrn-self-ad-inline-badge, .nrn-self-ad-card-badge, .nrn-ng-reasons').forEach(node => node.remove())
           const title = root.movieTitle?.elem
           if (title?.classList.contains('nrn-movie-title')) title.replaceWith(this.doc.createTextNode(title.textContent))
           for (const saved of root._nrnOriginalAnchors || []) {
@@ -4691,6 +4737,13 @@ html[data-nrn-ui-theme="dark"] .nrn-contributor-ng-name-button:hover {
           injected.add(card);
           paint(card, detect(page.doc)?.mode || current?.mode || 'tile');
         },
+        rememberState(elem) {
+          if (!elem.classList.contains('nrn-parsed')) return;
+          const root = page.movieRoots.find(root => root.elem === elem);
+          if (!root) return;
+          const saved = snapshots.get(root);
+          if (!saved || elem.contains(saved.title)) snapshots.set(root, snapshot(root));
+        },
         sync() {
           // Search/order/page navigation belongs to the existing navigation controller.
           if (route() !== scope) return;
@@ -4703,7 +4756,7 @@ html[data-nrn-ui-theme="dark"] .nrn-contributor-ng-name-button:hover {
           for (const root of page.movieRoots) {
             if (injected.has(root.elem)) continue;
             const replacement = byId.get(root.movieId);
-            const saved = snapshots.get(root);
+            const saved = root.elem.isConnected ? snapshots.get(root) : snapshot(root);
             const replacedContent = replacement === root.elem && saved && !root.elem.contains(saved.title);
             if (replacement && ((!root.elem.isConnected && !replacement.classList.contains('nrn-parsed')) || replacedContent)) {
               reattach(root, replacement, saved);
@@ -4830,8 +4883,9 @@ html[data-nrn-ui-theme="dark"] .nrn-contributor-ng-name-button:hover {
           const f = e => {
             e.preventDefault();
             e.stopPropagation();
-            if (e.target.classList.contains('nrn-movie-tag-link') || e.target.classList.contains('nrn-contributor-link')) {
-              NewTabService.open(e.target.href)
+            const link = e.target.closest('.nrn-movie-tag-link, a.nrn-contributor-link')
+            if (link) {
+              NewTabService.open(link.href)
             } else {
               controller._clicked(e)
             }
@@ -4852,7 +4906,7 @@ html[data-nrn-ui-theme="dark"] .nrn-contributor-ng-name-button:hover {
         get titleElem() {
           let e = this.elem.querySelector('.nrn-movie-title');
           if (!e) {
-            const a = this.elem.querySelector('a[data-anchor-area][href^="/watch/"] > div > p');
+            const a = this.elem.querySelector('a[data-anchor-area][href^="/watch/"] > div > p') || (this.elem.matches('a[data-anchor-detail="nicoad"]') ? this.elem.querySelector('p') : null);
             e = wrapTitleTextNodeInElement(a);
           }
           return e;
@@ -5253,6 +5307,16 @@ html[data-nrn-ui-theme="dark"] .nrn-contributor-ng-name-button:hover {
           }
         })
 
+        const ownerIds = items.map(item => item.owner?.id == null ? '' : String(item.owner.id))
+        if (ownerIds.length && ownerIds.every(id => /^(?:ch)?[1-9][0-9]*$/.test(id))) {
+          const counts = new Map(), seen = new Set()
+          const keys = ownerIds.map((id, i) => (items[i].owner.ownerType || items[i].owner.type || (id.startsWith('ch') ? 'channel' : 'user')) + ':' + id.replace(/^ch/, ''))
+          items.forEach((item, i) => {
+            if (seen.has(item.id)) return
+            seen.add(item.id); counts.set(keys[i], (counts.get(keys[i]) || 0) + 1)
+          })
+          items.forEach((item, i) => { item.__nrnPageContributorCount = counts.get(keys[i]) })
+        }
         return {
           items: items,
           maxPage: maxPage,
@@ -5331,11 +5395,13 @@ html[data-nrn-ui-theme="dark"] .nrn-contributor-ng-name-button:hover {
         var owner = item.owner || {}
         var ownerName = owner.name || (owner.visibility === 'hidden' ? '(投稿者非公開)' : '不明')
         var ownerIcon = owner.iconUrl || 'https://secure-dcdn.cdn.nimg.jp/nicoaccount/usericon/defaults/blank.jpg'
-        var ownerUrl = owner.id ? ('https://www.nicovideo.jp/user/' + owner.id) : ''
+        var channelOwner = owner.ownerType === 'channel' || owner.type === 'channel' || /^ch[0-9]+$/.test(String(owner.id))
+        var ownerUrl = owner.id ? (channelOwner ? 'https://ch.nicovideo.jp/channel/ch' + String(owner.id).replace(/^ch/, '') : 'https://www.nicovideo.jp/user/' + owner.id) : ''
         var root = doc.createElement('div')
         root.className = 'Pressable cursor_pointer d_flex cq-t_inline-size min-w_thumbnail.min max-w_thumbnail.max w_100% nrn-autofill-pending'
         root.setAttribute('data-decoration-video-id', item.id)
         root.setAttribute('data-nrn-autofill', 'true')
+        if (Number.isFinite(item.__nrnPageContributorCount)) root.dataset.nrnPageContributorCount = String(item.__nrnPageContributorCount)
         root.setAttribute('data-anchor-area', 'main')
         root.setAttribute('data-anchor-page',
           location.pathname.startsWith('/tag/') ? 'tag' :
@@ -5453,12 +5519,14 @@ html[data-nrn-ui-theme="dark"] .nrn-contributor-ng-name-button:hover {
         if (bar.elem.isConnected) {
           return;
         }
-        const e = this.doc.querySelector('[aria-label="nicovideo-content"] section > div:first-of-type');
+        const e = Array.from(this.doc.querySelectorAll('[aria-label="nicovideo-content"] section > div:first-of-type')).find(node => !node.closest('.nrn-parsed, [data-decoration-video-id], .nrn-movie-info-container, [data-anchor-detail="nicoad"]'));
         if (e) {
           e.after(bar.elem);
           return;
         }
-        this.doc.querySelector('[aria-label="nicovideo-content"] .grid-area_header')?.append(bar.elem);
+        const header = this.doc.querySelector('[aria-label="nicovideo-content"] .grid-area_header');
+        if (header) header.append(bar.elem);
+        else this.doc.querySelector('[aria-label="nicovideo-content"]')?.prepend(bar.elem);
       },
       parse(target) {
         if (!isTargetPage()) return [];
@@ -5503,17 +5571,35 @@ html[data-nrn-ui-theme="dark"] .nrn-contributor-ng-name-button:hover {
         if (togglable) togglable.hidden = true
       },
       observeMutation(callback) {
-        this._observer = new MutationObserver((records, observer) => {
-          if (this._disposed || !isTargetPage()
-              || new URL(this._sourceUrl).pathname + new URL(this._sourceUrl).search !== location.pathname + location.search) return;
-          const parsed = this.parse();
-          if (parsed.length > 0) {
-            callback(parsed, true);
-            this.unbindUnconnectedMovieRoots();
-          }
-          this.addConfigBar();
-        });
-        this._observer.observe(this.doc.body, {childList: true, subtree: true, attributes: true, attributeFilter: ["class"]});
+        const transient = '[data-scope="presence"], [data-scope="tooltip"], video, canvas, .nrn-movie-info-container, .nrn-ng-reasons'
+        this._observer = new MutationObserver(records => {
+          if (this._disposed || !isTargetPage()) return
+          const source = new URL(this._sourceUrl)
+          if (source.pathname + source.search !== location.pathname + location.search) return
+          const relevant = records.some(record => {
+            if (record.target.nodeType === 1 && record.target.closest(transient)) return false
+            if (record.type === 'attributes') {
+              const nativeClasses = value => String(value || '').split(/\s+/).filter(name => name && !name.startsWith('nrn-')).sort().join(' ')
+              if (nativeClasses(record.oldValue) === nativeClasses(record.target.className)) {
+                this.resultLayout.rememberState(record.target)
+                return false
+              }
+            }
+            const nodes = [...record.addedNodes, ...record.removedNodes]
+            if (nodes.length && nodes.every(node => node.nodeType !== 1 || node.matches(transient))) return false
+            return true
+          })
+          if (!relevant || this._mutationFrame != null) return
+          this._mutationFrame = requestAnimationFrame(() => {
+            this._mutationFrame = null
+            if (this._disposed) return
+            const parsed = this.parse()
+            if (parsed.length > 0) { callback(parsed, true); this.unbindUnconnectedMovieRoots() }
+            this.addConfigBar()
+            this._refreshPagerAnnotations?.()
+          })
+        })
+        this._observer.observe(this.doc.body, {childList:true, subtree:true, attributes:true, attributeFilter:['class'], attributeOldValue:true})
       },
       get css() {
         return ResultLayout.css + `#nrn-config-button,
@@ -6994,6 +7080,9 @@ div:has(> div > a[data-anchor-page="ranking_genre"][href^="/watch/"] > div > p),
 
     var onClickCapture = function(e) {
       if (!config || !config.openNewWindow.value) return
+      // Advertisement cards can themselves be anchors. Their nested controls
+      // must reach their handlers instead of opening the outer watch link.
+      if (e.target?.closest?.('button, input, select, textarea, [role="button"], .nrn-movie-info-toggle, .nrn-action-pane, .nrn-movie-info-container, .nrn-description, .nrn-card-tools')) return
       var a = findVideoAnchor(e.target)
       if (!a) return
 
@@ -7039,6 +7128,8 @@ div:has(> div > a[data-anchor-page="ranking_genre"][href^="/watch/"] > div > p),
         records.forEach(function(rec) {
           rec.addedNodes.forEach(function(node) {
             if (node.nodeType !== Node.ELEMENT_NODE) return
+            if (node.closest('[data-scope="presence"], [data-scope="tooltip"], video, canvas')) return
+            if (!node.matches('a[href]') && !node.querySelector('a[href]')) return
             counters.mutationNodes++
             queueMutationNode(node)
           })
@@ -7418,6 +7509,160 @@ div:has(> div > a[data-anchor-page="ranking_genre"][href^="/watch/"] > div > p),
   // ========================================================================
   // Composition root / application startup
   // ========================================================================
+  var CardEnhancements = (function() {
+    const blankIcon = 'https://secure-dcdn.cdn.nimg.jp/nicoaccount/usericon/defaults/blank.jpg'
+    function highlight(node, terms) {
+      if (!node) return
+      const text = node.textContent, upper = text.toUpperCase()
+      terms = [...new Set(terms.filter(Boolean).map(value => String(value).toUpperCase()))]
+      const signature = JSON.stringify([text, terms])
+      if (node._nrnMarkerSignature === signature) return
+      node._nrnMarkerSignature = signature
+      const ranges = []
+      for (const term of terms) {
+        for (let at = upper.indexOf(term); at >= 0; at = upper.indexOf(term, at + term.length)) ranges.push([at, at + term.length])
+      }
+      ranges.sort((a, b) => a[0] - b[0])
+      const merged = []
+      for (const range of ranges) {
+        const last = merged[merged.length - 1]
+        if (last && range[0] <= last[1]) last[1] = Math.max(last[1], range[1])
+        else merged.push(range)
+      }
+      const fragment = node.ownerDocument.createDocumentFragment()
+      let position = 0
+      for (const [start, end] of merged) {
+        fragment.append(node.ownerDocument.createTextNode(text.slice(position, start)))
+        const mark = node.ownerDocument.createElement('mark')
+        mark.className = 'nrn-reason-mark'; mark.textContent = text.slice(start, end)
+        fragment.append(mark); position = end
+      }
+      fragment.append(node.ownerDocument.createTextNode(text.slice(position)))
+      node.replaceChildren(fragment)
+    }
+    function reasons(movie) {
+      const labels = [], fields = new Set(), titleTerms = [], nameTerms = [], tagTerms = []
+      if (movie.ngId) labels.push('動画IDがNG登録済み')
+      if (movie.ngTitle) { labels.push('タイトル：' + movie.ngTitle); titleTerms.push(movie.ngTitle) }
+      const contributor = movie.contributor
+      if (contributor?.ngId || (contributor?.type === 'channel' && contributor.ng)) labels.push('投稿者IDがNG登録済み')
+      if (contributor?.ngName) { labels.push('投稿者名：' + contributor.ngName); nameTerms.push(contributor.ngName) }
+      for (const tag of movie.tags || []) if (tag.ng) { labels.push('タグ：' + tag.name); tagTerms.push(tag.name) }
+      if (movie.ngByLockedTagCount) { labels.push('ロックタグ数が ' + movie._lockedTagCountThreshold + ' 個以上'); fields.add('lockedTagCount') }
+      if (movie.ngByAdvancedRule) {
+        const matches = AdvancedNgRules.match(movie, movie._advancedRulesEnabled, movie._advancedRulesJson, true)
+        const rules = AdvancedNgRules.parse(movie._advancedRulesJson)
+        for (const match of matches) {
+          const rule = rules.find(rule => rule.id === match.id)
+          labels.push('複合NG「' + match.name + '」：' + AdvancedNgRules.expressionText(rule?.expression))
+          for (const item of match.trace || []) {
+            if (item.kind !== 'condition') continue
+            fields.add(item.field)
+            // Negative/absent conditions have no matching substring to highlight.
+            if (item.result !== true || item.not || !['contains', 'eq'].includes(item.operator)) continue
+            if (item.field === 'title') titleTerms.push(item.expected)
+            if (item.field === 'contributorName') nameTerms.push(item.expected)
+            if (['tag', 'lockedTag'].includes(item.field)) tagTerms.push(item.expected)
+          }
+        }
+      }
+      return {labels, fields, titleTerms, nameTerms, tagTerms}
+    }
+    function ownerLink(doc, owner, native) {
+      const url = owner?.url || native?.href
+      const knownName = owner?.name || native?.querySelector('img')?.alt || native?.textContent?.trim()
+      const link = doc.createElement(url ? 'a' : 'span')
+      link.className = 'nrn-contributor-link nrn-owner-row'
+      if (url) { link.href = url; link.target = '_blank'; link.rel = 'noopener noreferrer' }
+      const image = doc.createElement('img')
+      image.alt = ''; image.loading = 'lazy'; image.decoding = 'async'; image.width = image.height = 24
+      image.src = native?.querySelector('img')?.src || (owner?.type === 'user' && Number(owner.id) > 0
+        ? 'https://secure-dcdn.cdn.nimg.jp/nicoaccount/usericon/' + Math.floor(owner.id / 10000) + '/' + owner.id + '.jpg' : blankIcon)
+      image.addEventListener('error', () => { if (image.src !== blankIcon) image.src = blankIcon }, {once:true})
+      const name = doc.createElement('span'); name.className = 'nrn-owner-name'
+      name.textContent = knownName || '投稿者情報なし'
+      if (!owner || !knownName || /投稿者非公開|削除済み|退会済み/.test(knownName)) link.classList.add('nrn-owner-unavailable')
+      link.append(image, name)
+      return link
+    }
+    function attach(root, movie, page) {
+      let frame = null, ownerSignature = '', previousSignature = ''
+      const doc = page.doc
+      const nativeOwner = root.elem.querySelector('a[href*="/user/"]:not(.nrn-contributor-link), a[href*="/channel/"]:not(.nrn-contributor-link)')
+      const render = function() {
+        frame = null
+        if (root._disposed || page._disposed) return
+        root.elem.classList.toggle('nrn-is-ng', Boolean(movie.ng))
+        const detail = reasons(movie)
+        let label = root.movieInfo.elem.querySelector(':scope > .nrn-ng-reasons')
+        if (!label && movie.ng) {
+          label = doc.createElement('div'); label.className = 'nrn-ng-reasons'
+          root.movieInfo.elem.prepend(label)
+        }
+        root.movieInfo.toggle.title = movie.ng ? detail.labels.join(' / ') : 'タグ・投稿者とNG理由を表示'
+        if (label) {
+          label.hidden = !movie.ng
+          const text = 'NG：' + detail.labels.join(' / ')
+          if (label.textContent !== text) label.textContent = text
+        }
+        const container = root.movieInfo.elem.querySelector('.nrn-contributor-container')
+        const owner = movie.contributor
+        const signature = JSON.stringify([owner?.type, owner?.id, owner?.name, owner?.ngName])
+        if (container && movie.thumbInfoDone && (ownerSignature !== signature || !container.querySelector('.nrn-owner-row img'))) {
+          const existing = container.querySelector('.nrn-contributor-link')
+          const link = ownerLink(doc, owner?.type === 'unknown' ? null : owner, nativeOwner)
+          if (existing) {
+            if (existing.classList.contains('nrn-ng-id-contributor-link')) link.classList.add('nrn-ng-id-contributor-link')
+            existing.replaceWith(link)
+          } else container.prepend(link)
+          ownerSignature = signature
+        }
+        const summary = JSON.stringify([detail.labels, [...detail.fields], movie.tags.map(t => [t.name, t.lock]), movie.pageContributorCount])
+        if (summary === previousSignature && root._nrnPresentationRendered) return
+        previousSignature = summary; root._nrnPresentationRendered = true
+        highlight(root.movieTitle?.elem || root.titleElem, detail.titleTerms)
+        highlight(container?.querySelector('.nrn-owner-name'), detail.nameTerms)
+        const count = root.movieInfo.elem.querySelector('.nrn-tag-section .nrn-info-section-title')
+        if (count) {
+          count.replaceChildren()
+          const locked = doc.createElement(detail.fields.has('lockedTagCount') ? 'mark' : 'span')
+          locked.className = 'nrn-lock-count'; locked.textContent = '🔒' + movie.tags.filter(t => t.lock).length
+          const all = doc.createElement(detail.fields.has('tagCount') ? 'mark' : 'span')
+          all.textContent = String(movie.tags.length)
+          count.append(locked, doc.createTextNode(' / '), all)
+          if (Number.isFinite(movie.pageContributorCount)) {
+            const posts = doc.createElement(detail.fields.has('pageContributorCount') ? 'mark' : 'span')
+            posts.textContent = '　同じ投稿者：このページに ' + movie.pageContributorCount + ' 件'
+            count.append(posts)
+          }
+        }
+        for (const tag of root.movieInfo.elem.querySelectorAll('.nrn-movie-tag-link')) {
+          const matched = detail.tagTerms.some(term => String(term).toUpperCase() === tag.textContent.toUpperCase())
+          tag.classList.toggle('nrn-reason-tag', matched)
+        }
+      }
+      const schedule = () => { if (frame == null && !page._disposed) frame = requestAnimationFrame(render) }
+      movie.on('ngReasonsChanged', schedule); movie.on('thumbInfoDone', schedule)
+      root._disposeEnhancements = () => {
+        cancelAnimationFrame(frame); movie.off('ngReasonsChanged', schedule); movie.off('thumbInfoDone', schedule)
+      }
+      schedule()
+    }
+    const css = `
+.nrn-is-ng:not(.nrn-hide):not(.nrn-autofill-pending):not(.nrn-autofill-overflow) { outline:2px dashed #cf3441; outline-offset:-2px; }
+.nrn-ng-reasons { color:#ad2431; background:#fff0f1; font-size:12px; line-height:1.5; padding:3px 5px; overflow-wrap:anywhere; flex-basis:100%; }
+.nrn-ng-reasons[hidden] { display:none !important; }
+.nrn-reason-mark, .nrn-movie-info-container .nrn-movie-tag-link.nrn-reason-tag, .nrn-info-section-title mark { background:#ffe29a; color:#612e00; text-decoration:none; }
+.nrn-owner-row { display:inline-flex; align-items:center; gap:4px; min-width:0; font-weight:bold; }
+.nrn-owner-row img { width:24px; height:24px; min-width:24px; border-radius:50%; object-fit:cover; }
+.nrn-owner-unavailable { color:#828892 !important; }
+.nrn-page-consumed { background:repeating-linear-gradient(135deg,transparent,transparent 5px,#8c929755 5px,#8c929755 6px); text-decoration:line-through; }
+.nrn-pager-summary { display:block; font-size:12px; color:#626a75; margin:4px 0; }
+a.nrn-parsed[data-anchor-detail="nicoad"] { padding-bottom:28px; }
+a.nrn-parsed[data-anchor-detail="nicoad"] > .nrn-movie-info-toggle { background:#fff; box-shadow:0 0 0 1px #aeb5be; }
+`
+    return {attach, reasons, highlight, ownerLink, css}
+  })()
   var Main = (function() {
     var MAINTENANCE_MANIFEST = Object.freeze({
       version:'14.0',
@@ -7459,6 +7704,7 @@ div:has(> div > a[data-anchor-page="ranking_genre"][href^="/watch/"] > div > p),
       result.bindToMovieViewMode(movieViewMode)
       result.bindToConfig(movieViewMode.config)
       result.bindToMovie(movie)
+      CardEnhancements.attach(result, movie, page)
       return result
     }
     var createMovieRoots = function(resultsOfParsing, model, page, controller) {
@@ -7485,11 +7731,19 @@ div:has(> div > a[data-anchor-page="ranking_genre"][href^="/watch/"] > div > p),
         return GM.xmlHttpRequest
       return GM_xmlhttpRequest
     }
+    // Short-lived successful metadata only; NG decisions always use current settings.
+    var recentDetails = new Map()
     var createThumbInfoRequester = function(movies, movieViewModes) {
+      var applyDetails = ThumbInfoListener.forCompleted(movies)
       var thumbInfo = new ThumbInfo(
           gmXmlHttpRequest(),
           movies.config.thumbInfoConcurrency.value)
-        .on('completed', ThumbInfoListener.forCompleted(movies))
+        .on('completed', function(info) {
+          recentDetails.delete(info.id)
+          recentDetails.set(info.id, {info:info, at:Date.now()})
+          if (recentDetails.size > 512) recentDetails.delete(recentDetails.keys().next().value)
+          applyDetails(info)
+        })
         .on('errorOccurred', ThumbInfoListener.forErrorOccurred(movies))
       movies.config.thumbInfoConcurrency.on('changed', function(v) {
         thumbInfo.setConcurrent(v)
@@ -7497,6 +7751,11 @@ div:has(> div > a[data-anchor-page="ranking_genre"][href^="/watch/"] > div > p),
       })
       var request = function(prefer) {
         var allIds = movieViewModes.sort().map(function(m) { return m.movie.id })
+        for (var id of allIds) {
+          var cached = recentDetails.get(id)
+          if (cached && Date.now() - cached.at > 120000) { recentDetails.delete(id); cached = null }
+          if (cached && !movies.get(id).thumbInfoDone) applyDetails(cached.info)
+        }
         var pendingIds = allIds.filter(function(id) {
           var movie = movies.get(id)
           return movie && !movie.thumbInfoDone
@@ -7532,6 +7791,10 @@ div:has(> div > a[data-anchor-page="ranking_genre"][href^="/watch/"] > div > p),
           movies.setIfAbsent(resultsOfParsing.map(function(r) {
             return new Movie(r.movie.id, r.movie.title)
           }))
+          for (var row of resultsOfParsing) {
+            var count = Number(row.rootElem.dataset.nrnPageContributorCount)
+            if (Number.isFinite(count) && count > 0) movies.get(row.movie.id).setPageContributorCount(count)
+          }
         },
       }
     }
@@ -7784,6 +8047,7 @@ div:has(> div > a[data-anchor-page="ranking_genre"][href^="/watch/"] > div > p),
         for (var handle of handles) { try { handle.abort?.() } catch (e) {} }
         handles.clear(); listeners.forEach(function(remove) { remove() })
         delete model.config._nrnDiagnosticHook
+        delete page._refreshPagerAnnotations
         if (typeof restorePagerUi === 'function') restorePagerUi()
       }
       var LOG = '[NicoNicoRankingNG autoFill v14.1]'
@@ -8728,6 +8992,7 @@ div:has(> div > a[data-anchor-page="ranking_genre"][href^="/watch/"] > div > p),
       }
 
       var statusTimer = setInterval(function() {
+        if (initialized && !fetching) return
         if (!document.contains(badge)) {
           clearInterval(statusTimer)
           return
@@ -9101,6 +9366,10 @@ div:has(> div > a[data-anchor-page="ranking_genre"][href^="/watch/"] > div > p),
 
       var requestedMode = model.config.autoFillInfoMode.value
       var useSnapshot = requestedMode !== 'legacy' && snapshotDescriptor.supported
+      if (useSnapshot && advancedRulesUseField('pageContributorCount')) {
+        useSnapshot = false
+        fallbackReason = 'ページ内投稿数を正確に数えるため従来方式を使用'
+      }
 
       if (requestedMode !== 'legacy' && !snapshotDescriptor.supported) {
         fallbackReason = snapshotDescriptor.reason
@@ -9366,6 +9635,8 @@ div:has(> div > a[data-anchor-page="ranking_genre"][href^="/watch/"] > div > p),
           var sourceUrl = new URL(sourceHref)
           var u = new URL(href, sourceHref)
           if (u.origin !== sourceUrl.origin || u.pathname !== sourceUrl.pathname) return null
+          const criteria = url => JSON.stringify([...url.searchParams].filter(([key]) => !['page','ref','from'].includes(key)).sort())
+          if (criteria(u) !== criteria(sourceUrl)) return null
           var p = Number(u.searchParams.get('page') || 1)
           return Number.isFinite(p) && p >= 1 ? Math.trunc(p) : null
         } catch (e) {
@@ -9584,8 +9855,35 @@ div:has(> div > a[data-anchor-page="ranking_genre"][href^="/watch/"] > div > p),
         return inserted
       }
 
+      const spaPagerLinks = new Set()
+      page._refreshPagerAnnotations = function() {
+        if (initialized && model.config.spaNavigationFix.value) updatePagerUi('native pager updated')
+      }
       var updatePagerUi = function(reason) {
-        if (page._disposed || model.config.spaNavigationFix.value) return
+        if (page._disposed) return
+        if (model.config.spaNavigationFix.value) {
+          var oldSummary = page.doc.querySelector('.nrn-pager-summary')
+          if (model.config.autoFillPagerMode.value === 'off') { oldSummary?.remove(); return }
+          var scanned = new Set([currentPageNumber(), ...fetchedPageNumbers])
+          var nativeLinks = Array.from(page.doc.querySelectorAll('a[href]')).filter(isNumericPagerAnchor)
+            .filter(function(a) { return pageNumberFromHref(a.href) != null })
+          nativeLinks.forEach(function(a) {
+            spaPagerLinks.add(a)
+            const consumed = scanned.has(pageNumberFromHref(a.href))
+            if (a.classList.contains('nrn-page-consumed') !== consumed) a.classList.toggle('nrn-page-consumed', consumed)
+          })
+          for (const link of spaPagerLinks) if (!link.isConnected) spaPagerLinks.delete(link)
+          if (nativeLinks.length) {
+            var summary = oldSummary || page.doc.createElement('span')
+            if (!summary.className) summary.className = 'nrn-pager-summary'
+            const text = '走査済みページ：' + compactRanges([...scanned]).map(function(r) {
+              return r.start === r.end ? String(r.start) : r.start + '–' + r.end
+            }).join('、')
+            if (summary.textContent !== text) summary.textContent = text
+            if (!summary.isConnected) nativeLinks[0].parentElement.after(summary)
+          }
+          return
+        }
         var mode = model.config.autoFillPagerMode.value
         if (mode === 'off') return
 
@@ -9768,6 +10066,8 @@ div:has(> div > a[data-anchor-page="ranking_genre"][href^="/watch/"] > div > p),
       })
 
       var restorePagerUi = function() {
+        page.doc.querySelectorAll('.nrn-pager-summary').forEach(function(node) { node.remove() })
+        spaPagerLinks.forEach(link => link.classList.remove('nrn-page-consumed')); spaPagerLinks.clear()
         page.doc.querySelectorAll('a[href], a[data-nrn-synthetic-next="true"]').forEach(function(a) {
           if (a.dataset.nrnSyntheticNext === 'true'
               || a.dataset.nrnSyntheticPage === 'true') {
@@ -11246,6 +11546,16 @@ div:has(> div > a[data-anchor-page="ranking_genre"][href^="/watch/"] > div > p),
         model.requestThumbInfo(true)
         var completed = await waitForThumbInfo([...originalMovieIds], 30000)
         if (page._disposed) return
+        const countedMovies = [...new Set(originalRoots.filter(root => root.elem.matches('[data-decoration-video-id][data-anchor-area="main"]:not([data-anchor-detail="nicoad"])')).map(root => root.movieId))]
+          .map(id => model.movies.get(id)).filter(Boolean)
+        if (completed && countedMovies.length && countedMovies.every(movie => movie.thumbInfoDone
+            && movie.error.type === 'NO_ERROR' && movie.contributor?.type !== 'unknown' && Number(movie.contributor?.id) > 0)) {
+          const counts = new Map()
+          const ownerKey = movie => movie.contributor.type + ':' + movie.contributor.id
+          countedMovies.forEach(movie => counts.set(ownerKey(movie), (counts.get(ownerKey(movie)) || 0) + 1))
+          countedMovies.forEach(movie => movie.setPageContributorCount(counts.get(ownerKey(movie))))
+        }
+
         var thumbEnd = performance.now()
 
         if (!completed) {
@@ -11361,6 +11671,7 @@ div:has(> div > a[data-anchor-page="ranking_genre"][href^="/watch/"] > div > p),
         }
         console.log(LOG, '初期処理パフォーマンス:', initialPerformance)
         window.__nrnInitialPerformance = initialPerformance
+        updatePagerUi('initial checks completed')
 
         maybeFetchMore()
 
@@ -11625,6 +11936,7 @@ div:has(> div > a[data-anchor-page="ranking_genre"][href^="/watch/"] > div > p),
         DetailUiTheme.apply(config, document, 'initial')
         DetailUiTheme.watch(config, document)
         addStyle(DetailUiTheme.CSS)
+        addStyle(CardEnhancements.css)
         config.detailUiTheme.on('changed', function(v) {
           DetailUiTheme.apply(config, document, 'setting-changed:' + v)
         })

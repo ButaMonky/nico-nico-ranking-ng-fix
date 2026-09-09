@@ -16,6 +16,7 @@
       this._lockedTagCountEnabled = false
       this._lockedTagCountThreshold = Infinity
       this.ngByAdvancedRule = false
+      this.pageContributorCount = null
       this.advancedRuleMatches = []
       this._advancedRulesEnabled = false
       this._advancedRulesJson = '[]'
@@ -109,11 +110,19 @@
       },
       get contributor() { return this._contributor },
       set contributor(contributor) {
+        if (this._contributorNgListener) {
+          this._contributor.off('ngChanged', this._contributorNgListener)
+          this._contributor.off('ngReasonsChanged', this._contributorNgListener)
+        }
         this._contributor = contributor
         this.emit('contributorChanged', this._contributor)
         this._updateAdvancedRule()
         this._updateNg()
-        this._contributor.on('ngChanged', this._updateNg.bind(this))
+        if (contributor.type !== 'unknown') {
+          this._contributorNgListener = this._updateNg.bind(this)
+          contributor.on('ngChanged', this._contributorNgListener)
+          contributor.on('ngReasonsChanged', this._contributorNgListener)
+        }
       },
       get error() { return this._error },
       set error(error) {
@@ -130,6 +139,12 @@
         this.emit('thumbInfoDone')
       },
       get ng() { return this._ng },
+      setPageContributorCount(value) {
+        if (this.pageContributorCount === value) return
+        this.pageContributorCount = value
+        this._updateAdvancedRule()
+        this._updateNg()
+      },
       _updateNg() {
         var pre = this._ng
         this._ng = this.ngId
@@ -139,6 +154,7 @@
           || this.ngByLockedTagCount
           || this.ngByAdvancedRule
         if (pre !== this._ng) this.emit('ngChanged', this._ng)
+        this.emit('ngReasonsChanged')
       },
       addListenerToConfig(config) {
         config.ngMovies.on('changed', this.updateNgId.bind(this))
@@ -195,4 +211,3 @@
     }
     return Movies
   })()
-

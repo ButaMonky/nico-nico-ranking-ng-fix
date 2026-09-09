@@ -45,3 +45,38 @@ test('generated: failed metadata is undecided, a later successful response clear
  ThumbInfoListener.forCompleted(movies)({id:'sm1',description:'',tags:[],contributor:{type:'user',id:1,name:'user'}});
  assert.equal(m.error.type,'NO_ERROR');assert.equal(m.ngByAdvancedRule,true);
 });
+
+test('page contributor count stays undecided under NOT until the page is complete',()=>{
+ const m=new Movie('sm1','title');
+ const rule=condition('pageContributorCount','gte',3);
+ assert.equal(AdvancedNgRules.evaluateNode(m,rule),false);
+ assert.equal(AdvancedNgRules.evaluateNode(m,group('AND',[rule],true)),false);
+ m.updateAdvancedRulesConfig(true,[{expression:rule}]);
+ m.setPageContributorCount(3); assert.equal(m.ng,true);
+ m.setPageContributorCount(2); assert.equal(m.ng,false);
+ m.setPageContributorCount(null); assert.equal(AdvancedNgRules.evaluateNode(m,group('AND',[rule],true)),false);
+});
+
+test('cached rules never reuse a decision or expose mutable settings objects',()=>{
+ const yes=new Movie('sm1','yes'), no=new Movie('sm2','no');
+ const rules=JSON.stringify([{id:'a',expression:condition('title','eq','yes')}]);
+ assert.equal(AdvancedNgRules.match(yes,true,rules).length,1);
+ const editable=AdvancedNgRules.parse(rules);editable[0].expression.value='no';
+ assert.equal(AdvancedNgRules.match(yes,true,rules).length,1);
+ assert.equal(AdvancedNgRules.match(no,true,rules).length,0);
+ assert.equal(AdvancedNgRules.match(yes,false,rules).length,0);
+ const changed=JSON.stringify(editable);
+ assert.equal(AdvancedNgRules.match(no,true,changed).length,1);
+ assert.equal(AdvancedNgRules.match(yes,true,changed).length,0);
+});
+
+const {reasons}=vm.runInNewContext((await readFile(new URL('../src/ui/card-enhancements.js',import.meta.url),'utf8'))+'CardEnhancements',{AdvancedNgRules});
+test('NG explanation keeps compound NOT readable without inventing a matching substring',()=>{
+ const m=new Movie('sm1','safe');
+ m.updateAdvancedRulesConfig(true,[{id:'negated',name:'除外条件',expression:condition('title','contains','blocked',true)}]);
+ const r=reasons(m);
+ assert.ok(r.labels[0].includes('除外条件'));
+ assert.ok(r.labels[0].includes('blocked'));
+ assert.equal(r.titleTerms.length,0);
+ assert.equal(r.fields.has('title'),true);
+});

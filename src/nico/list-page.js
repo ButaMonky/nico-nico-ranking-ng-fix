@@ -81,8 +81,9 @@
           const f = e => {
             e.preventDefault();
             e.stopPropagation();
-            if (e.target.classList.contains('nrn-movie-tag-link') || e.target.classList.contains('nrn-contributor-link')) {
-              NewTabService.open(e.target.href)
+            const link = e.target.closest('.nrn-movie-tag-link, a.nrn-contributor-link')
+            if (link) {
+              NewTabService.open(link.href)
             } else {
               controller._clicked(e)
             }
@@ -103,7 +104,7 @@
         get titleElem() {
           let e = this.elem.querySelector('.nrn-movie-title');
           if (!e) {
-            const a = this.elem.querySelector('a[data-anchor-area][href^="/watch/"] > div > p');
+            const a = this.elem.querySelector('a[data-anchor-area][href^="/watch/"] > div > p') || (this.elem.matches('a[data-anchor-detail="nicoad"]') ? this.elem.querySelector('p') : null);
             e = wrapTitleTextNodeInElement(a);
           }
           return e;
@@ -504,6 +505,16 @@
           }
         })
 
+        const ownerIds = items.map(item => item.owner?.id == null ? '' : String(item.owner.id))
+        if (ownerIds.length && ownerIds.every(id => /^(?:ch)?[1-9][0-9]*$/.test(id))) {
+          const counts = new Map(), seen = new Set()
+          const keys = ownerIds.map((id, i) => (items[i].owner.ownerType || items[i].owner.type || (id.startsWith('ch') ? 'channel' : 'user')) + ':' + id.replace(/^ch/, ''))
+          items.forEach((item, i) => {
+            if (seen.has(item.id)) return
+            seen.add(item.id); counts.set(keys[i], (counts.get(keys[i]) || 0) + 1)
+          })
+          items.forEach((item, i) => { item.__nrnPageContributorCount = counts.get(keys[i]) })
+        }
         return {
           items: items,
           maxPage: maxPage,
@@ -582,11 +593,13 @@
         var owner = item.owner || {}
         var ownerName = owner.name || (owner.visibility === 'hidden' ? '(投稿者非公開)' : '不明')
         var ownerIcon = owner.iconUrl || 'https://secure-dcdn.cdn.nimg.jp/nicoaccount/usericon/defaults/blank.jpg'
-        var ownerUrl = owner.id ? ('https://www.nicovideo.jp/user/' + owner.id) : ''
+        var channelOwner = owner.ownerType === 'channel' || owner.type === 'channel' || /^ch[0-9]+$/.test(String(owner.id))
+        var ownerUrl = owner.id ? (channelOwner ? 'https://ch.nicovideo.jp/channel/ch' + String(owner.id).replace(/^ch/, '') : 'https://www.nicovideo.jp/user/' + owner.id) : ''
         var root = doc.createElement('div')
         root.className = 'Pressable cursor_pointer d_flex cq-t_inline-size min-w_thumbnail.min max-w_thumbnail.max w_100% nrn-autofill-pending'
         root.setAttribute('data-decoration-video-id', item.id)
         root.setAttribute('data-nrn-autofill', 'true')
+        if (Number.isFinite(item.__nrnPageContributorCount)) root.dataset.nrnPageContributorCount = String(item.__nrnPageContributorCount)
         root.setAttribute('data-anchor-area', 'main')
         root.setAttribute('data-anchor-page',
           location.pathname.startsWith('/tag/') ? 'tag' :
@@ -704,12 +717,14 @@
         if (bar.elem.isConnected) {
           return;
         }
-        const e = this.doc.querySelector('[aria-label="nicovideo-content"] section > div:first-of-type');
+        const e = Array.from(this.doc.querySelectorAll('[aria-label="nicovideo-content"] section > div:first-of-type')).find(node => !node.closest('.nrn-parsed, [data-decoration-video-id], .nrn-movie-info-container, [data-anchor-detail="nicoad"]'));
         if (e) {
           e.after(bar.elem);
           return;
         }
-        this.doc.querySelector('[aria-label="nicovideo-content"] .grid-area_header')?.append(bar.elem);
+        const header = this.doc.querySelector('[aria-label="nicovideo-content"] .grid-area_header');
+        if (header) header.append(bar.elem);
+        else this.doc.querySelector('[aria-label="nicovideo-content"]')?.prepend(bar.elem);
       },
       parse(target) {
         if (!isTargetPage()) return [];
@@ -754,17 +769,35 @@
         if (togglable) togglable.hidden = true
       },
       observeMutation(callback) {
-        this._observer = new MutationObserver((records, observer) => {
-          if (this._disposed || !isTargetPage()
-              || new URL(this._sourceUrl).pathname + new URL(this._sourceUrl).search !== location.pathname + location.search) return;
-          const parsed = this.parse();
-          if (parsed.length > 0) {
-            callback(parsed, true);
-            this.unbindUnconnectedMovieRoots();
-          }
-          this.addConfigBar();
-        });
-        this._observer.observe(this.doc.body, {childList: true, subtree: true, attributes: true, attributeFilter: ["class"]});
+        const transient = '[data-scope="presence"], [data-scope="tooltip"], video, canvas, .nrn-movie-info-container, .nrn-ng-reasons'
+        this._observer = new MutationObserver(records => {
+          if (this._disposed || !isTargetPage()) return
+          const source = new URL(this._sourceUrl)
+          if (source.pathname + source.search !== location.pathname + location.search) return
+          const relevant = records.some(record => {
+            if (record.target.nodeType === 1 && record.target.closest(transient)) return false
+            if (record.type === 'attributes') {
+              const nativeClasses = value => String(value || '').split(/\s+/).filter(name => name && !name.startsWith('nrn-')).sort().join(' ')
+              if (nativeClasses(record.oldValue) === nativeClasses(record.target.className)) {
+                this.resultLayout.rememberState(record.target)
+                return false
+              }
+            }
+            const nodes = [...record.addedNodes, ...record.removedNodes]
+            if (nodes.length && nodes.every(node => node.nodeType !== 1 || node.matches(transient))) return false
+            return true
+          })
+          if (!relevant || this._mutationFrame != null) return
+          this._mutationFrame = requestAnimationFrame(() => {
+            this._mutationFrame = null
+            if (this._disposed) return
+            const parsed = this.parse()
+            if (parsed.length > 0) { callback(parsed, true); this.unbindUnconnectedMovieRoots() }
+            this.addConfigBar()
+            this._refreshPagerAnnotations?.()
+          })
+        })
+        this._observer.observe(this.doc.body, {childList:true, subtree:true, attributes:true, attributeFilter:['class'], attributeOldValue:true})
       },
       get css() {
         return ResultLayout.css + `#nrn-config-button,

@@ -40,6 +40,7 @@
         var pre = this.ng
         this.ng = this.ngId || Boolean(this.ngName)
         if (pre !== this.ng) this.emit('ngChanged', this.ng)
+        else this.emit('ngReasonsChanged')
       },
       updateNgId(ngIdSet) {
         var pre = this.ngId

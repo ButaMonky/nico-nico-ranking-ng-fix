@@ -309,7 +309,7 @@
           b.dataset.type = ngName ? 'remove' : 'add'
           b.dataset.matched = ngName
           emphasizeMatchedText(
-            this.elem.querySelector('.nrn-contributor-link'),
+            this.elem.querySelector('.nrn-owner-name') || this.elem.querySelector('.nrn-contributor-link'),
             ngName,
             function(text) {
               var result = this.elem.ownerDocument.createElement('span')
@@ -1043,6 +1043,7 @@
         },
         unbind() {
           this._disposed = true
+          this._disposeEnhancements?.()
           this.movieInfo.unbind()
           this._stopMovieInfoReserve()
           this.description.unbind()
@@ -1144,13 +1145,14 @@
         this._disposed = true
         this._abortController?.abort()
         this._observer?.disconnect()
+        cancelAnimationFrame(this._mutationFrame)
         for (const observer of this._observers || []) observer.disconnect()
         for (const root of new Set(this._toggleToMovieRoot.values())) {
           root.unbind()
           if (root.elem.dataset.nrnAutofill === 'true') { root.elem.remove(); continue }
           for (const node of [root.movieInfo.elem, root.movieInfo.toggle, root.description.elem,
               root.description.openButton, root.description.closeButton]) node?.remove()
-          root.elem.querySelectorAll('.nrn-action-pane, .nrn-self-ad-warning, .nrn-self-ad-inline-badge, .nrn-self-ad-card-badge').forEach(node => node.remove())
+          root.elem.querySelectorAll('.nrn-action-pane, .nrn-self-ad-warning, .nrn-self-ad-inline-badge, .nrn-self-ad-card-badge, .nrn-ng-reasons').forEach(node => node.remove())
           const title = root.movieTitle?.elem
           if (title?.classList.contains('nrn-movie-title')) title.replaceWith(this.doc.createTextNode(title.textContent))
           for (const saved of root._nrnOriginalAnchors || []) {

@@ -175,6 +175,9 @@
 
     var onClickCapture = function(e) {
       if (!config || !config.openNewWindow.value) return
+      // Advertisement cards can themselves be anchors. Their nested controls
+      // must reach their handlers instead of opening the outer watch link.
+      if (e.target?.closest?.('button, input, select, textarea, [role="button"], .nrn-movie-info-toggle, .nrn-action-pane, .nrn-movie-info-container, .nrn-description, .nrn-card-tools')) return
       var a = findVideoAnchor(e.target)
       if (!a) return
 
@@ -220,6 +223,8 @@
         records.forEach(function(rec) {
           rec.addedNodes.forEach(function(node) {
             if (node.nodeType !== Node.ELEMENT_NODE) return
+            if (node.closest('[data-scope="presence"], [data-scope="tooltip"], video, canvas')) return
+            if (!node.matches('a[href]') && !node.querySelector('a[href]')) return
             counters.mutationNodes++
             queueMutationNode(node)
           })

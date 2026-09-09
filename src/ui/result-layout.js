@@ -52,6 +52,13 @@
           injected.add(card);
           paint(card, detect(page.doc)?.mode || current?.mode || 'tile');
         },
+        rememberState(elem) {
+          if (!elem.classList.contains('nrn-parsed')) return;
+          const root = page.movieRoots.find(root => root.elem === elem);
+          if (!root) return;
+          const saved = snapshots.get(root);
+          if (!saved || elem.contains(saved.title)) snapshots.set(root, snapshot(root));
+        },
         sync() {
           // Search/order/page navigation belongs to the existing navigation controller.
           if (route() !== scope) return;
@@ -64,7 +71,7 @@
           for (const root of page.movieRoots) {
             if (injected.has(root.elem)) continue;
             const replacement = byId.get(root.movieId);
-            const saved = snapshots.get(root);
+            const saved = root.elem.isConnected ? snapshots.get(root) : snapshot(root);
             const replacedContent = replacement === root.elem && saved && !root.elem.contains(saved.title);
             if (replacement && ((!root.elem.isConnected && !replacement.classList.contains('nrn-parsed')) || replacedContent)) {
               reattach(root, replacement, saved);

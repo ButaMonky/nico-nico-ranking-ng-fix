@@ -25,6 +25,7 @@
         for (var handle of handles) { try { handle.abort?.() } catch (e) {} }
         handles.clear(); listeners.forEach(function(remove) { remove() })
         delete model.config._nrnDiagnosticHook
+        delete page._refreshPagerAnnotations
         if (typeof restorePagerUi === 'function') restorePagerUi()
       }
       var LOG = '[NicoNicoRankingNG autoFill v14.1]'
@@ -969,6 +970,7 @@
       }
 
       var statusTimer = setInterval(function() {
+        if (initialized && !fetching) return
         if (!document.contains(badge)) {
           clearInterval(statusTimer)
           return
@@ -1342,6 +1344,10 @@
 
       var requestedMode = model.config.autoFillInfoMode.value
       var useSnapshot = requestedMode !== 'legacy' && snapshotDescriptor.supported
+      if (useSnapshot && advancedRulesUseField('pageContributorCount')) {
+        useSnapshot = false
+        fallbackReason = 'ページ内投稿数を正確に数えるため従来方式を使用'
+      }
 
       if (requestedMode !== 'legacy' && !snapshotDescriptor.supported) {
         fallbackReason = snapshotDescriptor.reason
@@ -1607,6 +1613,8 @@
           var sourceUrl = new URL(sourceHref)
           var u = new URL(href, sourceHref)
           if (u.origin !== sourceUrl.origin || u.pathname !== sourceUrl.pathname) return null
+          const criteria = url => JSON.stringify([...url.searchParams].filter(([key]) => !['page','ref','from'].includes(key)).sort())
+          if (criteria(u) !== criteria(sourceUrl)) return null
           var p = Number(u.searchParams.get('page') || 1)
           return Number.isFinite(p) && p >= 1 ? Math.trunc(p) : null
         } catch (e) {
@@ -1825,8 +1833,35 @@
         return inserted
       }
 
+      const spaPagerLinks = new Set()
+      page._refreshPagerAnnotations = function() {
+        if (initialized && model.config.spaNavigationFix.value) updatePagerUi('native pager updated')
+      }
       var updatePagerUi = function(reason) {
-        if (page._disposed || model.config.spaNavigationFix.value) return
+        if (page._disposed) return
+        if (model.config.spaNavigationFix.value) {
+          var oldSummary = page.doc.querySelector('.nrn-pager-summary')
+          if (model.config.autoFillPagerMode.value === 'off') { oldSummary?.remove(); return }
+          var scanned = new Set([currentPageNumber(), ...fetchedPageNumbers])
+          var nativeLinks = Array.from(page.doc.querySelectorAll('a[href]')).filter(isNumericPagerAnchor)
+            .filter(function(a) { return pageNumberFromHref(a.href) != null })
+          nativeLinks.forEach(function(a) {
+            spaPagerLinks.add(a)
+            const consumed = scanned.has(pageNumberFromHref(a.href))
+            if (a.classList.contains('nrn-page-consumed') !== consumed) a.classList.toggle('nrn-page-consumed', consumed)
+          })
+          for (const link of spaPagerLinks) if (!link.isConnected) spaPagerLinks.delete(link)
+          if (nativeLinks.length) {
+            var summary = oldSummary || page.doc.createElement('span')
+            if (!summary.className) summary.className = 'nrn-pager-summary'
+            const text = '走査済みページ：' + compactRanges([...scanned]).map(function(r) {
+              return r.start === r.end ? String(r.start) : r.start + '–' + r.end
+            }).join('、')
+            if (summary.textContent !== text) summary.textContent = text
+            if (!summary.isConnected) nativeLinks[0].parentElement.after(summary)
+          }
+          return
+        }
         var mode = model.config.autoFillPagerMode.value
         if (mode === 'off') return
 
@@ -2009,6 +2044,8 @@
       })
 
       var restorePagerUi = function() {
+        page.doc.querySelectorAll('.nrn-pager-summary').forEach(function(node) { node.remove() })
+        spaPagerLinks.forEach(link => link.classList.remove('nrn-page-consumed')); spaPagerLinks.clear()
         page.doc.querySelectorAll('a[href], a[data-nrn-synthetic-next="true"]').forEach(function(a) {
           if (a.dataset.nrnSyntheticNext === 'true'
               || a.dataset.nrnSyntheticPage === 'true') {
@@ -3487,6 +3524,16 @@
         model.requestThumbInfo(true)
         var completed = await waitForThumbInfo([...originalMovieIds], 30000)
         if (page._disposed) return
+        const countedMovies = [...new Set(originalRoots.filter(root => root.elem.matches('[data-decoration-video-id][data-anchor-area="main"]:not([data-anchor-detail="nicoad"])')).map(root => root.movieId))]
+          .map(id => model.movies.get(id)).filter(Boolean)
+        if (completed && countedMovies.length && countedMovies.every(movie => movie.thumbInfoDone
+            && movie.error.type === 'NO_ERROR' && movie.contributor?.type !== 'unknown' && Number(movie.contributor?.id) > 0)) {
+          const counts = new Map()
+          const ownerKey = movie => movie.contributor.type + ':' + movie.contributor.id
+          countedMovies.forEach(movie => counts.set(ownerKey(movie), (counts.get(ownerKey(movie)) || 0) + 1))
+          countedMovies.forEach(movie => movie.setPageContributorCount(counts.get(ownerKey(movie))))
+        }
+
         var thumbEnd = performance.now()
 
         if (!completed) {
@@ -3602,6 +3649,7 @@
         }
         console.log(LOG, '初期処理パフォーマンス:', initialPerformance)
         window.__nrnInitialPerformance = initialPerformance
+        updatePagerUi('initial checks completed')
 
         maybeFetchMore()
 

@@ -904,6 +904,8 @@
   .row.stack { align-items:flex-start; flex-direction:column; }
   .row > label { display:flex; align-items:center; gap:7px; }
   .muted, small { color:var(--muted); }
+  .grid2 .row label:has(select) { display:block; min-width:0; width:100%; }
+  .grid2 .row select { display:block; width:100%; min-width:0; max-width:100%; margin-top:4px; }
   .hint { background:var(--panel2); border-left:3px solid var(--accent); padding:9px 11px; border-radius:7px; color:var(--muted); font-size:12px; line-height:1.55; }
   .grid2 { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; }
   .grid2 > .row {
@@ -1112,7 +1114,7 @@
         <summary><span class=inlineLockIcon aria-hidden=true><svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24"><path d="M18 7h-1V5.98a4 4 0 0 0-4-4h-2a4 4 0 0 0-4 4V7H6a3 3 0 0 0-3 3v8a3 3 0 0 0 3 3h12a3 3 0 0 0 3-3v-8a3 3 0 0 0-3-3M9.53 17.16l1.14-1.97.51-.87a2 2 0 0 1 .83-3.82c.7 0 1.32.36 1.67.91q.32.48.33 1.09a2 2 0 0 1-1.17 1.82l1.64 2.84a.23.23 0 0 1-.2.34H9.74a.23.23 0 0 1-.2-.34zM9 5.98c0-1.1.9-2 2-2h2a2 2 0 0 1 2 2V7H9z"></path></svg></span>論理NGルール <span id=advancedRuleCount class=pill>0件</span></summary>
         <div class=sectionBody>
           <div class=row><label><input type=checkbox id=advancedNgRulesEnabled>複合NGルールを有効にする</label></div>
-          <div class=hint>
+          <div class=hint>同じ投稿者の動画数は、広告を除く元の検索結果1ページ内の件数です。追加分は取得元のページごとに数えます。投稿者が不明な動画があるページは、この条件の判定を保留します。
             <b>論理NGルール</b>は、複数の条件を組み合わせて「この条件に当てはまる動画だけNG」にする機能です。<br>
             <b>AND（論理積）</b> = すべて満たす / <b>OR（論理和）</b> = どれか1つ以上満たす / <b>NOT（論理否定）</b> = 条件の結果を反対にする、という意味です。<br>
             タイトル・説明文などは<b>文字列の部分一致 / 完全一致</b>、タグ・🔒タグロックは<b>タグ名1個との完全一致</b>、タグ数は<b>数値比較</b>として扱います。普通はまず <b>AND（すべて満たす）</b> を使えば十分です。
@@ -1200,13 +1202,13 @@
               <select id=autoFillPagerMode>
                 <option value=off>変更しない</option>
                 <option value=mark>取得済みページに斜線だけ付ける</option>
-                <option value=compactSkip>取得済みをまとめて未取得ページへ送る（推奨）</option>
+                <option value=compactSkip>走査範囲を表示（SPA OFFでは圧縮・スキップ）</option>
               </select>
             </label></div>
             <div class=row><label>取得済み範囲の後に表示 <input type=number id=pagerPreviewCount min=0 max=6> ページ（標準 2）</label></div>
             <div class=row><label><input type=checkbox id=statusAnimationEnabled>処理中ステータスをアニメーション表示</label></div>
           </div>
-          <div class=hint>取得方式の変更は保存後にページを再読み込みすると反映されます。API高速でもタグロック・複合NGなどの詳細判定は省略しません。追加取得上限は、従来方式ではHTMLのページ数、API方式では最大100件の取得回数です。</div>
+          <div class=hint>取得方式の変更は、次の検索移動または再読み込みから反映されます。API高速でもタグロック・複合NGなどの詳細判定は省略しません。追加取得上限は、従来方式ではHTMLのページ数、API方式では最大100件の取得回数です。</div>
           <div class=sectionTitle>通信・キャッシュ</div>
           <div class=grid2>
             <div class=row><label><input type=checkbox id=sessionDetailCacheEnabled>同一タブ内の動画詳細を再利用する</label></div>
@@ -1218,7 +1220,7 @@
             <div class=row><label><input type=checkbox id=selfAdWarningEnabled>自演広告の可能性を警告する（実験的）</label></div>
             <div class=hint>広告の見た目と広告者照合は別の通信です。「追加動画の広告」をOFFにしても、警告や広告関連の複合NGが有効なら広告者照合は行います。広告通信は全体で最大4件同時。広告者は最大100件を取得し、上限到達・取得失敗時は判定を保留します。</div>
           </div>
-          <div class=hint>APIが現在の検索条件・並びを再現できない場合は自動で従来方式へ戻ります。🔒 タグロック数NGは完全判定が必要です。採用率が低くても異常とは扱いません。ページ番号は「取得済み範囲＋未取得の先頭数ページ＋最終ページ＋次矢印」の順で表示します。詳細キャッシュは同一タブの再読み込みを跨いで再利用し、保存するのはタグ・ロック状態・投稿者などの詳細情報です。NG設定変更時は保存済みの最終判定を使わず、現在の設定で再判定します。</div>
+          <div class=hint>APIが現在の検索条件・並びを再現できない場合は自動で従来方式へ戻ります。🔒 タグロック数NGは完全判定が必要です。採用率が低くても異常とは扱いません。SPA対応がOFFのときはページ番号を「取得済み範囲＋未取得の番号＋最終ページ」に整理できます。ONでは元の番号を保ちます。詳細キャッシュは同一タブの再読み込みを跨いで再利用し、保存するのはタグ・ロック状態・投稿者などの詳細情報です。NG設定変更時は保存済みの最終判定を使わず、現在の設定で再判定します。</div>
         </div>
       </details></div>
 
@@ -1252,7 +1254,7 @@
           <div class=hint>「自動」はニコニコ画面の実際の背景色を見てライト/ダークを判定します。ダーク配色は真っ黒・真っ白を避け、暗い青灰色の背景と少し抑えた文字色にして長時間見ても眩しすぎない配色にしています。</div>
           <div class=row><label><input type=checkbox id=openNewWindow>動画を新しいタブで開く</label></div>
           <div class=row><label><input type=checkbox id=spaNavigationFix>SPA移動に合わせてNG判定を更新する（推奨）</label></div>
-          <div class=hint>タグ・検索語・ページ番号・並び順・絞り込みを変えたとき、画面を再読み込みせず新しい検索結果のNG判定を開始します。「戻る・進む」にも対応します。ONではニコニコ本来のページ番号リンクを使うため、取得済みページを飛ばすページャー変更は休止します。</div>
+          <div class=hint>タグ・検索語・ページ番号・並び順・絞り込みを変えたとき、画面を再読み込みせず新しい検索結果のNG判定を開始します。「戻る・進む」にも対応します。ONでは元のページ番号リンクを保ち、走査済みの番号に斜線と範囲を表示します。次へリンクの行き先は変えません。</div>
           <div class=row><label><input type=checkbox id=useGetThumbInfo>動画詳細情報を取得する</label></div>
           <div class=row><label><input type=checkbox id=movieInfoTogglable>タグ・ユーザー・チャンネルの表示切替</label></div>
           <div class=row><label><input type=checkbox id=descriptionTogglable>動画説明の表示切替</label></div>
@@ -1287,30 +1289,30 @@
   });
 
   var help = {
-    autoFillEnabled: 'NG判定後に表示できる動画が目標件数へ達するまで後続候補を取得します。',
-    autoFillTargetCount: '画面上に実際に表示する非NG動画の目標件数です。',
-    autoFillMaxExtraPages: '追加取得する上限です。0なら最終ページまで制限しません。',
-    autoFillInfoMode: '安定性重視なら従来方式。API併用/高速は検索APIを使い、条件や結果を照合できない場合は従来方式へ戻ります。高速方式は明確なNGを事前除外します。変更後はページの再読み込みが必要です。',
+    autoFillEnabled: 'NGで減った分を、次のページから自動で補います。OFFでは現在のページだけをNG判定します。',
+    autoFillTargetCount: '表示したい動画数です。例：60なら、NGを除いて60件になるまで補充します。検索結果の終わりでは60件未満になることがあります。',
+    autoFillMaxExtraPages: '1回の検索で追加取得してよい上限です。少なくすると通信量を抑えられます。0は制限なしなので、NGが多い検索では取得が長く続くことがあります。',
+    autoFillInfoMode: '従来方式はニコニコのページ順を使います。API方式はまとめて候補を取得しますが、検索条件や並び順を再現できない場合は従来方式に戻ります。「同じ投稿者の動画数」を使う場合も従来方式です。変更は次の検索移動または再読み込みから反映します。',
     thumbInfoConcurrency: 'GetThumbInfoを同時に取得する本数です。大きすぎると通信失敗が増える場合があります。',
     autoFillDetailBatchMax: '1回に完全NG判定へ送る最大候補数です。低NG率では小さめ、高NG率では大きめが効率的です。',
     statusPanelMode: '右下の進捗パネルの表示量を選択します。',
     detailUiTheme: 'タグ・投稿者情報、操作ボタン、設定画面などスクリプト独自UIの配色です。自動はニコニコ本体の実背景色から判定します。',
-    autoFillPagerMode: '自動取得済みのページを斜線・圧縮し、次矢印を最初の未取得ページへ変更できます。',
-    pagerPreviewCount: '取得済み範囲の直後に通常リンクとして残す未取得ページ数です。2なら 20–31 32 33 … 157 → のように表示します。',
+    autoFillPagerMode: 'SPA対応がONのときは、走査済みのページに斜線と範囲の説明を表示します。番号・次へリンクの行き先は変わりません。SPA対応がOFFのときだけ、従来の範囲圧縮・取得済みページのスキップを使います。OFFならページ番号を装飾しません。',
+    pagerPreviewCount: 'SPA対応がOFFのとき、走査済み範囲のあとに何ページ分の番号を残すかを指定します。SPA対応がONのときは元の番号をすべて残すため、この設定は使いません。',
     statusAnimationEnabled: '処理中だけ右下ステータスに回転インジケーターを表示します。',
-    sessionDetailCacheEnabled: '同じタブで一度取得したタグ・タグロック・投稿者情報をsessionStorageへ保存し、ページ移動後の再取得を省略します。',
+    sessionDetailCacheEnabled: '取得済みのタグ・投稿者情報を同じタブに保存して、再読み込み後も再利用します。保存中に情報が変わると、有効期限まで古い情報で判定する場合があります。OFFでもSPA移動中は直近2分・最大512件をメモリに保持します。NG判定は常に現在の設定でやり直します。',
     sessionDetailCacheTtlMinutes: 'キャッシュを何分まで有効とみなすかです。期限切れは自動削除します。',
     sessionDetailCacheMaxEntries: 'キャッシュ件数の上限です。古いものから削除します。',
     autoFillAdMode: '追加動画の広告リボン・提供者表示の取得範囲です。広告者照合の警告・複合NGとは独立しています。無駄を抑えるには「表示動画のみ」を選んでください。',
     selfAdWarningEnabled: '広告者一覧を確認し、投稿者本人によるニコニ広告の可能性を警告します。追加通信が発生します。',
     spaNavigationFix: '画面を再読み込みせず、検索結果の切り替わりに合わせて古い処理を終了しNG判定を開始します。SPA利用時は本来のページ番号リンクを維持します。',
-    developerMode: '診断ログを増やします。通常利用は軽量またはOFFで十分です。',
+    developerMode: '不具合を調べるためのログをコンソールに表示します。通常はOFFで使えます。他の拡張機能やニコニコ本体のログには影響しません。',
     developerDiagnosticMode: '軽量はローカル監査のみ、完全はAPI通信を含む3方式比較、手動のみはボタンを押した時だけ診断します。',
     ngLockedTagCountEnabled: 'ロックされたタグ数がしきい値以上の動画をNGにします。',
-    ngLockedTagCountThreshold: 'ニコニコのタグ上限に合わせ1～11で指定します。',
-    advancedNgRulesEnabled: 'AND / OR / NOT を自由に入れ子にし、比較演算子まで指定できる論理NG判定を有効にします。',
-    openNewWindow: '動画のサムネイルやタイトルを左クリックしたとき、新しいタブで開きます。Ctrl/Cmd/中クリックなどブラウザ標準操作も維持します。Consoleの [new-tab] で動作監査できます。',
-    useGetThumbInfo: 'タグのロック状態・投稿者など完全NG判定に必要な詳細情報を取得します。'
+    ngLockedTagCountThreshold: 'NGにするロックタグ数の境界です。例：11なら11個以上の動画が対象です。タグの内容は問いません。',
+    advancedNgRulesEnabled: '複数の条件を組み合わせます。AND＝すべて満たす、OR＝どれか満たす、NOT＝結果を反転。例：タイトルに「実況」を含み、ロックタグが11個以上。必要な情報が取得できない条件は保留し、NOTでも勝手にNGにしません。',
+    openNewWindow: '動画のタイトル・サムネイルをクリックすると新しいタブで開きます。▼、あとで見る、メニューなどのボタンには適用しません。Ctrlキーや中央ボタンの標準操作も使えます。',
+    useGetThumbInfo: 'タグ・ロック状態・投稿者を取得して判定します。OFFでは、詳細情報が必要なNG条件を判定できません。通信を減らしたい場合は、まず広告照合や追加取得上限を見直してください。'
   };
   Object.keys(help).forEach(function(id) {
     var el = document.getElementById(id);
@@ -1323,6 +1325,16 @@
     icon.textContent = '?';
     icon.title = help[id];
     row.appendChild(icon);
+    var explanation = document.createElement('div');
+    explanation.className = 'settingExplanation';
+    explanation.id = id + '-explanation';
+    explanation.textContent = help[id];
+    explanation.style.cssText = 'font-size:12px;line-height:1.6;color:var(--muted);margin:3px 0 12px';
+    if (row.parentElement.classList.contains('grid2')) {
+      var field = document.createElement('div');
+      row.replaceWith(field); field.append(row, explanation);
+    } else row.after(explanation);
+    el.setAttribute('aria-describedby', explanation.id);
   });
 })();
 </script>
