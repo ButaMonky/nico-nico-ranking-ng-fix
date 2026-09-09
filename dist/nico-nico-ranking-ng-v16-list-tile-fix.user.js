@@ -6,7 +6,7 @@
 // @match        *://www.nicovideo.jp/ranking*
 // @match        *://www.nicovideo.jp/search/*
 // @match        *://www.nicovideo.jp/tag/*
-// @version      160.7
+// @version      160.8
 // @grant        GM_getValue
 // @grant        GM_setValue
 // @grant        GM_xmlhttpRequest
@@ -1432,8 +1432,8 @@
           if (node.field === 'userId' || node.field === 'channelId') operatorLabel = 'IDがある'
           else if (node.field === 'contributorId') operatorLabel = '投稿者IDがある'
         } else if (node.operator === 'notExists') {
-          if (node.field === 'userId') operatorLabel = 'IDがない（退会済みなど）'
-          else if (node.field === 'contributorId') operatorLabel = '投稿者IDがない（退会済みなど）'
+          if (node.field === 'userId') operatorLabel = 'IDが取得できない'
+          else if (node.field === 'contributorId') operatorLabel = '投稿者IDが取得できない'
           else if (node.field === 'channelId') operatorLabel = 'IDがない'
         }
         var core = (f ? f.label : node.field) + ' '
@@ -1450,6 +1450,7 @@
       parse:parse,
       match:match,
       evaluateNode:evaluateNode,
+      evaluateState:evaluateState,
       expressionText:expressionText,
       makeGroup:makeGroup,
       makeCondition:makeCondition,
@@ -1974,7 +1975,7 @@
       initCheckbox(config, doc, 'unknownContributorMovieVisible')
       initCheckbox(config, doc, 'ngLockedTagCountEnabled')
       initNumberInput(config, doc, 'ngLockedTagCountThreshold', 1, 11)
-      initCheckbox(config, doc, 'advancedNgRulesEnabled')
+      // The rule editor owns this checkbox; edits remain drafts until Apply.
       initCheckbox(config, doc, 'autoFillEnabled')
       initNumberInput(config, doc, 'autoFillTargetCount', 1)
       initNumberInput(config, doc, 'autoFillMaxExtraPages', 0)
@@ -2033,6 +2034,7 @@
       _e(id) { return this.doc.getElementById(id) },
       _close() {
         if (this._closed) return
+        if (this.ruleEditor && !this.ruleEditor.canClose()) return
         this._closed = true
         this.emit('closed')
       },
@@ -2162,9 +2164,9 @@
           if (field === 'contributorId') return '投稿者IDがある'
         }
         if (operator === 'notExists') {
-          if (field === 'userId') return 'IDがない（退会済みなど）'
+          if (field === 'userId') return 'IDが取得できない'
           if (field === 'channelId') return 'IDがない'
-          if (field === 'contributorId') return '投稿者IDがない（退会済みなど）'
+          if (field === 'contributorId') return '投稿者IDが取得できない'
         }
 
         var generic = AdvancedNgRules.OP_META[operator]
@@ -2217,377 +2219,15 @@
         }
         if (operator === 'notExists') {
           if (field === 'userId' || field === 'contributorId')
-            return '投稿者IDを取得できない場合に一致します。退会済みユーザーなどが該当します。通信エラーは一致扱いにしません。'
+            return '詳細情報の取得完了後もIDがない場合に一致します。退会済みかどうかは判定しません。通信エラー・詳細の未取得は保留します。'
           if (field === 'tag') return 'タグが1個も付いていない場合に一致します。'
           if (field === 'lockedTag') return 'ロック済みタグが1個もない場合に一致します。'
           return 'その情報が空、または取得できない場合に一致します。'
         }
         return ''
       },
-      _newAdvancedRule(enabled) {
-        var root = AdvancedNgRules.makeGroup('AND')
-        root.children.push(AdvancedNgRules.makeCondition('lockedTagCount'))
-        return {
-          id:'rule-' + Date.now() + '-' + Math.random().toString(36).slice(2,7),
-          name:'新しい論理NGルール',
-          enabled:enabled !== false,
-          expression:root
-        }
-      },
       _initAdvancedNgRuleBuilder() {
-        var add = this._e('advancedRuleAddButton')
-        var sample = this._e('advancedRuleSampleButton')
-        if (!add || !sample) return
-
-        add.addEventListener('click', function() {
-          var rules = this._readAdvancedRules()
-          rules.push(this._newAdvancedRule(true))
-          this._saveAdvancedRules(rules)
-        }.bind(this))
-
-        sample.addEventListener('click', function() {
-          var rules = this._readAdvancedRules()
-          var root = AdvancedNgRules.makeGroup('AND')
-          root.children = [
-            {kind:'condition',field:'lockedTagCount',operator:'eq',value:11,not:false},
-            {kind:'condition',field:'tag',operator:'contains',value:'ホモと見るシリーズ',not:false},
-            {kind:'condition',field:'tag',operator:'contains',value:'本編改造淫夢',not:false},
-            {kind:'condition',field:'contributorId',operator:'notExists',value:'',not:false}
-          ]
-          rules.push({
-            id:'rule-' + Date.now() + '-sample',
-            name:'例：検索妨害（編集して使用）',
-            enabled:false,
-            expression:root
-          })
-          this._saveAdvancedRules(rules)
-        }.bind(this))
-
-        this._renderAdvancedNgRules()
-      },
-      _renderAdvancedNgRules() {
-        var container = this._e('advancedRuleList')
-        var count = this._e('advancedRuleCount')
-        if (!container) return
-
-        var rules = this._readAdvancedRules()
-        if (count) count.textContent = rules.length + '件'
-        container.textContent = ''
-
-        if (!rules.length) {
-          var empty = this.doc.createElement('div')
-          empty.className = 'advancedRuleEmpty'
-          empty.textContent = '論理NGルールはまだありません。「ルールを追加」または「サンプルを追加」から作成できます。'
-          container.appendChild(empty)
-          return
-        }
-
-        var operatorOptionsFor = function(field) {
-          var meta = AdvancedNgRules.FIELD_META[field]
-          return meta ? meta.operators : []
-        }
-
-        var defaultValueFor = function(field) {
-          if (field === 'lockedTagCount') return 11
-          if (field === 'tagCount') return 1
-          return ''
-        }
-
-        rules.forEach(function(rule, ruleIndex) {
-          var card = this.doc.createElement('div')
-          card.className = 'advancedRuleCard logicRuleCard'
-          card.classList.toggle('disabled', !rule.enabled)
-
-          var head = this.doc.createElement('div')
-          head.className = 'advancedRuleHead'
-
-          var enabled = this.doc.createElement('input')
-          enabled.type = 'checkbox'
-          enabled.checked = rule.enabled !== false
-          enabled.title = 'このルールだけをON/OFFします。'
-
-          var name = this.doc.createElement('input')
-          name.type = 'text'
-          name.value = rule.name
-          name.className = 'advancedRuleName'
-          name.placeholder = 'ルール名'
-
-          var del = this.doc.createElement('button')
-          del.type = 'button'
-          del.textContent = '削除'
-          del.className = 'danger'
-
-          head.appendChild(enabled)
-          head.appendChild(name)
-          head.appendChild(del)
-          card.appendChild(head)
-
-          var preview = this.doc.createElement('div')
-          preview.className = 'logicExpressionPreview'
-          card.appendChild(preview)
-
-          var rootHost = this.doc.createElement('div')
-          rootHost.className = 'logicRootHost'
-          card.appendChild(rootHost)
-
-          var saveNow = function(renderAgain) {
-            var all = this._readAdvancedRules()
-            if (!all[ruleIndex]) return
-            all[ruleIndex] = rule
-            this.config.advancedNgRulesJson.value = JSON.stringify(all)
-            preview.textContent = '式: ' + AdvancedNgRules.expressionText(rule.expression)
-            if (renderAgain) renderRoot()
-          }.bind(this)
-
-          enabled.addEventListener('change', function() {
-            rule.enabled = enabled.checked
-            card.classList.toggle('disabled', !rule.enabled)
-            saveNow(false)
-          })
-          name.addEventListener('change', function() {
-            rule.name = name.value.trim() || ('ルール ' + (ruleIndex + 1))
-            name.value = rule.name
-            saveNow(false)
-          })
-          del.addEventListener('click', function() {
-            if (!window.confirm('「' + rule.name + '」を削除しますか？')) return
-            var all = this._readAdvancedRules()
-            all.splice(ruleIndex, 1)
-            this._saveAdvancedRules(all)
-          }.bind(this))
-
-          var renderCondition = function(node, parentGroup, index, depth) {
-            var row = this.doc.createElement('div')
-            row.className = 'logicConditionRow'
-            row.style.setProperty('--logic-depth', String(depth))
-
-            var notLabel = this.doc.createElement('label')
-            notLabel.className = 'logicNotToggle'
-            var notCheck = this.doc.createElement('input')
-            notCheck.type = 'checkbox'
-            notCheck.checked = Boolean(node.not)
-            notLabel.appendChild(notCheck)
-            notLabel.appendChild(this.doc.createTextNode('条件を反対にする（NOT）'))
-
-            var field = this.doc.createElement('select')
-            field.className = 'logicField'
-            Object.keys(AdvancedNgRules.FIELD_META).forEach(function(key) {
-              var meta = AdvancedNgRules.FIELD_META[key]
-              field.add(new Option(meta.label, key))
-            })
-            field.value = node.field
-            field.title = '比較したい情報を選びます。タグ名と文字列、個数は別の項目です。'
-
-            var lockSpot = this.doc.createElement('span')
-            lockSpot.className = 'logicFieldIcon'
-            var updateLockSpot = function() {
-              lockSpot.textContent = ''
-              if (field.value === 'lockedTag' || field.value === 'lockedTagCount') {
-                lockSpot.appendChild(this._lockSvgElement('advancedLockSvg small'))
-              }
-            }.bind(this)
-            updateLockSpot()
-
-            var operator = this.doc.createElement('select')
-            operator.className = 'logicOperator'
-
-            var value = this.doc.createElement('input')
-            value.className = 'logicValue'
-
-            var remove = this.doc.createElement('button')
-            remove.type = 'button'
-            remove.className = 'logicRemove'
-            remove.textContent = '×'
-            remove.title = 'この条件を削除'
-
-            var rebuildOperator = function() {
-              operator.textContent = ''
-              operatorOptionsFor(node.field).forEach(function(opKey) {
-                operator.add(new Option(
-                  this._friendlyOperatorLabel(node.field, opKey), opKey))
-              }.bind(this))
-              if (!operatorOptionsFor(node.field).includes(node.operator)) {
-                node.operator = operatorOptionsFor(node.field)[0]
-              }
-              operator.value = node.operator
-              operator.title = this._operatorHelpText(node.field, node.operator)
-
-              var fm = AdvancedNgRules.FIELD_META[node.field]
-              var om = AdvancedNgRules.OP_META[node.operator]
-              var numeric = fm && (fm.type === 'number' || fm.type === 'numberOrMissing')
-              value.type = numeric ? 'number' : 'text'
-              if (node.field === 'lockedTagCount' || node.field === 'tagCount') {
-                value.min = '0'
-                value.max = '11'
-              } else {
-                value.removeAttribute('min')
-                value.removeAttribute('max')
-              }
-              value.style.display = om && om.needsValue === false ? 'none' : ''
-              value.value = node.value == null ? '' : node.value
-
-              if (node.field === 'tag') value.placeholder = '例：本編改造淫夢'
-              else if (node.field === 'lockedTag') value.placeholder = '例：ホモと見るシリーズ'
-              else if (node.field === 'title') value.placeholder = 'タイトルに探す文字列'
-              else if (node.field === 'description') value.placeholder = '説明文に探す文字列'
-              else if (node.field === 'contributorName') value.placeholder = '投稿者名'
-              else if (node.field === 'movieId') value.placeholder = '例：sm12345678'
-              else if (node.field === 'lockedTagCount') value.placeholder = '例：11'
-              else if (node.field === 'tagCount') value.placeholder = '例：5'
-              else if (['userId','channelId','contributorId'].includes(node.field))
-                value.placeholder = '数値ID'
-              else value.placeholder = ''
-            }.bind(this)
-            rebuildOperator()
-
-            notCheck.addEventListener('change', function() {
-              node.not = notCheck.checked
-              saveNow(false)
-            })
-            field.addEventListener('change', function() {
-              node.field = field.value
-              var ops = operatorOptionsFor(node.field)
-              node.operator = ops[0]
-              node.value = defaultValueFor(node.field)
-              updateLockSpot()
-              rebuildOperator()
-              saveNow(false)
-            })
-            operator.addEventListener('change', function() {
-              node.operator = operator.value
-              rebuildOperator()
-              saveNow(false)
-            })
-            value.addEventListener('change', function() {
-              var fm = AdvancedNgRules.FIELD_META[node.field]
-              if (fm && (fm.type === 'number' || fm.type === 'numberOrMissing')) {
-                var n = Number(value.value)
-                node.value = Number.isFinite(n) ? n : 0
-              } else {
-                node.value = value.value.trim()
-              }
-              value.value = node.value
-              saveNow(false)
-            })
-            remove.addEventListener('click', function() {
-              parentGroup.children.splice(index, 1)
-              saveNow(true)
-            })
-
-            row.appendChild(notLabel)
-            row.appendChild(lockSpot)
-            row.appendChild(field)
-            row.appendChild(operator)
-            row.appendChild(value)
-            row.appendChild(remove)
-            return row
-          }.bind(this)
-
-          var renderGroup = function(group, parentGroup, index, depth, isRoot) {
-            var box = this.doc.createElement('div')
-            box.className = 'logicGroup'
-            box.dataset.logicDepth = String(depth)
-
-            var toolbar = this.doc.createElement('div')
-            toolbar.className = 'logicGroupToolbar'
-
-            var op = this.doc.createElement('select')
-            op.className = 'logicGroupOp'
-            op.add(new Option('すべて満たす（AND / 論理積）', 'AND'))
-            op.add(new Option('どれか1つ以上満たす（OR / 論理和）', 'OR'))
-            op.value = group.op === 'OR' ? 'OR' : 'AND'
-            op.title = 'このグループ内の条件をAND/ORで結合します。'
-
-            var notLabel = this.doc.createElement('label')
-            notLabel.className = 'logicNotToggle groupNot'
-            var notCheck = this.doc.createElement('input')
-            notCheck.type = 'checkbox'
-            notCheck.checked = Boolean(group.not)
-            notLabel.appendChild(notCheck)
-            notLabel.appendChild(this.doc.createTextNode('このグループを否定する（NOT / 論理否定）'))
-
-            var addCondition = this.doc.createElement('button')
-            addCondition.type = 'button'
-            addCondition.textContent = '＋ 条件'
-            addCondition.title = 'このグループに比較条件を追加'
-
-            var addGroup = this.doc.createElement('button')
-            addGroup.type = 'button'
-            addGroup.textContent = '＋ AND/OR グループ'
-            addGroup.title = 'AND/ORを入れ子にした新しい論理グループを追加'
-
-            toolbar.appendChild(op)
-            toolbar.appendChild(notLabel)
-            toolbar.appendChild(addCondition)
-            toolbar.appendChild(addGroup)
-
-            if (!isRoot) {
-              var removeGroup = this.doc.createElement('button')
-              removeGroup.type = 'button'
-              removeGroup.textContent = 'グループ削除'
-              removeGroup.className = 'danger'
-              removeGroup.addEventListener('click', function() {
-                parentGroup.children.splice(index, 1)
-                saveNow(true)
-              })
-              toolbar.appendChild(removeGroup)
-            }
-
-            box.appendChild(toolbar)
-
-            var children = this.doc.createElement('div')
-            children.className = 'logicChildren'
-            box.appendChild(children)
-
-            if (!group.children.length) {
-              var blank = this.doc.createElement('div')
-              blank.className = 'logicEmptyGroup'
-              blank.textContent = '条件なし（安全のためこのグループはFALSE扱い）'
-              children.appendChild(blank)
-            }
-
-            group.children.forEach(function(child, childIndex) {
-              if (child.kind === 'group') {
-                children.appendChild(renderGroup(
-                  child, group, childIndex, depth + 1, false))
-              } else {
-                children.appendChild(renderCondition(
-                  child, group, childIndex, depth + 1))
-              }
-            })
-
-            op.addEventListener('change', function() {
-              group.op = op.value
-              saveNow(false)
-            })
-            notCheck.addEventListener('change', function() {
-              group.not = notCheck.checked
-              saveNow(false)
-            })
-            addCondition.addEventListener('click', function() {
-              group.children.push(AdvancedNgRules.makeCondition('tag'))
-              saveNow(true)
-            })
-            addGroup.addEventListener('click', function() {
-              var g = AdvancedNgRules.makeGroup('AND')
-              g.children.push(AdvancedNgRules.makeCondition('lockedTagCount'))
-              group.children.push(g)
-              saveNow(true)
-            })
-
-            return box
-          }.bind(this)
-
-          var renderRoot = function() {
-            rootHost.textContent = ''
-            rootHost.appendChild(renderGroup(
-              rule.expression, null, -1, 0, true))
-            preview.textContent = '式: ' + AdvancedNgRules.expressionText(rule.expression)
-          }
-
-          renderRoot()
-          container.appendChild(card)
-        }.bind(this))
+        this.ruleEditor = RuleEditor.mount(this)
       },
       _runDeveloperDiagnostics() {
         var status = this._e('developerDiagnosticStatus')
@@ -2946,64 +2586,20 @@
       </details>
 
       <details class=card open>
-        <summary><span class=inlineLockIcon aria-hidden=true><svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24"><path d="M18 7h-1V5.98a4 4 0 0 0-4-4h-2a4 4 0 0 0-4 4V7H6a3 3 0 0 0-3 3v8a3 3 0 0 0 3 3h12a3 3 0 0 0 3-3v-8a3 3 0 0 0-3-3M9.53 17.16l1.14-1.97.51-.87a2 2 0 0 1 .83-3.82c.7 0 1.32.36 1.67.91q.32.48.33 1.09a2 2 0 0 1-1.17 1.82l1.64 2.84a.23.23 0 0 1-.2.34H9.74a.23.23 0 0 1-.2-.34zM9 5.98c0-1.1.9-2 2-2h2a2 2 0 0 1 2 2V7H9z"></path></svg></span>論理NGルール <span id=advancedRuleCount class=pill>0件</span></summary>
+        <summary><span class=inlineLockIcon aria-hidden=true><svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24"><path d="M18 7h-1V5.98a4 4 0 0 0-4-4h-2a4 4 0 0 0-4 4V7H6a3 3 0 0 0-3 3v8a3 3 0 0 0 3 3h12a3 3 0 0 0 3-3v-8a3 3 0 0 0-3-3M9.53 17.16l1.14-1.97.51-.87a2 2 0 0 1 .83-3.82c.7 0 1.32.36 1.67.91q.32.48.33 1.09a2 2 0 0 1-1.17 1.82l1.64 2.84a.23.23 0 0 1-.2.34H9.74a.23.23 0 0 1-.2-.34zM9 5.98c0-1.1.9-2 2-2h2a2 2 0 0 1 2 2V7H9z"></path></svg></span>条件を組み合わせるNG <span id=advancedRuleCount class=pill>0件</span></summary>
         <div class=sectionBody>
           <div class=row><label><input type=checkbox id=advancedNgRulesEnabled>複合NGルールを有効にする</label></div>
-          <div class=hint>同じ投稿者の動画数は、広告を除く元の検索結果1ページ内の件数です。追加分は取得元のページごとに数えます。投稿者が不明な動画があるページは、この条件の判定を保留します。
-            <b>論理NGルール</b>は、複数の条件を組み合わせて「この条件に当てはまる動画だけNG」にする機能です。<br>
-            <b>AND（論理積）</b> = すべて満たす / <b>OR（論理和）</b> = どれか1つ以上満たす / <b>NOT（論理否定）</b> = 条件の結果を反対にする、という意味です。<br>
-            タイトル・説明文などは<b>文字列の部分一致 / 完全一致</b>、タグ・🔒タグロックは<b>タグ名1個との完全一致</b>、タグ数は<b>数値比較</b>として扱います。普通はまず <b>AND（すべて満たす）</b> を使えば十分です。
-          </div>
-
-          <details class=logicHelpDetails>
-            <summary>📘 論理ルールの詳しい使い方・用語解説</summary>
-            <div class=logicHelpBody>
-              <p><b>条件式</b>：1つの判定です。例「🔒 タグロック数が 11以上」。</p>
-              <p><b>条件グループ</b>：複数の条件式を AND / OR でまとめたものです。</p>
-              <p><b>AND（論理積）</b>：グループ内の条件をすべて満たしたときだけ成立します。</p>
-              <p><b>OR（論理和）</b>：グループ内の条件を1つ以上満たせば成立します。</p>
-              <p><b>NOT（論理否定）</b>：条件やグループの結果を反転します。初心者の方はまず「含まない」「IDがない」などの直接的な条件を使う方が分かりやすいです。</p>
-              <p><b>入れ子（ネスト）</b>：条件グループの中へさらに別の条件グループを入れることです。例：A AND (B OR C)。</p>
-              <hr>
-              <p><b>文字列</b>：タイトル・説明文・投稿者名・動画IDなど、文字の並びとして扱う値です。</p>
-              <p><b>部分一致</b>：入力した文字列が、対象の文字列の一部分に含まれていれば一致します。例：「改造」を検索すると「本編改造淫夢」に一致します。</p>
-              <p><b>完全一致</b>：先頭から末尾まで文字列全体が同じ場合だけ一致します。例：「本編改造淫夢」は「本編改造淫夢」に一致しますが、「改造淫夢」には一致しません。</p>
-              <p><b>タグ / 🔒タグロックの文字列比較</b>：タグは1個ずつ独立した名前として比較します。「指定したタグ名がある」は<b>タグ名の完全一致</b>です。タグ名の一部分だけでは一致しません。</p>
-              <p><b>タグ数 / 🔒タグロック数</b>：タグの名前ではなく、何個付いているかを数値で比較する項目です。</p>
-              <hr>
-              <p><b>比較演算子</b></p>
-              <ul>
-                <li><b>より大きい（&gt;）</b>：指定値より大きい</li>
-                <li><b>以上（≥）</b>：指定値と同じ、または大きい</li>
-                <li><b>未満（&lt;）</b>：指定値より小さい</li>
-                <li><b>以下（≤）</b>：指定値と同じ、または小さい</li>
-                <li><b>等しい（=）</b>：指定値と同じ</li>
-                <li><b>等しくない（≠）</b>：指定値と異なる</li>
-              </ul>
-              <hr>
-              <p><b>ユーザーID / 投稿者IDについて</b></p>
-              <p><b>IDがない（退会済みなど）</b>：投稿者IDを取得できない動画に一致します。退会済みユーザーの動画などが該当します。通信エラーは「IDがない」とは判定しません。</p>
-              <p><b>IDがある</b>：投稿者IDを正常に取得できる動画に一致します。</p>
-              <p>IDは数値なので、<b>以上 / 以下 / より大きい / 未満</b>も使えます。たとえば「ユーザーIDが 50000000以上」のように、特定時期以降に作られたID帯を条件として組み合わせる用途にも使えます。</p>
-              <hr>
-              <p><b>タイトル・説明文</b>：文章そのものを文字列として比較します。「文字列を含む（部分一致）」と「文字列が完全一致」を使い分けられます。</p>
-              <p><b>タグ</b>：動画に付いているタグ名を1個ずつ比較します。「指定したタグ名がある（完全一致）」を使います。</p>
-              <p><b>🔒 タグロック</b>：投稿者がロックしたタグです。鍵アイコンが付くタグを意味します。こちらもタグ名1個との完全一致です。</p>
-              <p><b>🔒 タグロック数</b>：ロックされているタグの個数です。1～11の範囲で比較できます。</p>
-              <p><b>広告：投稿者IDと広告者ID</b>：ニコニ広告の広告者ユーザーIDと投稿者ユーザーIDを比較します。ID一致は高信頼です。</p>
-              <p><b>広告：投稿者名と広告者名</b>：表示名同士を比較します。同名や名前変更があり得るため参考条件です。可能ならID一致を優先してください。</p>
-            </div>
-          </details>
-          <div class=logicExample>
-            <b>例：検索妨害だけを狙ってNG</b>
-            <div>🔒 タグロック数 <b>以上（≥） 11</b></div>
-            <div>AND タグ <b>含む「ホモと見るシリーズ」</b></div>
-            <div>AND タグ <b>含む「本編改造淫夢」</b></div>
-            <div>AND ユーザーID <b>IDがない（退会済みなど）</b></div>
-          </div>
+          <div class=hint>条件を組み合わせて、隠したい動画を絞り込みます。「すべて」は条件が全部そろう動画、「どれか」は1つでも合う動画です。単独NGとは別に判定され、どちらかに一致すればNGになります。</div>
+          <details class=logicHelpDetails><summary>初めて使うときのポイント</summary><div class=logicHelpBody>
+            <p>まず例からルールを作り、言葉や個数を自分の好みに変えます。「動画で判定を試す」で結果を確認し、「このルールを使う」と全体の有効化を選んでから「変更を適用」を押してください。</p>
+            <p>タイトル・投稿者名の「含む」は部分一致、タグ名は完全一致です。英字の大文字・小文字は区別しません。入力の前後の空白は比較から除かれます。</p>
+            <p>例外はそのルールの対象から除くだけです。ほかのNG設定を取り消す効果はありません。情報の未取得・通信失敗は保留となり、反対の条件にしてもNGとは断定しません。</p>
+            <p>同じ投稿者の動画数は広告を除く元の1ページごとの件数です。投稿者情報が欠ける場合は保留します。IDがないことから退会済みと断定することはできません。</p>
+            <p>適用前なら削除も「元に戻す」で取り消せます。編集履歴はこの設定画面を開いている間の直近30操作までです。変更は適用するまで保存されません。</p>
+          </div></details>
           <div class=row>
-            <button type=button id=advancedRuleAddButton class=primary>＋ 論理ルールを追加</button>
-            <button type=button id=advancedRuleSampleButton>サンプルを追加</button>
+            <button type=button id=advancedRuleAddButton class=primary>＋ 白紙から作る</button>
+            <button type=button id=advancedRuleSampleButton>タイトル＋タグの例</button>
           </div>
           <div id=advancedRuleList class=advancedRuleList></div>
         </div>
@@ -3182,6 +2778,247 @@
   // ニコニコ本体のライト/ダークとスクリプト独自UIを自然に合わせる。
   // autoはOS設定だけでなく、実際のページ背景色も見る。
   // ============================================================
+  // Draft editing is isolated from Config until Apply. Uses the runtime evaluator for previews.
+  var RuleEditor = (function() {
+    const clone = value => JSON.parse(JSON.stringify(value))
+    const id = () => 'rule-' + Date.now() + '-' + Math.random().toString(36).slice(2,9)
+    const condition = (field = 'title', operator = 'contains', value = '') =>
+      ({kind:'condition', field, operator, value, not:false})
+    const group = (op, children, not = false) => ({kind:'group', op, children, not})
+    const templates = [
+      ['白紙から作る', () => group('AND', [condition()])],
+      ['タイトルとタグの両方で絞る', () => group('AND', [condition('title','contains','実況'), condition('tag','contains','ゲーム')])],
+      ['複数の言葉のどれかで絞る', () => group('OR', [condition('title','contains','総集編'), condition('title','contains','切り抜き')])],
+      ['好きなタグを除外して絞る', () => group('AND', [condition('title','contains','実況'), condition('tag','notContains','お気に入り')])],
+      ['同じ投稿者の連続投稿を絞る', () => group('AND', [condition('pageContributorCount','gte',5), condition('title','contains','実況')])]
+    ]
+    const fieldGroups = [
+      ['内容', ['title','tag','lockedTag','description','movieId']],
+      ['個数', ['lockedTagCount','tagCount','pageContributorCount']],
+      ['投稿者', ['contributorName','userId','channelId','contributorId']],
+      ['広告', ['selfAdIdMatch','selfAdNameMatch']]
+    ]
+    const validate = rules => {
+      const errors = []
+      const walk = (node, path, depth) => {
+        if (depth > 12) { errors.push(path + '：グループは12段までです。'); return }
+        if (node.kind === 'group') {
+          if (!node.children.length) errors.push(path + '：条件を1つ以上追加してください。')
+          node.children.forEach((child, i) => walk(child, path + ' / ' + (i + 1), depth + 1))
+          return
+        }
+        const meta = AdvancedNgRules.FIELD_META[node.field]
+        if (!meta || !meta.operators.includes(node.operator)) { errors.push(path + '：項目または比較方法が不正です。'); return }
+        if (!AdvancedNgRules.OP_META[node.operator].needsValue) return
+        const value = String(node.value ?? '').trim()
+        if (!value) { errors.push(path + '：値を入力してください。'); return }
+        if (meta.type === 'number' || meta.type === 'numberOrMissing') {
+          const n = Number(value)
+          if (!Number.isSafeInteger(n) || n < (meta.type === 'numberOrMissing' || node.field === 'pageContributorCount' ? 1 : 0))
+            errors.push(path + '：' + (meta.type === 'numberOrMissing' || node.field === 'pageContributorCount' ? '1以上' : '0以上') + 'の整数を入力してください。')
+          if (['tagCount','lockedTagCount'].includes(node.field) && n > 11) errors.push(path + '：タグの個数は0～11です。')
+        }
+      }
+      rules.forEach((rule, i) => walk(rule.expression, 'ルール' + (i + 1) + '「' + rule.name + '」', 0))
+      return errors
+    }
+    const describe = (node, friendly) => {
+      if (node.kind === 'condition') {
+        const text = AdvancedNgRules.FIELD_META[node.field].label + '：' + friendly(node.field,node.operator)
+          + (AdvancedNgRules.OP_META[node.operator].needsValue ? '「' + (node.value ?? '') + '」' : '')
+        return node.not ? '【当てはまらない】' + text : text
+      }
+      const text = '【' + (node.op === 'AND' ? 'すべて' : 'どれか1つ以上') + '】' + node.children.map(n => describe(n, friendly)).join(node.op === 'AND' ? '、かつ ' : '、または ')
+      return node.not ? '【次のまとまりには当てはまらない】' + text : text
+    }
+    function mount(dialog) {
+      const doc = dialog.doc, config = dialog.config
+      const host = doc.getElementById('advancedRuleList')
+      const master = doc.getElementById('advancedNgRulesEnabled')
+      const friendly = dialog._friendlyOperatorLabel.bind(dialog)
+      let savedRaw = config.advancedNgRulesJson.value, savedEnabled = config.advancedNgRulesEnabled.value
+      let draft = AdvancedNgRules.parse(savedRaw), draftEnabled = savedEnabled
+      let past = [], future = [], selected = 0, search = ''
+      let liveSamples = [], sampleMode = 'manual'
+      const sample = {id:'sm12345678', title:'ゲーム実況 第1回', description:'', thumbInfoDone:true,
+        error:{type:'NO_ERROR'}, tags:[{name:'ゲーム',lock:true}], contributor:{type:'user',id:12345,name:'投稿者'}, pageContributorCount:1}
+      const el = (tag, text, cls) => { const e = doc.createElement(tag); if (text != null) e.textContent = text; if (cls) e.className = cls; return e }
+      const button = (text, fn, cls) => { const e = el('button',text,cls); e.type='button'; e.addEventListener('click',fn); return e }
+      const labeled = (text, input) => { const label=el('label',null,'re-label'); label.append(el('span',text),input); return label }
+      const input = (label, value, onChange, type='text') => { const e=el('input'); e.type=type; e.value=value; e.setAttribute('aria-label',label); e.addEventListener('change',()=>onChange(e.value)); return e }
+      const select = (label, values, value, onChange) => { const e=el('select'); e.setAttribute('aria-label',label); for (const [v,t] of values) {const o=el('option',t);o.value=v;e.append(o)} e.value=value;e.addEventListener('change',()=>onChange(e.value));return e }
+      const snapshot = () => JSON.stringify({draft,draftEnabled})
+      let baseline = snapshot()
+      const remember = () => { past.push(snapshot()); if(past.length>30)past.shift(); future=[] }
+      const change = (fn, redraw=true) => {
+        const active=doc.activeElement, label=active?.tagName==='SELECT'?active.getAttribute('aria-label'):null
+        const index=label?Array.from(host.querySelectorAll('select')).filter(e=>e.getAttribute('aria-label')===label).indexOf(active):-1
+        remember();fn();if(redraw)render();else refresh()
+        if(redraw&&index>=0)Array.from(host.querySelectorAll('select')).filter(e=>e.getAttribute('aria-label')===label)[index]?.focus({preventScroll:true})
+      }
+      const restore = raw => {const data=JSON.parse(raw);draft=data.draft;draftEnabled=data.draftEnabled;selected=Math.min(selected,draft.length-1);render()}
+      const undo = () => {if(!past.length)return;future.push(snapshot());restore(past.pop())}
+      const redo = () => {if(!future.length)return;past.push(snapshot());restore(future.pop())}
+      host.className='re-editor';host.textContent=''
+      const style=el('style');style.textContent=CSS;doc.head.append(style)
+      const intro=el('p','① 例を選ぶ → ② 条件を編集する → ③ 動画で試す → ④ 適用する。編集途中の条件で動画が消えることはありません。','re-intro')
+      const tools=el('div',null,'re-tools re-savebar')
+      const undoButton=button('元に戻す',undo), redoButton=button('やり直す',redo)
+      const apply=button('変更を適用',()=>{
+        if(validate(draft).length)return
+        if(config.advancedNgRulesJson.value!==savedRaw || config.advancedNgRulesEnabled.value!==savedEnabled) {
+          status.textContent='別の画面で設定が変更されています。「保存済みに戻す」で読み直してください。下書きはまだ残っています。';return
+        }
+        if (!draftEnabled) config.advancedNgRulesEnabled.value=false
+        config.advancedNgRulesJson.value=JSON.stringify(draft)
+        if (draftEnabled) config.advancedNgRulesEnabled.value=true
+        savedRaw=config.advancedNgRulesJson.value;savedEnabled=config.advancedNgRulesEnabled.value;baseline=snapshot()
+        refresh();status.textContent='適用しました。情報が揃った動画から判定します。取得方式に関わる変更は次の検索移動から反映されます。'
+      },'primary')
+      const revert=button('保存済みに戻す',()=>{remember();savedRaw=config.advancedNgRulesJson.value;savedEnabled=config.advancedNgRulesEnabled.value;draft=AdvancedNgRules.parse(savedRaw);draftEnabled=savedEnabled;baseline=snapshot();render()})
+      const status=el('p',null,'re-status');status.setAttribute('role','status')
+      const errors=el('div',null,'re-errors');errors.setAttribute('aria-live','polite')
+      tools.append(undoButton,redoButton,revert,apply)
+      const chooser=el('div',null,'re-tools')
+      const templateSelect=select('作成するルールの例',templates.map((t,i)=>[String(i),t[0]]),'0',()=>{})
+      const add = templateIndex => change(()=>{draft.push({id:id(),name:templateIndex===0?'新しいルール':templates[templateIndex][0],enabled:false,expression:templates[templateIndex][1]()});selected=draft.length-1;search='';filter.value=''})
+      chooser.append(templateSelect,button('この例から作る',()=>add(Number(templateSelect.value))))
+      const filter=input('ルールを名前で探す','',v=>{search=v;renderList()});filter.placeholder='ルールを名前で探す';filter.className='re-filter';filter.addEventListener('input',()=>{search=filter.value;renderList()})
+      const layout=el('div',null,'re-layout'), list=el('div',null,'re-list'), detail=el('div',null,'re-detail')
+      layout.append(list,detail)
+      const simulator=el('details',null,'re-simulator');simulator.append(el('summary','③ 動画で判定を試す（設定は変わりません）'))
+      const testFields=el('div',null,'re-test-fields'), testResults=el('div',null,'re-test-results')
+      const sourceSelect=select('試す動画',[['manual','手入力した動画']],'manual',v=>{sampleMode=v;testFields.hidden=v!=='manual';runPreview()})
+      const loadSamples=button('このページの動画を読み込む',()=>{
+        liveSamples = typeof config._nrnRulePreviewMovies==='function' ? config._nrnRulePreviewMovies().slice(0,100) : []
+        sourceSelect.textContent='';const o=el('option','手入力した動画');o.value='manual';sourceSelect.append(o)
+        liveSamples.forEach((m,i)=>{const opt=el('option',m.title+' ('+m.id+')');opt.value=String(i);sourceSelect.append(opt)})
+        sampleMode=liveSamples.length?'0':'manual';sourceSelect.value=sampleMode;testFields.hidden=sampleMode!=='manual';runPreview()
+        if(!liveSamples.length)testResults.prepend(el('p','現在のページに試せる動画がありません。手入力で試せます。'))
+      })
+      const titleInput=input('試すタイトル',sample.title,v=>{sample.title=v;runPreview()})
+      testFields.append(labeled('タイトル',titleInput))
+      const tagsInput=el('textarea');tagsInput.value='ゲーム';tagsInput.setAttribute('aria-label','試すタグ');tagsInput.rows=3;tagsInput.addEventListener('change',()=>{sample.tags=[...new Set(tagsInput.value.split('\n').map(s=>s.trim()).filter(Boolean))].map(name=>({name,lock:false}));lockedInput.value='';runPreview()});testFields.append(labeled('タグ（1行に1個・編集するとロック指定は解除）',tagsInput))
+      const lockedInput=input('ロックしたタグ（カンマ区切り）','ゲーム',v=>{const locked=v.split(',').map(s=>s.trim()).filter(Boolean);sample.tags=sample.tags.map(t=>({...t,lock:locked.includes(t.name)}));for(const name of locked)if(!sample.tags.some(t=>t.name===name))sample.tags.push({name,lock:true});tagsInput.value=sample.tags.map(t=>t.name).join('\n');runPreview()})
+      testFields.append(labeled('ロックしたタグ（カンマ区切り・上のタグに追加）',lockedInput))
+      testFields.append(labeled('投稿者名',input('試す投稿者名',sample.contributor.name,v=>{sample.contributor.name=v;runPreview()})))
+      testFields.append(labeled('投稿者の種類',select('試す投稿者の種類',[['user','ユーザー'],['channel','チャンネル'],['unknown','情報なし']],'user',v=>{sample.contributor.type=v;runPreview()})))
+      testFields.append(labeled('投稿者ID',input('試す投稿者ID',12345,v=>{sample.contributor.id=v===''?null:Number(v);runPreview()},'number')))
+      testFields.append(labeled('元の1ページ内の同じ投稿者の動画数（空欄＝不明）',input('試すページ内動画数',1,v=>{sample.pageContributorCount=v===''?null:Number(v);runPreview()},'number')))
+      testFields.append(labeled('詳細情報',select('試す詳細情報',[['ready','取得済み'],['pending','未取得（判定保留を確認）']],'ready',v=>{sample.thumbInfoDone=v==='ready';runPreview()})))
+      testFields.append(labeled('動画ID',input('試す動画ID',sample.id,v=>{sample.id=v;runPreview()})))
+      testFields.append(labeled('説明文',input('試す説明文','',v=>{sample.description=v;runPreview()})))
+      simulator.append(el('p','選択中のルールだけを試します。ルールの休止・全体OFFに関係なく条件を評価します。他のNG設定での非表示や自動取得は再現しません。広告条件は手入力では情報不足になります。','hint'),sourceSelect,loadSamples,testFields,button('判定を更新',()=>runPreview()),testResults)
+      host.append(intro,chooser,tools,status,errors,filter,layout,simulator)
+      doc.getElementById('advancedRuleAddButton').addEventListener('click',()=>add(0))
+      doc.getElementById('advancedRuleSampleButton').addEventListener('click',()=>add(1))
+      master.addEventListener('change',()=>change(()=>{draftEnabled=master.checked},false))
+      function runPreview() {
+        testResults.textContent=''
+        const rule=draft[selected];if(!rule)return
+        if(validate([rule]).length){testResults.append(el('p','入力を修正してから試してください。'));return}
+        const movie=sampleMode==='manual'?sample:liveSamples[Number(sampleMode)]
+        if(!movie)return
+        const trace=[], result=AdvancedNgRules.evaluateState(movie,rule.expression,trace,0)
+        testResults.append(el('strong',result===true?'このルールに一致 → NG対象':result===false?'このルールには一致しません':'情報不足 → 判定保留',result===true?'re-match':''))
+        for(const t of trace) {
+          const text=t.kind==='condition' ? t.fieldLabel+' '+friendly(t.field,t.operator)+(AdvancedNgRules.OP_META[t.operator].needsValue?'「'+t.expected+'」':'')+' / 実際の値：'+(t.actual?.__notReady?'未取得':t.actual==null?'情報なし':String(t.actual)) : (t.op==='AND'?'すべての条件':'どれかの条件')
+          const row=el('div',(t.result===null?'保留':t.result?'一致':'不一致')+' — '+text+(t.not?'（反対にした結果）':''),'re-trace')
+          row.style.marginInlineStart=Math.min(t.depth,4)*12+'px';testResults.append(row)
+        }
+      }
+      function refresh() {
+        const issues=validate(draft), dirty=snapshot()!==baseline
+        master.checked=draftEnabled
+        doc.getElementById('advancedRuleCount').textContent=draft.length+'件（使用 '+draft.filter(r=>r.enabled).length+'件）'
+        undoButton.disabled=!past.length;redoButton.disabled=!future.length;apply.disabled=!dirty||!!issues.length
+        status.textContent=(dirty?'未適用の変更があります。閉じる前に適用してください。':'保存済みの設定です。')+(draftEnabled?'':' 条件を組み合わせるNGは全体OFFです。')
+        errors.textContent='';if(issues.length){errors.append(el('strong','入力を確認してください（休止中のルールも対象）'));for(const text of issues.slice(0,8))errors.append(el('div',text))}
+        const preview=detail.querySelector('.re-summary');if(preview&&draft[selected])preview.textContent='この動画をNGにする条件：'+describe(draft[selected].expression,friendly)
+        if(simulator.open)runPreview()
+      }
+      function renderList() {
+        list.textContent=''
+        draft.forEach((rule,i)=>{if(search&&!rule.name.toLowerCase().includes(search.toLowerCase()))return
+          const b=button((rule.enabled?'使用':'休止')+' · '+rule.name,()=>{selected=i;render()});b.className='re-rule';b.setAttribute('aria-pressed',String(selected===i));list.append(b)
+        })
+        if(!list.children.length)list.append(el('p',draft.length?'一致するルールがありません。':'まだルールがありません。上の例から作れます。','hint'))
+      }
+      function render() {
+        selected=Math.max(0,Math.min(selected,draft.length-1));renderList();detail.textContent=''
+        const rule=draft[selected]
+        if(rule) {
+          const name=input('ルール名',rule.name,v=>change(()=>{rule.name=v.trim()||'名前のないルール'},false));name.addEventListener('change',renderList)
+          const enabled=el('input');enabled.type='checkbox';enabled.checked=rule.enabled;enabled.addEventListener('change',()=>change(()=>{rule.enabled=enabled.checked}))
+          const head=el('div',null,'re-tools');head.append(labeled('このルールを使う',enabled),button('ルールを複製',()=>change(()=>{const copy=clone(rule);copy.id=id();copy.name+=' のコピー';copy.enabled=false;draft.splice(selected+1,0,copy);selected++})),button('ルールを削除',()=>change(()=>{draft.splice(selected,1)}),'danger'))
+          detail.append(labeled('ルール名',name),head,el('p','複数のルールは、どれか1つに一致すればNGになります。新しいルールと複製は休止で追加されます。','hint'),el('div',null,'re-summary'))
+          detail.append(renderNode(rule.expression,null,0,0))
+          detail.append(button('例外を追加（このルールから除く）',()=>change(()=>{rule.expression=group('AND',[rule.expression,group('OR',[condition('tag','contains','')],true)])})))
+          detail.append(el('p','例外はこのルールだけに作用します。別ルールや単独NGで一致した動画は表示に戻りません。','hint'))
+        }
+        refresh()
+      }
+      function renderNode(node,parent,index,depth) {
+        const box=el('div',null,node.kind==='group'?'re-group':'re-condition')
+        if(node.kind==='group') {
+          const toolbar=el('div',null,'re-tools')
+          toolbar.append(select('条件の組み合わせ', [['AND','すべてに当てはまる'],['OR','どれか1つ以上に当てはまる']],node.op,v=>change(()=>{node.op=v})))
+          const invert=el('input');invert.type='checkbox';invert.checked=node.not;invert.addEventListener('change',()=>change(()=>{node.not=invert.checked}))
+          toolbar.append(labeled('このまとまりを除外条件にする',invert));box.append(toolbar)
+          box.append(el('p',node.not?'下の条件に当てはまる動画を、このまとまりでは対象外にします。':node.op==='AND'?'下の条件が全部そろった動画だけが対象です。':'下の条件が1つでも合う動画が対象です。','hint'))
+          node.children.forEach((child,i)=>{if(i)box.append(el('div',node.op==='AND'?'かつ':'または','re-join'));box.append(renderNode(child,node,i,depth+1))})
+          const addCondition=button('＋ 条件',()=>change(()=>node.children.push(condition())))
+          const addGroup=button('＋ 条件のまとまり',()=>change(()=>node.children.push(group('OR',[condition()]))))
+          addCondition.disabled=depth>=12;addGroup.disabled=depth>=11
+          box.append(addCondition,addGroup)
+        } else {
+          const fields=el('select');fields.setAttribute('aria-label','条件の項目')
+          for(const [label,keys] of fieldGroups){const opt=el('optgroup');opt.label=label;for(const key of keys){const o=el('option',AdvancedNgRules.FIELD_META[key].label);o.value=key;opt.append(o)}fields.append(opt)}
+          fields.value=node.field;fields.addEventListener('change',()=>change(()=>{const f=fields.value;node.field=f;node.operator=AdvancedNgRules.FIELD_META[f].operators.includes('gte')?'gte':AdvancedNgRules.FIELD_META[f].operators[0];node.value=f==='lockedTagCount'?11:AdvancedNgRules.FIELD_META[f].type==='number'?1:''}))
+          box.append(labeled('何を',fields))
+          box.append(labeled('どう比べる',select('条件の比較方法',AdvancedNgRules.FIELD_META[node.field].operators.map(o=>[o,friendly(node.field,o)]),node.operator,v=>change(()=>{node.operator=v}))))
+          if(AdvancedNgRules.OP_META[node.operator].needsValue) {
+            const numeric=['number','numberOrMissing'].includes(AdvancedNgRules.FIELD_META[node.field].type)
+            const value=input('条件の値',node.value??'',v=>change(()=>{node.value=v},false),numeric?'number':'text')
+            value.placeholder=numeric?'数を入力':'例：実況';if(numeric){value.step='1';value.min=AdvancedNgRules.FIELD_META[node.field].type==='numberOrMissing'||node.field==='pageContributorCount'?'1':'0'}
+            box.append(labeled('値',value))
+          }
+          const help=dialog._operatorHelpText(node.field,node.operator)+(node.field==='pageContributorCount'?' 広告を除く元の1ページごとに数えます。投稿者不明があるページは保留します。':'')
+          box.append(el('p',help,'hint re-wide'))
+          const options=el('details',null,'re-wide');options.open=!!node.not;options.append(el('summary','応用：判定を反対にする'))
+          const invert=el('input');invert.type='checkbox';invert.checked=node.not;invert.addEventListener('change',()=>change(()=>{node.not=invert.checked}));options.append(labeled('この条件に当てはまらない（情報不足は保留）',invert));box.append(options)
+        }
+        if(parent) {
+          const actions=el('div',null,'re-tools re-wide')
+          const up=button('↑ 上へ',()=>change(()=>{[parent.children[index-1],parent.children[index]]=[parent.children[index],parent.children[index-1]]}));up.disabled=index===0
+          const down=button('↓ 下へ',()=>change(()=>{[parent.children[index+1],parent.children[index]]=[parent.children[index],parent.children[index+1]]}));down.disabled=index===parent.children.length-1
+          actions.append(up,down,button('複製',()=>change(()=>parent.children.splice(index+1,0,clone(node)))),button('削除',()=>change(()=>parent.children.splice(index,1))))
+          box.append(actions)
+        }
+        return box
+      }
+      simulator.addEventListener('toggle',()=>{if(simulator.open)runPreview()})
+      // Warn only when leaving this settings document with unapplied edits.
+      doc.defaultView.addEventListener('beforeunload',e=>{if(snapshot()!==baseline){e.preventDefault();e.returnValue=''}})
+      render()
+      return {validate:()=>validate(draft), canClose:()=>snapshot()===baseline || doc.defaultView.confirm('まだ適用していない変更があります。変更を破棄して閉じますか？')}
+    }
+    const CSS = `
+      .re-editor{min-width:0}.re-editor button:disabled{opacity:.45;cursor:not-allowed}.re-filter{width:100%;padding:9px;border:1px solid var(--line);border-radius:6px;background:var(--panel);color:var(--text)}.re-intro,.re-summary{padding:12px;background:var(--accent-soft);border-radius:8px;line-height:1.8;overflow-wrap:anywhere}
+      .re-tools{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:10px 0}.re-tools select{max-width:100%;min-width:0}
+      .re-savebar{position:sticky;top:0;z-index:5;background:var(--panel);padding:8px;border:1px solid var(--line);border-radius:8px}.re-status{line-height:1.7}.re-errors:not(:empty){border-left:3px solid var(--danger);padding:10px;color:var(--danger);margin-bottom:12px}
+      .re-layout{display:grid;grid-template-columns:180px minmax(0,1fr);gap:14px;margin-top:14px}.re-list{max-height:620px;overflow:auto}
+      .re-rule{display:block;width:100%;white-space:normal;text-align:left;margin-bottom:8px;overflow-wrap:anywhere}.re-rule[aria-pressed=true]{border-color:var(--accent);background:var(--accent-soft)}
+      .re-label{display:flex;flex-direction:column;gap:5px;min-width:0;font-weight:600}.re-label>input:not([type=checkbox]),.re-label>select,.re-label>textarea{width:100%;min-width:0;max-width:100%;font:inherit;font-weight:400;border:1px solid var(--line);border-radius:6px;padding:8px;background:var(--panel);color:var(--text)}.re-editor .hint{margin:5px 0;padding:8px;font-size:12px;line-height:1.6}.re-editor input[type=checkbox]{align-self:flex-start}
+      .re-group{padding:12px;border:1px solid var(--line);border-left:3px solid var(--accent);border-radius:8px;margin-top:10px;background:var(--panel2);min-width:0}
+      .re-group .re-group{padding:8px;margin-left:0}.re-condition{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:10px;padding:12px;background:var(--panel);border:1px solid var(--line);border-radius:6px}
+      .re-wide{grid-column:1/-1}.re-join{padding:7px;color:var(--accent);font-weight:700}.re-simulator{margin-top:18px;padding:14px;border:1px solid var(--line);border-radius:8px}
+      .re-test-fields{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:12px}.re-test-fields[hidden]{display:none}.re-trace{padding:7px;border-bottom:1px solid var(--line);overflow-wrap:anywhere}.re-match{color:var(--danger)}
+      .re-editor button:focus-visible,.re-editor input:focus-visible,.re-editor select:focus-visible,.re-editor summary:focus-visible{outline:3px solid var(--accent);outline-offset:2px}
+      @media(max-width:720px){.re-layout{grid-template-columns:1fr}.re-list{max-height:180px}.re-condition,.re-test-fields{grid-template-columns:1fr}.re-group{padding:7px}.re-condition{padding:8px}.re-editor button{min-height:36px}}
+    `
+    return {mount,validate,describe}
+  })()
   var DetailUiTheme = (function() {
     var parseRgb = function(value) {
       var m = String(value || '').match(/rgba?\(\s*(\d+(?:\.\d+)?)\s*,\s*(\d+(?:\.\d+)?)\s*,\s*(\d+(?:\.\d+)?)/i)
@@ -7780,6 +7617,7 @@ a.nrn-parsed[data-anchor-detail="nicoad"] > .nrn-movie-info-toggle { background:
     }
     var createModel = function(config) {
       var movies = new Movies(config)
+      config._nrnRulePreviewMovies = () => Array.from(movies._idToMovie.values()).slice(0,100)
       var movieViewModes = new MovieViewModes(config)
       var requestThumbInfo = getThumbInfoRequester(movies, movieViewModes)
       return {

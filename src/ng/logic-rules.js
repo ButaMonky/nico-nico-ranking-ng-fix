@@ -388,8 +388,8 @@
           if (node.field === 'userId' || node.field === 'channelId') operatorLabel = 'IDがある'
           else if (node.field === 'contributorId') operatorLabel = '投稿者IDがある'
         } else if (node.operator === 'notExists') {
-          if (node.field === 'userId') operatorLabel = 'IDがない（退会済みなど）'
-          else if (node.field === 'contributorId') operatorLabel = '投稿者IDがない（退会済みなど）'
+          if (node.field === 'userId') operatorLabel = 'IDが取得できない'
+          else if (node.field === 'contributorId') operatorLabel = '投稿者IDが取得できない'
           else if (node.field === 'channelId') operatorLabel = 'IDがない'
         }
         var core = (f ? f.label : node.field) + ' '
@@ -406,6 +406,7 @@
       parse:parse,
       match:match,
       evaluateNode:evaluateNode,
+      evaluateState:evaluateState,
       expressionText:expressionText,
       makeGroup:makeGroup,
       makeCondition:makeCondition,

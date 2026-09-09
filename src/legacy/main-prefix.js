@@ -115,6 +115,7 @@
     }
     var createModel = function(config) {
       var movies = new Movies(config)
+      config._nrnRulePreviewMovies = () => Array.from(movies._idToMovie.values()).slice(0,100)
       var movieViewModes = new MovieViewModes(config)
       var requestThumbInfo = getThumbInfoRequester(movies, movieViewModes)
       return {

@@ -139,7 +139,7 @@
       initCheckbox(config, doc, 'unknownContributorMovieVisible')
       initCheckbox(config, doc, 'ngLockedTagCountEnabled')
       initNumberInput(config, doc, 'ngLockedTagCountThreshold', 1, 11)
-      initCheckbox(config, doc, 'advancedNgRulesEnabled')
+      // The rule editor owns this checkbox; edits remain drafts until Apply.
       initCheckbox(config, doc, 'autoFillEnabled')
       initNumberInput(config, doc, 'autoFillTargetCount', 1)
       initNumberInput(config, doc, 'autoFillMaxExtraPages', 0)
@@ -198,6 +198,7 @@
       _e(id) { return this.doc.getElementById(id) },
       _close() {
         if (this._closed) return
+        if (this.ruleEditor && !this.ruleEditor.canClose()) return
         this._closed = true
         this.emit('closed')
       },
@@ -327,9 +328,9 @@
           if (field === 'contributorId') return '投稿者IDがある'
         }
         if (operator === 'notExists') {
-          if (field === 'userId') return 'IDがない（退会済みなど）'
+          if (field === 'userId') return 'IDが取得できない'
           if (field === 'channelId') return 'IDがない'
-          if (field === 'contributorId') return '投稿者IDがない（退会済みなど）'
+          if (field === 'contributorId') return '投稿者IDが取得できない'
         }
 
         var generic = AdvancedNgRules.OP_META[operator]
@@ -382,377 +383,15 @@
         }
         if (operator === 'notExists') {
           if (field === 'userId' || field === 'contributorId')
-            return '投稿者IDを取得できない場合に一致します。退会済みユーザーなどが該当します。通信エラーは一致扱いにしません。'
+            return '詳細情報の取得完了後もIDがない場合に一致します。退会済みかどうかは判定しません。通信エラー・詳細の未取得は保留します。'
           if (field === 'tag') return 'タグが1個も付いていない場合に一致します。'
           if (field === 'lockedTag') return 'ロック済みタグが1個もない場合に一致します。'
           return 'その情報が空、または取得できない場合に一致します。'
         }
         return ''
       },
-      _newAdvancedRule(enabled) {
-        var root = AdvancedNgRules.makeGroup('AND')
-        root.children.push(AdvancedNgRules.makeCondition('lockedTagCount'))
-        return {
-          id:'rule-' + Date.now() + '-' + Math.random().toString(36).slice(2,7),
-          name:'新しい論理NGルール',
-          enabled:enabled !== false,
-          expression:root
-        }
-      },
       _initAdvancedNgRuleBuilder() {
-        var add = this._e('advancedRuleAddButton')
-        var sample = this._e('advancedRuleSampleButton')
-        if (!add || !sample) return
-
-        add.addEventListener('click', function() {
-          var rules = this._readAdvancedRules()
-          rules.push(this._newAdvancedRule(true))
-          this._saveAdvancedRules(rules)
-        }.bind(this))
-
-        sample.addEventListener('click', function() {
-          var rules = this._readAdvancedRules()
-          var root = AdvancedNgRules.makeGroup('AND')
-          root.children = [
-            {kind:'condition',field:'lockedTagCount',operator:'eq',value:11,not:false},
-            {kind:'condition',field:'tag',operator:'contains',value:'ホモと見るシリーズ',not:false},
-            {kind:'condition',field:'tag',operator:'contains',value:'本編改造淫夢',not:false},
-            {kind:'condition',field:'contributorId',operator:'notExists',value:'',not:false}
-          ]
-          rules.push({
-            id:'rule-' + Date.now() + '-sample',
-            name:'例：検索妨害（編集して使用）',
-            enabled:false,
-            expression:root
-          })
-          this._saveAdvancedRules(rules)
-        }.bind(this))
-
-        this._renderAdvancedNgRules()
-      },
-      _renderAdvancedNgRules() {
-        var container = this._e('advancedRuleList')
-        var count = this._e('advancedRuleCount')
-        if (!container) return
-
-        var rules = this._readAdvancedRules()
-        if (count) count.textContent = rules.length + '件'
-        container.textContent = ''
-
-        if (!rules.length) {
-          var empty = this.doc.createElement('div')
-          empty.className = 'advancedRuleEmpty'
-          empty.textContent = '論理NGルールはまだありません。「ルールを追加」または「サンプルを追加」から作成できます。'
-          container.appendChild(empty)
-          return
-        }
-
-        var operatorOptionsFor = function(field) {
-          var meta = AdvancedNgRules.FIELD_META[field]
-          return meta ? meta.operators : []
-        }
-
-        var defaultValueFor = function(field) {
-          if (field === 'lockedTagCount') return 11
-          if (field === 'tagCount') return 1
-          return ''
-        }
-
-        rules.forEach(function(rule, ruleIndex) {
-          var card = this.doc.createElement('div')
-          card.className = 'advancedRuleCard logicRuleCard'
-          card.classList.toggle('disabled', !rule.enabled)
-
-          var head = this.doc.createElement('div')
-          head.className = 'advancedRuleHead'
-
-          var enabled = this.doc.createElement('input')
-          enabled.type = 'checkbox'
-          enabled.checked = rule.enabled !== false
-          enabled.title = 'このルールだけをON/OFFします。'
-
-          var name = this.doc.createElement('input')
-          name.type = 'text'
-          name.value = rule.name
-          name.className = 'advancedRuleName'
-          name.placeholder = 'ルール名'
-
-          var del = this.doc.createElement('button')
-          del.type = 'button'
-          del.textContent = '削除'
-          del.className = 'danger'
-
-          head.appendChild(enabled)
-          head.appendChild(name)
-          head.appendChild(del)
-          card.appendChild(head)
-
-          var preview = this.doc.createElement('div')
-          preview.className = 'logicExpressionPreview'
-          card.appendChild(preview)
-
-          var rootHost = this.doc.createElement('div')
-          rootHost.className = 'logicRootHost'
-          card.appendChild(rootHost)
-
-          var saveNow = function(renderAgain) {
-            var all = this._readAdvancedRules()
-            if (!all[ruleIndex]) return
-            all[ruleIndex] = rule
-            this.config.advancedNgRulesJson.value = JSON.stringify(all)
-            preview.textContent = '式: ' + AdvancedNgRules.expressionText(rule.expression)
-            if (renderAgain) renderRoot()
-          }.bind(this)
-
-          enabled.addEventListener('change', function() {
-            rule.enabled = enabled.checked
-            card.classList.toggle('disabled', !rule.enabled)
-            saveNow(false)
-          })
-          name.addEventListener('change', function() {
-            rule.name = name.value.trim() || ('ルール ' + (ruleIndex + 1))
-            name.value = rule.name
-            saveNow(false)
-          })
-          del.addEventListener('click', function() {
-            if (!window.confirm('「' + rule.name + '」を削除しますか？')) return
-            var all = this._readAdvancedRules()
-            all.splice(ruleIndex, 1)
-            this._saveAdvancedRules(all)
-          }.bind(this))
-
-          var renderCondition = function(node, parentGroup, index, depth) {
-            var row = this.doc.createElement('div')
-            row.className = 'logicConditionRow'
-            row.style.setProperty('--logic-depth', String(depth))
-
-            var notLabel = this.doc.createElement('label')
-            notLabel.className = 'logicNotToggle'
-            var notCheck = this.doc.createElement('input')
-            notCheck.type = 'checkbox'
-            notCheck.checked = Boolean(node.not)
-            notLabel.appendChild(notCheck)
-            notLabel.appendChild(this.doc.createTextNode('条件を反対にする（NOT）'))
-
-            var field = this.doc.createElement('select')
-            field.className = 'logicField'
-            Object.keys(AdvancedNgRules.FIELD_META).forEach(function(key) {
-              var meta = AdvancedNgRules.FIELD_META[key]
-              field.add(new Option(meta.label, key))
-            })
-            field.value = node.field
-            field.title = '比較したい情報を選びます。タグ名と文字列、個数は別の項目です。'
-
-            var lockSpot = this.doc.createElement('span')
-            lockSpot.className = 'logicFieldIcon'
-            var updateLockSpot = function() {
-              lockSpot.textContent = ''
-              if (field.value === 'lockedTag' || field.value === 'lockedTagCount') {
-                lockSpot.appendChild(this._lockSvgElement('advancedLockSvg small'))
-              }
-            }.bind(this)
-            updateLockSpot()
-
-            var operator = this.doc.createElement('select')
-            operator.className = 'logicOperator'
-
-            var value = this.doc.createElement('input')
-            value.className = 'logicValue'
-
-            var remove = this.doc.createElement('button')
-            remove.type = 'button'
-            remove.className = 'logicRemove'
-            remove.textContent = '×'
-            remove.title = 'この条件を削除'
-
-            var rebuildOperator = function() {
-              operator.textContent = ''
-              operatorOptionsFor(node.field).forEach(function(opKey) {
-                operator.add(new Option(
-                  this._friendlyOperatorLabel(node.field, opKey), opKey))
-              }.bind(this))
-              if (!operatorOptionsFor(node.field).includes(node.operator)) {
-                node.operator = operatorOptionsFor(node.field)[0]
-              }
-              operator.value = node.operator
-              operator.title = this._operatorHelpText(node.field, node.operator)
-
-              var fm = AdvancedNgRules.FIELD_META[node.field]
-              var om = AdvancedNgRules.OP_META[node.operator]
-              var numeric = fm && (fm.type === 'number' || fm.type === 'numberOrMissing')
-              value.type = numeric ? 'number' : 'text'
-              if (node.field === 'lockedTagCount' || node.field === 'tagCount') {
-                value.min = '0'
-                value.max = '11'
-              } else {
-                value.removeAttribute('min')
-                value.removeAttribute('max')
-              }
-              value.style.display = om && om.needsValue === false ? 'none' : ''
-              value.value = node.value == null ? '' : node.value
-
-              if (node.field === 'tag') value.placeholder = '例：本編改造淫夢'
-              else if (node.field === 'lockedTag') value.placeholder = '例：ホモと見るシリーズ'
-              else if (node.field === 'title') value.placeholder = 'タイトルに探す文字列'
-              else if (node.field === 'description') value.placeholder = '説明文に探す文字列'
-              else if (node.field === 'contributorName') value.placeholder = '投稿者名'
-              else if (node.field === 'movieId') value.placeholder = '例：sm12345678'
-              else if (node.field === 'lockedTagCount') value.placeholder = '例：11'
-              else if (node.field === 'tagCount') value.placeholder = '例：5'
-              else if (['userId','channelId','contributorId'].includes(node.field))
-                value.placeholder = '数値ID'
-              else value.placeholder = ''
-            }.bind(this)
-            rebuildOperator()
-
-            notCheck.addEventListener('change', function() {
-              node.not = notCheck.checked
-              saveNow(false)
-            })
-            field.addEventListener('change', function() {
-              node.field = field.value
-              var ops = operatorOptionsFor(node.field)
-              node.operator = ops[0]
-              node.value = defaultValueFor(node.field)
-              updateLockSpot()
-              rebuildOperator()
-              saveNow(false)
-            })
-            operator.addEventListener('change', function() {
-              node.operator = operator.value
-              rebuildOperator()
-              saveNow(false)
-            })
-            value.addEventListener('change', function() {
-              var fm = AdvancedNgRules.FIELD_META[node.field]
-              if (fm && (fm.type === 'number' || fm.type === 'numberOrMissing')) {
-                var n = Number(value.value)
-                node.value = Number.isFinite(n) ? n : 0
-              } else {
-                node.value = value.value.trim()
-              }
-              value.value = node.value
-              saveNow(false)
-            })
-            remove.addEventListener('click', function() {
-              parentGroup.children.splice(index, 1)
-              saveNow(true)
-            })
-
-            row.appendChild(notLabel)
-            row.appendChild(lockSpot)
-            row.appendChild(field)
-            row.appendChild(operator)
-            row.appendChild(value)
-            row.appendChild(remove)
-            return row
-          }.bind(this)
-
-          var renderGroup = function(group, parentGroup, index, depth, isRoot) {
-            var box = this.doc.createElement('div')
-            box.className = 'logicGroup'
-            box.dataset.logicDepth = String(depth)
-
-            var toolbar = this.doc.createElement('div')
-            toolbar.className = 'logicGroupToolbar'
-
-            var op = this.doc.createElement('select')
-            op.className = 'logicGroupOp'
-            op.add(new Option('すべて満たす（AND / 論理積）', 'AND'))
-            op.add(new Option('どれか1つ以上満たす（OR / 論理和）', 'OR'))
-            op.value = group.op === 'OR' ? 'OR' : 'AND'
-            op.title = 'このグループ内の条件をAND/ORで結合します。'
-
-            var notLabel = this.doc.createElement('label')
-            notLabel.className = 'logicNotToggle groupNot'
-            var notCheck = this.doc.createElement('input')
-            notCheck.type = 'checkbox'
-            notCheck.checked = Boolean(group.not)
-            notLabel.appendChild(notCheck)
-            notLabel.appendChild(this.doc.createTextNode('このグループを否定する（NOT / 論理否定）'))
-
-            var addCondition = this.doc.createElement('button')
-            addCondition.type = 'button'
-            addCondition.textContent = '＋ 条件'
-            addCondition.title = 'このグループに比較条件を追加'
-
-            var addGroup = this.doc.createElement('button')
-            addGroup.type = 'button'
-            addGroup.textContent = '＋ AND/OR グループ'
-            addGroup.title = 'AND/ORを入れ子にした新しい論理グループを追加'
-
-            toolbar.appendChild(op)
-            toolbar.appendChild(notLabel)
-            toolbar.appendChild(addCondition)
-            toolbar.appendChild(addGroup)
-
-            if (!isRoot) {
-              var removeGroup = this.doc.createElement('button')
-              removeGroup.type = 'button'
-              removeGroup.textContent = 'グループ削除'
-              removeGroup.className = 'danger'
-              removeGroup.addEventListener('click', function() {
-                parentGroup.children.splice(index, 1)
-                saveNow(true)
-              })
-              toolbar.appendChild(removeGroup)
-            }
-
-            box.appendChild(toolbar)
-
-            var children = this.doc.createElement('div')
-            children.className = 'logicChildren'
-            box.appendChild(children)
-
-            if (!group.children.length) {
-              var blank = this.doc.createElement('div')
-              blank.className = 'logicEmptyGroup'
-              blank.textContent = '条件なし（安全のためこのグループはFALSE扱い）'
-              children.appendChild(blank)
-            }
-
-            group.children.forEach(function(child, childIndex) {
-              if (child.kind === 'group') {
-                children.appendChild(renderGroup(
-                  child, group, childIndex, depth + 1, false))
-              } else {
-                children.appendChild(renderCondition(
-                  child, group, childIndex, depth + 1))
-              }
-            })
-
-            op.addEventListener('change', function() {
-              group.op = op.value
-              saveNow(false)
-            })
-            notCheck.addEventListener('change', function() {
-              group.not = notCheck.checked
-              saveNow(false)
-            })
-            addCondition.addEventListener('click', function() {
-              group.children.push(AdvancedNgRules.makeCondition('tag'))
-              saveNow(true)
-            })
-            addGroup.addEventListener('click', function() {
-              var g = AdvancedNgRules.makeGroup('AND')
-              g.children.push(AdvancedNgRules.makeCondition('lockedTagCount'))
-              group.children.push(g)
-              saveNow(true)
-            })
-
-            return box
-          }.bind(this)
-
-          var renderRoot = function() {
-            rootHost.textContent = ''
-            rootHost.appendChild(renderGroup(
-              rule.expression, null, -1, 0, true))
-            preview.textContent = '式: ' + AdvancedNgRules.expressionText(rule.expression)
-          }
-
-          renderRoot()
-          container.appendChild(card)
-        }.bind(this))
+        this.ruleEditor = RuleEditor.mount(this)
       },
       _runDeveloperDiagnostics() {
         var status = this._e('developerDiagnosticStatus')
@@ -1111,64 +750,20 @@
       </details>
 
       <details class=card open>
-        <summary><span class=inlineLockIcon aria-hidden=true><svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24"><path d="M18 7h-1V5.98a4 4 0 0 0-4-4h-2a4 4 0 0 0-4 4V7H6a3 3 0 0 0-3 3v8a3 3 0 0 0 3 3h12a3 3 0 0 0 3-3v-8a3 3 0 0 0-3-3M9.53 17.16l1.14-1.97.51-.87a2 2 0 0 1 .83-3.82c.7 0 1.32.36 1.67.91q.32.48.33 1.09a2 2 0 0 1-1.17 1.82l1.64 2.84a.23.23 0 0 1-.2.34H9.74a.23.23 0 0 1-.2-.34zM9 5.98c0-1.1.9-2 2-2h2a2 2 0 0 1 2 2V7H9z"></path></svg></span>論理NGルール <span id=advancedRuleCount class=pill>0件</span></summary>
+        <summary><span class=inlineLockIcon aria-hidden=true><svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24"><path d="M18 7h-1V5.98a4 4 0 0 0-4-4h-2a4 4 0 0 0-4 4V7H6a3 3 0 0 0-3 3v8a3 3 0 0 0 3 3h12a3 3 0 0 0 3-3v-8a3 3 0 0 0-3-3M9.53 17.16l1.14-1.97.51-.87a2 2 0 0 1 .83-3.82c.7 0 1.32.36 1.67.91q.32.48.33 1.09a2 2 0 0 1-1.17 1.82l1.64 2.84a.23.23 0 0 1-.2.34H9.74a.23.23 0 0 1-.2-.34zM9 5.98c0-1.1.9-2 2-2h2a2 2 0 0 1 2 2V7H9z"></path></svg></span>条件を組み合わせるNG <span id=advancedRuleCount class=pill>0件</span></summary>
         <div class=sectionBody>
           <div class=row><label><input type=checkbox id=advancedNgRulesEnabled>複合NGルールを有効にする</label></div>
-          <div class=hint>同じ投稿者の動画数は、広告を除く元の検索結果1ページ内の件数です。追加分は取得元のページごとに数えます。投稿者が不明な動画があるページは、この条件の判定を保留します。
-            <b>論理NGルール</b>は、複数の条件を組み合わせて「この条件に当てはまる動画だけNG」にする機能です。<br>
-            <b>AND（論理積）</b> = すべて満たす / <b>OR（論理和）</b> = どれか1つ以上満たす / <b>NOT（論理否定）</b> = 条件の結果を反対にする、という意味です。<br>
-            タイトル・説明文などは<b>文字列の部分一致 / 完全一致</b>、タグ・🔒タグロックは<b>タグ名1個との完全一致</b>、タグ数は<b>数値比較</b>として扱います。普通はまず <b>AND（すべて満たす）</b> を使えば十分です。
-          </div>
-
-          <details class=logicHelpDetails>
-            <summary>📘 論理ルールの詳しい使い方・用語解説</summary>
-            <div class=logicHelpBody>
-              <p><b>条件式</b>：1つの判定です。例「🔒 タグロック数が 11以上」。</p>
-              <p><b>条件グループ</b>：複数の条件式を AND / OR でまとめたものです。</p>
-              <p><b>AND（論理積）</b>：グループ内の条件をすべて満たしたときだけ成立します。</p>
-              <p><b>OR（論理和）</b>：グループ内の条件を1つ以上満たせば成立します。</p>
-              <p><b>NOT（論理否定）</b>：条件やグループの結果を反転します。初心者の方はまず「含まない」「IDがない」などの直接的な条件を使う方が分かりやすいです。</p>
-              <p><b>入れ子（ネスト）</b>：条件グループの中へさらに別の条件グループを入れることです。例：A AND (B OR C)。</p>
-              <hr>
-              <p><b>文字列</b>：タイトル・説明文・投稿者名・動画IDなど、文字の並びとして扱う値です。</p>
-              <p><b>部分一致</b>：入力した文字列が、対象の文字列の一部分に含まれていれば一致します。例：「改造」を検索すると「本編改造淫夢」に一致します。</p>
-              <p><b>完全一致</b>：先頭から末尾まで文字列全体が同じ場合だけ一致します。例：「本編改造淫夢」は「本編改造淫夢」に一致しますが、「改造淫夢」には一致しません。</p>
-              <p><b>タグ / 🔒タグロックの文字列比較</b>：タグは1個ずつ独立した名前として比較します。「指定したタグ名がある」は<b>タグ名の完全一致</b>です。タグ名の一部分だけでは一致しません。</p>
-              <p><b>タグ数 / 🔒タグロック数</b>：タグの名前ではなく、何個付いているかを数値で比較する項目です。</p>
-              <hr>
-              <p><b>比較演算子</b></p>
-              <ul>
-                <li><b>より大きい（&gt;）</b>：指定値より大きい</li>
-                <li><b>以上（≥）</b>：指定値と同じ、または大きい</li>
-                <li><b>未満（&lt;）</b>：指定値より小さい</li>
-                <li><b>以下（≤）</b>：指定値と同じ、または小さい</li>
-                <li><b>等しい（=）</b>：指定値と同じ</li>
-                <li><b>等しくない（≠）</b>：指定値と異なる</li>
-              </ul>
-              <hr>
-              <p><b>ユーザーID / 投稿者IDについて</b></p>
-              <p><b>IDがない（退会済みなど）</b>：投稿者IDを取得できない動画に一致します。退会済みユーザーの動画などが該当します。通信エラーは「IDがない」とは判定しません。</p>
-              <p><b>IDがある</b>：投稿者IDを正常に取得できる動画に一致します。</p>
-              <p>IDは数値なので、<b>以上 / 以下 / より大きい / 未満</b>も使えます。たとえば「ユーザーIDが 50000000以上」のように、特定時期以降に作られたID帯を条件として組み合わせる用途にも使えます。</p>
-              <hr>
-              <p><b>タイトル・説明文</b>：文章そのものを文字列として比較します。「文字列を含む（部分一致）」と「文字列が完全一致」を使い分けられます。</p>
-              <p><b>タグ</b>：動画に付いているタグ名を1個ずつ比較します。「指定したタグ名がある（完全一致）」を使います。</p>
-              <p><b>🔒 タグロック</b>：投稿者がロックしたタグです。鍵アイコンが付くタグを意味します。こちらもタグ名1個との完全一致です。</p>
-              <p><b>🔒 タグロック数</b>：ロックされているタグの個数です。1～11の範囲で比較できます。</p>
-              <p><b>広告：投稿者IDと広告者ID</b>：ニコニ広告の広告者ユーザーIDと投稿者ユーザーIDを比較します。ID一致は高信頼です。</p>
-              <p><b>広告：投稿者名と広告者名</b>：表示名同士を比較します。同名や名前変更があり得るため参考条件です。可能ならID一致を優先してください。</p>
-            </div>
-          </details>
-          <div class=logicExample>
-            <b>例：検索妨害だけを狙ってNG</b>
-            <div>🔒 タグロック数 <b>以上（≥） 11</b></div>
-            <div>AND タグ <b>含む「ホモと見るシリーズ」</b></div>
-            <div>AND タグ <b>含む「本編改造淫夢」</b></div>
-            <div>AND ユーザーID <b>IDがない（退会済みなど）</b></div>
-          </div>
+          <div class=hint>条件を組み合わせて、隠したい動画を絞り込みます。「すべて」は条件が全部そろう動画、「どれか」は1つでも合う動画です。単独NGとは別に判定され、どちらかに一致すればNGになります。</div>
+          <details class=logicHelpDetails><summary>初めて使うときのポイント</summary><div class=logicHelpBody>
+            <p>まず例からルールを作り、言葉や個数を自分の好みに変えます。「動画で判定を試す」で結果を確認し、「このルールを使う」と全体の有効化を選んでから「変更を適用」を押してください。</p>
+            <p>タイトル・投稿者名の「含む」は部分一致、タグ名は完全一致です。英字の大文字・小文字は区別しません。入力の前後の空白は比較から除かれます。</p>
+            <p>例外はそのルールの対象から除くだけです。ほかのNG設定を取り消す効果はありません。情報の未取得・通信失敗は保留となり、反対の条件にしてもNGとは断定しません。</p>
+            <p>同じ投稿者の動画数は広告を除く元の1ページごとの件数です。投稿者情報が欠ける場合は保留します。IDがないことから退会済みと断定することはできません。</p>
+            <p>適用前なら削除も「元に戻す」で取り消せます。編集履歴はこの設定画面を開いている間の直近30操作までです。変更は適用するまで保存されません。</p>
+          </div></details>
           <div class=row>
-            <button type=button id=advancedRuleAddButton class=primary>＋ 論理ルールを追加</button>
-            <button type=button id=advancedRuleSampleButton>サンプルを追加</button>
+            <button type=button id=advancedRuleAddButton class=primary>＋ 白紙から作る</button>
+            <button type=button id=advancedRuleSampleButton>タイトル＋タグの例</button>
           </div>
           <div id=advancedRuleList class=advancedRuleList></div>
         </div>
