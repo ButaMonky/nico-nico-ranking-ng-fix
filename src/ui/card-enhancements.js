@@ -58,6 +58,8 @@
       return {labels, fields, titleTerms, nameTerms, tagTerms}
     }
     function ownerLink(doc, owner, native) {
+      const identity = OwnerEvidence.normalize(owner)
+      if (identity && !OwnerEvidence.same(identity, OwnerEvidence.fromUrl(native?.href))) native = null
       const url = owner?.url || native?.href
       const knownName = owner?.name || native?.querySelector('img')?.alt || native?.textContent?.trim()
       const link = doc.createElement(url ? 'a' : 'span')

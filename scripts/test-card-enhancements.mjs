@@ -129,6 +129,12 @@ try {
     } finally {window.fetch=fetchBefore;}
   });
   assert.equal(await page.locator('#decoration-fixture .nrn-ad-decoration').textContent(),'17,800pt');
+  assert.equal(await page.evaluate(() => {
+    const native=document.createElement('a'); native.href='https://www.nicovideo.jp/user/88';
+    native.innerHTML='<img src="https://nrn.test/wrong-owner.png"><p>wrong name</p>';
+    const owner=fixtureEnhancements.ownerLink(document,{type:'user',id:77,name:'',url:'https://www.nicovideo.jp/user/77'},native);
+    return owner.textContent.includes('wrong') || owner.querySelector('img').src.includes('wrong-owner');
+  }),false,'conflicting native identity must not supply the authoritative owner name/icon');
   // Transient hover DOM must retain its original listeners and never be parsed as videos.
   await page.evaluate(html => {
     const host = document.querySelector('#ad > a');

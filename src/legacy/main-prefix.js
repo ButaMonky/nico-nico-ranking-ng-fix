@@ -116,6 +116,7 @@
     var createModel = function(config) {
       var movies = new Movies(config)
       config._nrnRulePreviewMovies = () => Array.from(movies._idToMovie.values()).slice(0,100)
+      var applySearchOwner = ThumbInfoListener.forSearch(movies)
       var movieViewModes = new MovieViewModes(config)
       var requestThumbInfo = getThumbInfoRequester(movies, movieViewModes)
       return {
@@ -128,6 +129,7 @@
             return new Movie(r.movie.id, r.movie.title)
           }))
           for (var row of resultsOfParsing) {
+            applySearchOwner(row.movie.id, OwnerEvidence.fromRow(row))
             var count = Number(row.rootElem.dataset.nrnPageContributorCount)
             if (Number.isFinite(count) && count > 0) movies.get(row.movie.id).setPageContributorCount(count)
           }

@@ -35,26 +35,55 @@
       var typeToMap = Contributor.TYPES.reduce(function(map, type) {
         return map.set(type, new Map())
       }, new Map())
-      return function(o) {
+      return function(o, source) {
         if (o.type === 'unknown') return Contributor.NULL;
         var map = typeToMap.get(o.type)
-        if (map.has(o.id)) return map.get(o.id)
+        const key = (source || 'detail') + ':' + o.id
+        if (map.has(key)) return map.get(key)
         var contributor = Contributor.new(o.type, o.id, o.name)
-        map.set(o.id, contributor)
+        map.set(key, contributor)
         contributor.bindToConfig(config)
         return contributor
       }
     }
+    const builders = new WeakMap()
+    function builder(movies) {
+      if (!builders.has(movies)) builders.set(movies,createContributorBuilder(movies.config))
+      return builders.get(movies)
+    }
+    function selectOwner(movie, getContributorBy) {
+      const owner = movie._nrnDetailContributor || movie._nrnSearchContributor
+      movie._nrnContributorSource = movie._nrnDetailContributor ? 'detail' : owner ? 'search' : 'unknown'
+      movie.contributor = owner ? getContributorBy(owner,movie._nrnContributorSource) : Contributor.NULL
+    }
     return {
+      forSearch(movies) {
+        const getContributorBy = builder(movies)
+        return function(id, evidence) {
+          const movie = movies.get(id), owner = OwnerEvidence.normalize(evidence)
+          if (!movie || !owner || movie._nrnSearchOwnerConflict) return
+          const previous = movie._nrnSearchContributor
+          if (previous && !OwnerEvidence.same(previous,owner)) {
+            movie._nrnSearchContributor = null
+            movie._nrnSearchOwnerConflict = true
+          } else {
+            movie._nrnSearchContributor = previous?.name ? previous : owner
+          }
+          selectOwner(movie,getContributorBy)
+        }
+      },
       forCompleted(movies) {
         var getTagsBy = createTagsBuilder(movies.config)
-        var getContributorBy = createContributorBuilder(movies.config)
+        var getContributorBy = builder(movies)
         return function(thumbInfo) {
           var m = movies.get(thumbInfo.id)
           if (m.error && m.error.type !== 'NO_ERROR') m.error = Movie.NO_ERROR
           m.description = thumbInfo.description
           m.tags = getTagsBy(thumbInfo.tags)
-          m.contributor = getContributorBy(thumbInfo.contributor)
+          // Keep raw API/cache objects unchanged; search evidence belongs to this route's movie.
+          const detailOwner = OwnerEvidence.normalize(thumbInfo.contributor)
+          if (detailOwner) m._nrnDetailContributor = detailOwner
+          selectOwner(m,getContributorBy)
           m.setThumbInfoDone()
         }
       },

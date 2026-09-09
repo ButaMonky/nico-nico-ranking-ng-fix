@@ -2374,7 +2374,7 @@
           id: id,
           title: movie.title || '',
           description: movie.description || '',
-          contributor: movie.contributor ? {
+          contributor: movie._nrnContributorSource !== 'search' && movie.contributor ? {
             type: movie.contributor.type,
             id: movie.contributor.id,
             name: movie.contributor.name

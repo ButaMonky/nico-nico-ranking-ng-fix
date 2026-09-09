@@ -6,7 +6,7 @@
 // @match        *://www.nicovideo.jp/ranking*
 // @match        *://www.nicovideo.jp/search/*
 // @match        *://www.nicovideo.jp/tag/*
-// @version      160.9
+// @version      160.10
 // @grant        unsafeWindow
 // @grant        GM_getValue
 // @grant        GM_setValue
@@ -1672,6 +1672,62 @@
     }
     return Movies
   })()
+  // Search evidence is scoped to the exact video/card and never inferred from names.
+  var OwnerEvidence = (function() {
+    const injected = new WeakMap()
+    function normalize(owner) {
+      if (!owner) return null
+      const declared = owner.ownerType || owner.type
+      if (declared && !['user','channel'].includes(declared)) return null
+      const raw = String(owner.id ?? '')
+      const type = declared || (/^ch[0-9]+$/.test(raw) ? 'channel' : 'user')
+      const text = type === 'channel' ? raw.replace(/^ch/,'') : raw
+      if (!/^[0-9]+$/.test(text)) return null
+      const id = Number(text)
+      if (!Number.isSafeInteger(id) || id <= 0) return null
+      const name = typeof owner.name === 'string' ? owner.name.trim() : ''
+      return {type,id,name}
+    }
+    function fromUrl(value, base) {
+      try {
+        const url = new URL(value,base)
+        if (!['https:','http:'].includes(url.protocol) || url.username || url.password) return null
+        let match
+        if (url.hostname === 'www.nicovideo.jp' && (match = url.pathname.match(/^\/user\/([0-9]+)\/?$/))) return normalize({type:'user',id:match[1]})
+        if (['www.nicovideo.jp','ch.nicovideo.jp'].includes(url.hostname) && (match = url.pathname.match(/^\/channel\/(?:ch)?([0-9]+)\/?$/))) return normalize({type:'channel',id:match[1]})
+      } catch (_) {}
+      return null
+    }
+    const same = (a,b) => a && b && a.type === b.type && a.id === b.id
+    function register(root,item) {
+      if (root.dataset.decorationVideoId === item.id) injected.set(root,{id:item.id,owner:normalize(item.owner)})
+    }
+    function fromRow(row) {
+      const root = row.rootElem, id = row.movie.id
+      if (!root || root.dataset.decorationVideoId !== id) return null
+      const recorded = injected.get(root)
+      if (recorded?.id === id) return recorded.owner
+      const owners = []
+      for (const link of root.querySelectorAll('a[data-group-ignore="true"][data-anchor-area="main"][href]')) {
+        if (link.closest('[data-decoration-video-id]') !== root || link.closest('.nrn-movie-info-container,.nrn-description,.nrn-card-description,[data-scope="menu"]')) continue
+        if (!link.querySelector(':scope > img') || !link.querySelector(':scope > p')) continue
+        // The native owner row is a sibling of this video's title, not a user link in a description.
+        const titleSibling = [...link.parentElement.querySelectorAll(':scope > a[href]')].some(a => {
+          try { return new URL(a.href).pathname === '/watch/' + id } catch (_) { return false }
+        })
+        if (!titleSibling) continue
+        const owner = fromUrl(link.href,root.ownerDocument.baseURI)
+        if (!owner) continue
+        const tracked = link.getAttribute('data-anchor-href')
+        if (tracked && !same(owner,fromUrl(tracked,root.ownerDocument.baseURI))) continue
+        owner.name = link.querySelector(':scope > p').textContent.trim()
+        owners.push(owner)
+      }
+      if (!owners.length || owners.some(owner => !same(owner,owners[0]))) return null
+      return owners[0]
+    }
+    return {normalize,fromUrl,fromRow,register,same}
+  })()
   var ThumbInfoListener = (function() {
     var createTagBuilder = function(config) {
       var map = new Map()
@@ -1709,26 +1765,55 @@
       var typeToMap = Contributor.TYPES.reduce(function(map, type) {
         return map.set(type, new Map())
       }, new Map())
-      return function(o) {
+      return function(o, source) {
         if (o.type === 'unknown') return Contributor.NULL;
         var map = typeToMap.get(o.type)
-        if (map.has(o.id)) return map.get(o.id)
+        const key = (source || 'detail') + ':' + o.id
+        if (map.has(key)) return map.get(key)
         var contributor = Contributor.new(o.type, o.id, o.name)
-        map.set(o.id, contributor)
+        map.set(key, contributor)
         contributor.bindToConfig(config)
         return contributor
       }
     }
+    const builders = new WeakMap()
+    function builder(movies) {
+      if (!builders.has(movies)) builders.set(movies,createContributorBuilder(movies.config))
+      return builders.get(movies)
+    }
+    function selectOwner(movie, getContributorBy) {
+      const owner = movie._nrnDetailContributor || movie._nrnSearchContributor
+      movie._nrnContributorSource = movie._nrnDetailContributor ? 'detail' : owner ? 'search' : 'unknown'
+      movie.contributor = owner ? getContributorBy(owner,movie._nrnContributorSource) : Contributor.NULL
+    }
     return {
+      forSearch(movies) {
+        const getContributorBy = builder(movies)
+        return function(id, evidence) {
+          const movie = movies.get(id), owner = OwnerEvidence.normalize(evidence)
+          if (!movie || !owner || movie._nrnSearchOwnerConflict) return
+          const previous = movie._nrnSearchContributor
+          if (previous && !OwnerEvidence.same(previous,owner)) {
+            movie._nrnSearchContributor = null
+            movie._nrnSearchOwnerConflict = true
+          } else {
+            movie._nrnSearchContributor = previous?.name ? previous : owner
+          }
+          selectOwner(movie,getContributorBy)
+        }
+      },
       forCompleted(movies) {
         var getTagsBy = createTagsBuilder(movies.config)
-        var getContributorBy = createContributorBuilder(movies.config)
+        var getContributorBy = builder(movies)
         return function(thumbInfo) {
           var m = movies.get(thumbInfo.id)
           if (m.error && m.error.type !== 'NO_ERROR') m.error = Movie.NO_ERROR
           m.description = thumbInfo.description
           m.tags = getTagsBy(thumbInfo.tags)
-          m.contributor = getContributorBy(thumbInfo.contributor)
+          // Keep raw API/cache objects unchanged; search evidence belongs to this route's movie.
+          const detailOwner = OwnerEvidence.normalize(thumbInfo.contributor)
+          if (detailOwner) m._nrnDetailContributor = detailOwner
+          selectOwner(m,getContributorBy)
           m.setThumbInfoDone()
         }
       },
@@ -5231,6 +5316,7 @@ html[data-nrn-ui-theme="dark"] .nrn-contributor-ng-name-button:hover {
         root.className = 'Pressable cursor_pointer d_flex cq-t_inline-size min-w_thumbnail.min max-w_thumbnail.max w_100% nrn-autofill-pending'
         root.setAttribute('data-decoration-video-id', item.id)
         root.setAttribute('data-nrn-autofill', 'true')
+        OwnerEvidence.register(root, item)
         if (Number.isFinite(item.__nrnPageContributorCount)) root.dataset.nrnPageContributorCount = String(item.__nrnPageContributorCount)
         root.setAttribute('data-anchor-area', 'main')
         root.setAttribute('data-anchor-page',
@@ -7397,6 +7483,8 @@ div:has(> div > a[data-anchor-page="ranking_genre"][href^="/watch/"] > div > p),
       return {labels, fields, titleTerms, nameTerms, tagTerms}
     }
     function ownerLink(doc, owner, native) {
+      const identity = OwnerEvidence.normalize(owner)
+      if (identity && !OwnerEvidence.same(identity, OwnerEvidence.fromUrl(native?.href))) native = null
       const url = owner?.url || native?.href
       const knownName = owner?.name || native?.querySelector('img')?.alt || native?.textContent?.trim()
       const link = doc.createElement(url ? 'a' : 'span')
@@ -7625,6 +7713,7 @@ a.nrn-parsed[data-anchor-detail="nicoad"] > .nrn-movie-info-toggle { background:
     var createModel = function(config) {
       var movies = new Movies(config)
       config._nrnRulePreviewMovies = () => Array.from(movies._idToMovie.values()).slice(0,100)
+      var applySearchOwner = ThumbInfoListener.forSearch(movies)
       var movieViewModes = new MovieViewModes(config)
       var requestThumbInfo = getThumbInfoRequester(movies, movieViewModes)
       return {
@@ -7637,6 +7726,7 @@ a.nrn-parsed[data-anchor-detail="nicoad"] > .nrn-movie-info-toggle { background:
             return new Movie(r.movie.id, r.movie.title)
           }))
           for (var row of resultsOfParsing) {
+            applySearchOwner(row.movie.id, OwnerEvidence.fromRow(row))
             var count = Number(row.rootElem.dataset.nrnPageContributorCount)
             if (Number.isFinite(count) && count > 0) movies.get(row.movie.id).setPageContributorCount(count)
           }
@@ -10375,7 +10465,7 @@ a.nrn-parsed[data-anchor-detail="nicoad"] > .nrn-movie-info-toggle { background:
           id: id,
           title: movie.title || '',
           description: movie.description || '',
-          contributor: movie.contributor ? {
+          contributor: movie._nrnContributorSource !== 'search' && movie.contributor ? {
             type: movie.contributor.type,
             id: movie.contributor.id,
             name: movie.contributor.name
