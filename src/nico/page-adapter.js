@@ -233,10 +233,6 @@
           this._setNgButton(b)
           var result = doc.createElement('span')
           result.className = 'nrn-contributor'
-          var label = doc.createElement('span')
-          label.className = 'nrn-contributor-kind'
-          label.textContent = this._label
-          result.appendChild(label)
           result.appendChild(a)
           result.appendChild(b)
           return result
@@ -390,12 +386,8 @@
 
         var contributorSection = doc.createElement('section')
         contributorSection.className = 'nrn-info-section nrn-contributor-section'
-        var contributorHead = doc.createElement('div')
-        contributorHead.className = 'nrn-info-section-title'
-        contributorHead.textContent = '投稿者情報'
         var c = doc.createElement('div')
         c.className = 'nrn-contributor-container'
-        contributorSection.appendChild(contributorHead)
         contributorSection.appendChild(c)
 
         var result = doc.createElement('div')

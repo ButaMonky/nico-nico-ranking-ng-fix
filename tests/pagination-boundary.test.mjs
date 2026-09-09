@@ -26,7 +26,7 @@ test('generated: redirects to an earlier page are not appended as new videos',as
 });
 async function poolHarness(responses,last=null){
  const calls=[],updates=[];
- const ctx=vm.createContext({console:quiet,performance,model:{config:{autoFillMaxExtraPages:{value:0},autoFillEnabled:{value:true}}},useSnapshot:false,LOG:'test',candidatePool:[],lastFetchedHadNext:null,nextPageToFetch:2,
+ const ctx=vm.createContext({journey:{record(){}},console:quiet,performance,model:{config:{autoFillMaxExtraPages:{value:0},autoFillEnabled:{value:true}}},useSnapshot:false,LOG:'test',candidatePool:[],lastFetchedHadNext:null,nextPageToFetch:2,
  knownLastPage:last,endReachedWithoutRequest:false,endPageDetectionSource:'test',currentPageNumber:()=>1,fetchedPageNumbers:new Set(),fetchedExtraPages:0,totalFetchedItems:0,
  page:{fetchPageItems:async n=>{calls.push(n);const r=responses.shift();if(r instanceof Error)throw r;if(!r)throw Error('unexpected request');return r;}},
  updatePagerUi:r=>updates.push(r),logCandidateTable(){},filterFreshItems:items=>({freshItems:items})});

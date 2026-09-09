@@ -37,6 +37,7 @@
 
       // -------------------- utility --------------------
       var sourceHref = page._sourceUrl || location.href
+      var journey = PagerJourney.create(page, model.config, sourceHref)
       var requestScope = setupAutoFill.sequence = (setupAutoFill.sequence || 0) + 1
       var gmRequest = function(options) {
         return new Promise(function(resolve, reject) {
@@ -1841,9 +1842,15 @@
         if (page._disposed) return
         if (model.config.spaNavigationFix.value) {
           var oldSummary = page.doc.querySelector('.nrn-pager-summary')
-          if (model.config.autoFillPagerMode.value === 'off') { oldSummary?.remove(); return }
-          var scanned = new Set([currentPageNumber(), ...fetchedPageNumbers])
-          var nativeLinks = Array.from(page.doc.querySelectorAll('a[href]')).filter(isNumericPagerAnchor)
+          if (model.config.autoFillPagerMode.value === 'off') { restorePagerUi(); return }
+          const displayed = new Set(uniqueVisibleRoots(page.movieRoots).map(root => root.movieId))
+          const completed = useSnapshot ? [] : journey.update(knownLastPage, function(id) {
+            const movie = model.movies.get(id)
+            return movie && movie.thumbInfoDone && movie.error?.type === 'NO_ERROR' && (movie.ng || displayed.has(id))
+          })
+          if (useSnapshot) journey.restore()
+          var scanned = new Set(completed)
+          var nativeLinks = Array.from(page.doc.querySelectorAll('a[href]')).filter(a => !a.closest('.nrn-journey-pager')).filter(isNumericPagerAnchor)
             .filter(function(a) { return pageNumberFromHref(a.href) != null })
           nativeLinks.forEach(function(a) {
             spaPagerLinks.add(a)
@@ -1854,9 +1861,9 @@
           if (nativeLinks.length) {
             var summary = oldSummary || page.doc.createElement('span')
             if (!summary.className) summary.className = 'nrn-pager-summary'
-            const text = '走査済みページ：' + compactRanges([...scanned]).map(function(r) {
+            const text = '表示・NG判定済みページ（斜線）：' + compactRanges([...scanned]).map(function(r) {
               return r.start === r.end ? String(r.start) : r.start + '–' + r.end
-            }).join('、')
+            }).join('、') + (scanned.size ? '' : 'なし')
             if (summary.textContent !== text) summary.textContent = text
             if (!summary.isConnected) nativeLinks[0].parentElement.after(summary)
           }
@@ -2044,6 +2051,7 @@
       })
 
       var restorePagerUi = function() {
+        journey?.restore()
         page.doc.querySelectorAll('.nrn-pager-summary').forEach(function(node) { node.remove() })
         spaPagerLinks.forEach(link => link.classList.remove('nrn-page-consumed')); spaPagerLinks.clear()
         page.doc.querySelectorAll('a[href], a[data-nrn-synthetic-next="true"]').forEach(function(a) {
@@ -2226,6 +2234,7 @@
               item.__nrnSourceIndex = idx
             })
 
+            journey.record(pageNumber, items)
             var filtered = filterFreshItems(items)
             logCandidateTable('ページ ' + pageNumber + ' 候補', filtered.freshItems)
             filtered.freshItems.forEach(function(item) { candidatePool.push(item) })
@@ -3665,7 +3674,7 @@
         rebalanceOverflow()
         updateStatus()
         clearTimeout(debounceTimer)
-        debounceTimer = setTimeout(maybeFetchMore, 100)
+        debounceTimer = setTimeout(function() { updatePagerUi('NG display changed'); maybeFetchMore() }, 100)
       })
 
       model.config.autoFillEnabled.on('changed', function(enabled) {

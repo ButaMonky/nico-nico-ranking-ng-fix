@@ -679,15 +679,13 @@
           }
           var colorClass = decoration === 'gold' ? 'c_serviceColor.nicoadGold fill_serviceColor.nicoadGold' : 'c_serviceColor.nicoadGray fill_serviceColor.nicoadGray'
           var sponsorDiv = this.doc.createElement('div')
-          sponsorDiv.className = 'd_flex flex-d_column ' + colorClass
-          var nameSpan = this.doc.createElement('span')
-          nameSpan.className = 'fs_s fw_bold lc_1 min-h_font'
-          nameSpan.textContent = '提供：' + (data.ownerName || '')
+          sponsorDiv.className = 'nrn-ad-decoration d_flex flex-d_column ' + colorClass
+          // ownerName identifies the content owner, not the advertiser.
+          // The decoration response alone cannot supply an accurate sponsor label.
           var pointSpan = this.doc.createElement('span')
           pointSpan.className = 'd_inline-flex ai_center gap_x0_5 fs_s min-h_font'
           pointSpan.innerHTML = NICOAD_POINT_ICON_SVG
           pointSpan.appendChild(this.doc.createTextNode((data.totalPoint || 0).toLocaleString() + 'pt'))
-          sponsorDiv.appendChild(nameSpan)
           sponsorDiv.appendChild(pointSpan)
           root.firstElementChild.appendChild(sponsorDiv)
         } catch (e) {

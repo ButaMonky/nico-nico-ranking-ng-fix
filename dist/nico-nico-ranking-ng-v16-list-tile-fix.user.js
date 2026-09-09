@@ -6,7 +6,8 @@
 // @match        *://www.nicovideo.jp/ranking*
 // @match        *://www.nicovideo.jp/search/*
 // @match        *://www.nicovideo.jp/tag/*
-// @version      160.8
+// @version      160.9
+// @grant        unsafeWindow
 // @grant        GM_getValue
 // @grant        GM_setValue
 // @grant        GM_xmlhttpRequest
@@ -2685,7 +2686,7 @@
           <div class=hint>「自動」はニコニコ画面の実際の背景色を見てライト/ダークを判定します。ダーク配色は真っ黒・真っ白を避け、暗い青灰色の背景と少し抑えた文字色にして長時間見ても眩しすぎない配色にしています。</div>
           <div class=row><label><input type=checkbox id=openNewWindow>動画を新しいタブで開く</label></div>
           <div class=row><label><input type=checkbox id=spaNavigationFix>SPA移動に合わせてNG判定を更新する（推奨）</label></div>
-          <div class=hint>タグ・検索語・ページ番号・並び順・絞り込みを変えたとき、画面を再読み込みせず新しい検索結果のNG判定を開始します。「戻る・進む」にも対応します。ONでは元のページ番号リンクを保ち、走査済みの番号に斜線と範囲を表示します。次へリンクの行き先は変えません。</div>
+          <div class=hint>タグ・検索語・ページ番号・並び順・絞り込みを変えたとき、画面を再読み込みせず新しい検索結果のNG判定を開始します。「戻る・進む」にも対応します。ページ番号の範囲圧縮は、サイトのSPA移動機能を利用できる場合に働きます。未表示の候補が残るページは飛ばしません。</div>
           <div class=row><label><input type=checkbox id=useGetThumbInfo>動画詳細情報を取得する</label></div>
           <div class=row><label><input type=checkbox id=movieInfoTogglable>タグ・ユーザー・チャンネルの表示切替</label></div>
           <div class=row><label><input type=checkbox id=descriptionTogglable>動画説明の表示切替</label></div>
@@ -2728,8 +2729,8 @@
     autoFillDetailBatchMax: '1回に完全NG判定へ送る最大候補数です。低NG率では小さめ、高NG率では大きめが効率的です。',
     statusPanelMode: '右下の進捗パネルの表示量を選択します。',
     detailUiTheme: 'タグ・投稿者情報、操作ボタン、設定画面などスクリプト独自UIの配色です。自動はニコニコ本体の実背景色から判定します。',
-    autoFillPagerMode: 'SPA対応がONのときは、走査済みのページに斜線と範囲の説明を表示します。番号・次へリンクの行き先は変わりません。SPA対応がOFFのときだけ、従来の範囲圧縮・取得済みページのスキップを使います。OFFならページ番号を装飾しません。',
-    pagerPreviewCount: 'SPA対応がOFFのとき、走査済み範囲のあとに何ページ分の番号を残すかを指定します。SPA対応がONのときは元の番号をすべて残すため、この設定は使いません。',
+    autoFillPagerMode: '範囲圧縮では、全動画の表示またはNG判定を終えた追加ページを「4–8」のように斜線付きでまとめ、前後の矢印で飛ばします。未表示の候補が残るページは飛ばしません。SPA移動機能に接続できない場合は元のリンクと斜線だけを残します。検索条件・NG設定を変えると記録を分けます。OFFなら装飾しません。',
+    pagerPreviewCount: '範囲圧縮のとき、現在ページの前後に表示する未処理ページ番号の数です。斜線の範囲は一つにまとめます。SPA移動機能に接続できない場合は元の番号を保ちます。',
     statusAnimationEnabled: '処理中だけ右下ステータスに回転インジケーターを表示します。',
     sessionDetailCacheEnabled: '取得済みのタグ・投稿者情報を同じタブに保存して、再読み込み後も再利用します。保存中に情報が変わると、有効期限まで古い情報で判定する場合があります。OFFでもSPA移動中は直近2分・最大512件をメモリに保持します。NG判定は常に現在の設定でやり直します。',
     sessionDetailCacheTtlMinutes: 'キャッシュを何分まで有効とみなすかです。期限切れは自動削除します。',
@@ -3491,10 +3492,6 @@ html[data-nrn-ui-theme="dark"] .nrn-contributor-ng-name-button:hover {
           this._setNgButton(b)
           var result = doc.createElement('span')
           result.className = 'nrn-contributor'
-          var label = doc.createElement('span')
-          label.className = 'nrn-contributor-kind'
-          label.textContent = this._label
-          result.appendChild(label)
           result.appendChild(a)
           result.appendChild(b)
           return result
@@ -3648,12 +3645,8 @@ html[data-nrn-ui-theme="dark"] .nrn-contributor-ng-name-button:hover {
 
         var contributorSection = doc.createElement('section')
         contributorSection.className = 'nrn-info-section nrn-contributor-section'
-        var contributorHead = doc.createElement('div')
-        contributorHead.className = 'nrn-info-section-title'
-        contributorHead.textContent = '投稿者情報'
         var c = doc.createElement('div')
         c.className = 'nrn-contributor-container'
-        contributorSection.appendChild(contributorHead)
         contributorSection.appendChild(c)
 
         var result = doc.createElement('div')
@@ -5318,15 +5311,13 @@ html[data-nrn-ui-theme="dark"] .nrn-contributor-ng-name-button:hover {
           }
           var colorClass = decoration === 'gold' ? 'c_serviceColor.nicoadGold fill_serviceColor.nicoadGold' : 'c_serviceColor.nicoadGray fill_serviceColor.nicoadGray'
           var sponsorDiv = this.doc.createElement('div')
-          sponsorDiv.className = 'd_flex flex-d_column ' + colorClass
-          var nameSpan = this.doc.createElement('span')
-          nameSpan.className = 'fs_s fw_bold lc_1 min-h_font'
-          nameSpan.textContent = '提供：' + (data.ownerName || '')
+          sponsorDiv.className = 'nrn-ad-decoration d_flex flex-d_column ' + colorClass
+          // ownerName identifies the content owner, not the advertiser.
+          // The decoration response alone cannot supply an accurate sponsor label.
           var pointSpan = this.doc.createElement('span')
           pointSpan.className = 'd_inline-flex ai_center gap_x0_5 fs_s min-h_font'
           pointSpan.innerHTML = NICOAD_POINT_ICON_SVG
           pointSpan.appendChild(this.doc.createTextNode((data.totalPoint || 0).toLocaleString() + 'pt'))
-          sponsorDiv.appendChild(nameSpan)
           sponsorDiv.appendChild(pointSpan)
           root.firstElementChild.appendChild(sponsorDiv)
         } catch (e) {
@@ -7425,7 +7416,7 @@ div:has(> div > a[data-anchor-page="ranking_genre"][href^="/watch/"] > div > p),
     function attach(root, movie, page) {
       let frame = null, ownerSignature = '', previousSignature = ''
       const doc = page.doc
-      const nativeOwner = root.elem.querySelector('a[href*="/user/"]:not(.nrn-contributor-link), a[href*="/channel/"]:not(.nrn-contributor-link)')
+      let nativeOwner = root.elem.querySelector('a[href*="/user/"]:not(.nrn-contributor-link), a[href*="/channel/"]:not(.nrn-contributor-link)')
       const render = function() {
         frame = null
         if (root._disposed || page._disposed) return
@@ -7442,6 +7433,12 @@ div:has(> div > a[data-anchor-page="ranking_genre"][href^="/watch/"] > div > p),
           const text = 'NG：' + detail.labels.join(' / ')
           if (label.textContent !== text) label.textContent = text
         }
+        // React may replace its owner row. Mark the current native row without moving it.
+        const currentOwner = [...root.elem.querySelectorAll('a[href*="/user/"], a[href*="/channel/"]')]
+          .find(link => !link.closest('.nrn-movie-info-container'))
+        if (currentOwner !== nativeOwner) nativeOwner?.classList.remove('nrn-native-owner')
+        nativeOwner = currentOwner || null
+        nativeOwner?.classList.add('nrn-native-owner')
         const container = root.movieInfo.elem.querySelector('.nrn-contributor-container')
         const owner = movie.contributor
         const signature = JSON.stringify([owner?.type, owner?.id, owner?.name, owner?.ngName])
@@ -7454,6 +7451,7 @@ div:has(> div > a[data-anchor-page="ranking_genre"][href^="/watch/"] > div > p),
           } else container.prepend(link)
           ownerSignature = signature
         }
+        root.elem.classList.toggle('nrn-owner-detail-ready', Boolean(container?.querySelector('.nrn-owner-row')))
         const summary = JSON.stringify([detail.labels, [...detail.fields], movie.tags.map(t => [t.name, t.lock]), movie.pageContributorCount])
         if (summary === previousSignature && root._nrnPresentationRendered) return
         previousSignature = summary; root._nrnPresentationRendered = true
@@ -7481,6 +7479,7 @@ div:has(> div > a[data-anchor-page="ranking_genre"][href^="/watch/"] > div > p),
       const schedule = () => { if (frame == null && !page._disposed) frame = requestAnimationFrame(render) }
       movie.on('ngReasonsChanged', schedule); movie.on('thumbInfoDone', schedule)
       root._disposeEnhancements = () => {
+        nativeOwner?.classList.remove('nrn-native-owner'); root.elem.classList.remove('nrn-owner-detail-ready')
         cancelAnimationFrame(frame); movie.off('ngReasonsChanged', schedule); movie.off('thumbInfoDone', schedule)
       }
       schedule()
@@ -7490,10 +7489,18 @@ div:has(> div > a[data-anchor-page="ranking_genre"][href^="/watch/"] > div > p),
 .nrn-ng-reasons { color:#ad2431; background:#fff0f1; font-size:12px; line-height:1.5; padding:3px 5px; overflow-wrap:anywhere; flex-basis:100%; }
 .nrn-ng-reasons[hidden] { display:none !important; }
 .nrn-reason-mark, .nrn-movie-info-container .nrn-movie-tag-link.nrn-reason-tag, .nrn-info-section-title mark { background:#ffe29a; color:#612e00; text-decoration:none; }
+.nrn-info-expanded.nrn-owner-detail-ready .nrn-native-owner { display:none !important; }
 .nrn-owner-row { display:inline-flex; align-items:center; gap:4px; min-width:0; font-weight:bold; }
 .nrn-owner-row img { width:24px; height:24px; min-width:24px; border-radius:50%; object-fit:cover; }
 .nrn-owner-unavailable { color:#828892 !important; }
 .nrn-page-consumed { background:repeating-linear-gradient(135deg,transparent,transparent 5px,#8c929755 5px,#8c929755 6px); text-decoration:line-through; }
+.nrn-native-pager-replaced { display:none !important; }
+.nrn-journey-pager { display:flex; align-items:center; justify-content:center; flex-wrap:wrap; gap:4px; margin:12px 0; }
+.nrn-journey-pager > * { display:inline-flex; align-items:center; justify-content:center; min-width:32px; min-height:32px; padding:2px 6px; border-radius:4px; }
+.nrn-journey-pager a { color:inherit; border:1px solid #8893a044; text-decoration:none; }
+.nrn-journey-pager a:hover { background:#71829c22; }
+.nrn-journey-pager [aria-disabled=true] { color:#828892; cursor:default; }
+.nrn-journey-pager [aria-current=page] { color:inherit; font-weight:bold; border:2px solid currentColor; }
 .nrn-pager-summary { display:block; font-size:12px; color:#626a75; margin:4px 0; }
 a.nrn-parsed[data-anchor-detail="nicoad"] { padding-bottom:28px; }
 a.nrn-parsed[data-anchor-detail="nicoad"] > .nrn-movie-info-toggle { background:#fff; box-shadow:0 0 0 1px #aeb5be; }
@@ -7858,6 +7865,140 @@ a.nrn-parsed[data-anchor-detail="nicoad"] > .nrn-movie-info-toggle { background:
       return service
     }
 
+  // One document only: no video data, user IDs or NG decisions are persisted here.
+  var PagerJourney = (function() {
+    const histories = new Map(), ttl = 30 * 60 * 1000
+    function searchKey(href) {
+      const u = new URL(href)
+      for (const k of ['page', 'rf', 'rp', 'ra', 'ref', 'from']) u.searchParams.delete(k)
+      u.searchParams.sort(); return u.origin + u.pathname + '?' + u.searchParams.toString()
+    }
+    function settingsKey(config) {
+      return JSON.stringify(Object.keys(config).filter(k => /^(ng|advancedNg|useGetThumbInfo|unknownContributor|visibleContributor)/.test(k) && k !== 'ngMovieVisible').sort()
+        .map(k => [k, config[k]?.set ? [...config[k].set] : config[k]?.value]))
+    }
+    function history(href, signature, now = Date.now()) {
+      const key = searchKey(href)
+      for (const [k, entry] of histories) if (now - entry.created > ttl) histories.delete(k)
+      let entry = histories.get(key)
+      if (!entry || entry.signature !== signature) entry = {signature, created:now, pages:new Map(), starts:new Set()}
+      entry.time = now; histories.delete(key); histories.set(key, entry)
+      while (histories.size > 8) histories.delete(histories.keys().next().value)
+      return entry
+    }
+    function ranges(numbers) {
+      const result = []
+      for (const n of [...new Set(numbers)].sort((a,b) => a-b)) {
+        const last = result[result.length-1]
+        if (last && last.end + 1 === n) last.end = n
+        else result.push({start:n, end:n})
+      }
+      return result
+    }
+    function layout(current, consumed, last, preview = 2) {
+      const used = new Set(consumed); used.delete(current)
+      const next = (from, step) => { let n = from + step; while (used.has(n)) n += step; return n < 1 || (last != null && n > last) ? null : n }
+      const selected = new Set([current]); const grouped = ranges(used)
+      for (const step of [-1, 1]) {
+        let n = current
+        for (let i=0; i<Math.max(0,Math.min(6,Math.trunc(preview) || 0)); i++) { n = next(n, step); if (n == null) break; selected.add(n) }
+      }
+      const min = Math.min(...selected), max = Math.max(...selected)
+      const tokens = [...selected].map(n => ({start:n,end:n,current:n===current}))
+      for (const group of grouped) if (group.end >= min && group.start <= max || group.start === max+1 || group.end === min-1) tokens.push({...group, consumed:true})
+      tokens.sort((a,b)=>a.start-b.start)
+      return {tokens, prev:next(current,-1), next:next(current,1)}
+    }
+    function router(doc) {
+      try {
+        const win = typeof unsafeWindow !== 'undefined' ? unsafeWindow : doc.defaultView
+        const r = win.__reactRouterDataRouter
+        return r && typeof r.navigate === 'function' && r.state?.initialized ? r : null
+      } catch (_) { return null }
+    }
+    function create(page, config, href) {
+      const parsedPage = Number(new URL(href).searchParams.get('page') || 1)
+      const current = Number.isSafeInteger(parsedPage) && parsedPage > 0 ? parsedPage : 1
+      const fetched = new Map(), views = new Map()
+      let pending = false
+      function restore() {
+        for (const [native, view] of views) { native.classList.remove('nrn-native-pager-replaced'); view.remove() }
+        views.clear()
+      }
+      function record(number, items) {
+        if (items.length && items.every(item => item.id)) fetched.set(number, [...new Set(items.map(item=>item.id))])
+        while (fetched.size > 256) fetched.delete(fetched.keys().next().value)
+      }
+      function update(last, isSettled) {
+        const state = history(href, settingsKey(config))
+        state.starts.add(current)
+        for (const [number, ids] of fetched) {
+          if (ids.every(isSettled)) state.pages.set(number, true)
+          else state.pages.delete(number)
+        }
+        for (const number of state.starts) state.pages.delete(number)
+        while (state.pages.size > 256) state.pages.delete(state.pages.keys().next().value)
+        while (state.starts.size > 128) state.starts.delete(state.starts.values().next().value)
+        const consumed = [...state.pages.keys()].filter(n => last == null || n <= last)
+        if (config.autoFillPagerMode.value !== 'compactSkip' || !router(page.doc)) { restore(); return consumed }
+        const nativePagers = [...page.doc.querySelectorAll('nav[data-scope="pagination"]')]
+          .filter(nav => !nav.id.startsWith('nrn-') && [...nav.querySelectorAll('a[href]')].some(a => {
+            try { return searchKey(a.href) === searchKey(href) } catch (_) { return false }
+          }))
+        for (const [native, view] of views) if (!native.isConnected) { view.remove(); views.delete(native) }
+        const model = layout(current, consumed, last, Number(config.pagerPreviewCount.value))
+        for (const native of nativePagers) {
+          let view = views.get(native)
+          if (!view) { view = page.doc.createElement('nav'); view.id = 'nrn-pager-' + views.size; view.className = 'nrn-journey-pager'; view.setAttribute('aria-label','検索結果のページ'); views.set(native,view); native.after(view) }
+          native.classList.add('nrn-native-pager-replaced')
+          const renderedSettings = state.signature
+          const signature = JSON.stringify([model, renderedSettings])
+          if (view.dataset.signature === signature) continue
+          view.dataset.signature = signature; view.replaceChildren()
+          const add = (text, number, label, disabled, selected, consumedRange) => {
+            const el = page.doc.createElement(number != null && !disabled ? 'a' : 'span')
+            el.textContent = text; el.setAttribute('aria-label',label)
+            if (selected) el.setAttribute('aria-current','page')
+            if (disabled) el.setAttribute('aria-disabled','true')
+            if (consumedRange) el.className = 'nrn-page-consumed'
+            if (number != null && !disabled) {
+              const target = new URL(href); target.searchParams.set('page',String(number)); el.href = target.href
+              el.addEventListener('click', event => {
+                if (event.button || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return
+                event.preventDefault(); event.stopPropagation()
+                if (pending || page._disposed) return
+                if (settingsKey(config) !== renderedSettings) { update(last,isSettled); return }
+                const r = router(page.doc)
+                if (!r) { restore(); return }
+                pending = true; view.setAttribute('aria-busy','true')
+                // Use the site's router. pushState alone would leave stale React results.
+                Promise.resolve().then(() => r.navigate(target.pathname + target.search + target.hash)).catch(() => {
+                  restore() // Keep native navigation available; never force a document reload.
+                }).finally(() => { pending = false; view.removeAttribute('aria-busy') })
+              })
+            }
+            view.append(el)
+          }
+          add('←',model.prev,'前の未処理ページ',model.prev == null)
+          let previous = 0
+          for (const token of model.tokens) {
+            if (token.start > previous+1) { const gap=page.doc.createElement('span'); gap.textContent='…'; view.append(gap) }
+            const text = token.start === token.end ? String(token.start) : token.start + '–' + token.end
+            add(text,token.start,token.consumed ? text + 'ページは表示・NG判定済み' : text + 'ページ',token.consumed || token.current,token.current,token.consumed)
+            previous = token.end
+          }
+          if (last != null && previous < last) {
+            if (previous+1 < last) { const gap=page.doc.createElement('span'); gap.textContent='…'; view.append(gap) }
+            add(String(last),last,'最終ページ ' + last,consumed.includes(last),false,consumed.includes(last))
+          }
+          add('→',model.next,'次の未処理ページ',model.next == null)
+        }
+        return consumed
+      }
+      return {record,update,restore}
+    }
+    return {create,layout,ranges,history,searchKey,settingsKey}
+  })()
     var setupAutoFill = function(model, page, controller) {
       // Resources belong to one result route. No timer/listener survives disposal.
       var timers = new Set(), intervals = new Set(), frames = new Set(), handles = new Set()
@@ -7897,6 +8038,7 @@ a.nrn-parsed[data-anchor-detail="nicoad"] > .nrn-movie-info-toggle { background:
 
       // -------------------- utility --------------------
       var sourceHref = page._sourceUrl || location.href
+      var journey = PagerJourney.create(page, model.config, sourceHref)
       var requestScope = setupAutoFill.sequence = (setupAutoFill.sequence || 0) + 1
       var gmRequest = function(options) {
         return new Promise(function(resolve, reject) {
@@ -9701,9 +9843,15 @@ a.nrn-parsed[data-anchor-detail="nicoad"] > .nrn-movie-info-toggle { background:
         if (page._disposed) return
         if (model.config.spaNavigationFix.value) {
           var oldSummary = page.doc.querySelector('.nrn-pager-summary')
-          if (model.config.autoFillPagerMode.value === 'off') { oldSummary?.remove(); return }
-          var scanned = new Set([currentPageNumber(), ...fetchedPageNumbers])
-          var nativeLinks = Array.from(page.doc.querySelectorAll('a[href]')).filter(isNumericPagerAnchor)
+          if (model.config.autoFillPagerMode.value === 'off') { restorePagerUi(); return }
+          const displayed = new Set(uniqueVisibleRoots(page.movieRoots).map(root => root.movieId))
+          const completed = useSnapshot ? [] : journey.update(knownLastPage, function(id) {
+            const movie = model.movies.get(id)
+            return movie && movie.thumbInfoDone && movie.error?.type === 'NO_ERROR' && (movie.ng || displayed.has(id))
+          })
+          if (useSnapshot) journey.restore()
+          var scanned = new Set(completed)
+          var nativeLinks = Array.from(page.doc.querySelectorAll('a[href]')).filter(a => !a.closest('.nrn-journey-pager')).filter(isNumericPagerAnchor)
             .filter(function(a) { return pageNumberFromHref(a.href) != null })
           nativeLinks.forEach(function(a) {
             spaPagerLinks.add(a)
@@ -9714,9 +9862,9 @@ a.nrn-parsed[data-anchor-detail="nicoad"] > .nrn-movie-info-toggle { background:
           if (nativeLinks.length) {
             var summary = oldSummary || page.doc.createElement('span')
             if (!summary.className) summary.className = 'nrn-pager-summary'
-            const text = '走査済みページ：' + compactRanges([...scanned]).map(function(r) {
+            const text = '表示・NG判定済みページ（斜線）：' + compactRanges([...scanned]).map(function(r) {
               return r.start === r.end ? String(r.start) : r.start + '–' + r.end
-            }).join('、')
+            }).join('、') + (scanned.size ? '' : 'なし')
             if (summary.textContent !== text) summary.textContent = text
             if (!summary.isConnected) nativeLinks[0].parentElement.after(summary)
           }
@@ -9904,6 +10052,7 @@ a.nrn-parsed[data-anchor-detail="nicoad"] > .nrn-movie-info-toggle { background:
       })
 
       var restorePagerUi = function() {
+        journey?.restore()
         page.doc.querySelectorAll('.nrn-pager-summary').forEach(function(node) { node.remove() })
         spaPagerLinks.forEach(link => link.classList.remove('nrn-page-consumed')); spaPagerLinks.clear()
         page.doc.querySelectorAll('a[href], a[data-nrn-synthetic-next="true"]').forEach(function(a) {
@@ -10086,6 +10235,7 @@ a.nrn-parsed[data-anchor-detail="nicoad"] > .nrn-movie-info-toggle { background:
               item.__nrnSourceIndex = idx
             })
 
+            journey.record(pageNumber, items)
             var filtered = filterFreshItems(items)
             logCandidateTable('ページ ' + pageNumber + ' 候補', filtered.freshItems)
             filtered.freshItems.forEach(function(item) { candidatePool.push(item) })
@@ -11525,7 +11675,7 @@ a.nrn-parsed[data-anchor-detail="nicoad"] > .nrn-movie-info-toggle { background:
         rebalanceOverflow()
         updateStatus()
         clearTimeout(debounceTimer)
-        debounceTimer = setTimeout(maybeFetchMore, 100)
+        debounceTimer = setTimeout(function() { updatePagerUi('NG display changed'); maybeFetchMore() }, 100)
       })
 
       model.config.autoFillEnabled.on('changed', function(enabled) {

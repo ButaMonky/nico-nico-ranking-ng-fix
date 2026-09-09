@@ -78,7 +78,7 @@ try {
   const counts = await page.evaluate(() => fixturePage.movieRoots.filter(r => r.elem.matches('[data-decoration-video-id][data-anchor-area="main"]:not([data-anchor-detail="nicoad"])')).map(r => fixtureModel.movies.get(r.movieId).pageContributorCount));
   assert.ok(counts.length > 0); assert.ok(counts.every(n => n === counts.length), 'count full physical page before NG, excluding ads');
   await page.evaluate(() => {const nav=document.querySelector('nav');nav.innerHTML='<a href="?page=1">1</a><a href="?page=2">2</a>';document.querySelector('.nrn-pager-summary').remove();});
-  await page.waitForFunction(() => document.querySelector('nav .nrn-page-consumed') && document.querySelector('.nrn-pager-summary'));
+  await page.waitForFunction(() => document.querySelector('.nrn-pager-summary'));
   await page.evaluate(() => {
     const owner = fixtureEnhancements.ownerLink(document, null, null);
     document.body.append(owner); owner.id = 'missing-owner';
@@ -102,6 +102,33 @@ try {
     } finally {window.fetch=nativeFetch;}
   });
   assert.deepEqual(await page.evaluate(()=>pageCountResults), [[2,2,2,1],[null,null]], 'source page counts deduplicate videos, separate channel/user IDs, retain unknown');
+  // Owner presentation: native row stays in place and only one copy is visible.
+  await page.evaluate(() => {
+    const root=fixturePage.movieRoots.find(r => r.elem.closest('#ad'));
+    const owner=document.createElement('a'); owner.href='/user/34567'; owner.textContent='native owner';
+    root.elem.prepend(owner); window.nativeOwnerFixture=owner;
+    fixtureModel.movies.get(root.movieId).emit('ngReasonsChanged');
+  });
+  await page.waitForFunction(() => nativeOwnerFixture.classList.contains('nrn-native-owner'));
+  assert.equal(await page.locator('#ad .nrn-native-owner').isVisible(),false);
+  assert.equal(await page.locator('#ad .nrn-owner-row').isVisible(),true);
+  assert.equal(await page.locator('#ad .nrn-contributor-kind').count(),0);
+  assert.equal(await page.locator('#ad .nrn-contributor-section .nrn-info-section-title').count(),0);
+  await adToggle.click();
+  assert.equal(await page.locator('#ad .nrn-native-owner').isVisible(),true);
+  assert.equal(await page.locator('#ad .nrn-owner-row').count(),0);
+  await adToggle.click();
+  assert.equal(await page.evaluate(()=>nativeOwnerFixture.parentElement === fixturePage.movieRoots.find(r=>r.elem.closest('#ad')).elem),true);
+  // Decoration API ownerName must never be presented as sponsorName.
+  await page.evaluate(async () => {
+    const fetchBefore=window.fetch;
+    window.fetch=async()=>({ok:true,text:async()=>JSON.stringify({data:{decoration:'gold',ownerName:'UPLOADER_NOT_ADVERTISER',totalPoint:17800}})});
+    try {
+      const root=document.createElement('div'); root.innerHTML='<div><div class="nrn-thumb-anchor-wrap"></div></div>'; document.body.append(root);root.id='decoration-fixture';
+      await fixturePage._applyAdDecoration(root,'sm999888777');
+    } finally {window.fetch=fetchBefore;}
+  });
+  assert.equal(await page.locator('#decoration-fixture .nrn-ad-decoration').textContent(),'17,800pt');
   // Transient hover DOM must retain its original listeners and never be parsed as videos.
   await page.evaluate(html => {
     const host = document.querySelector('#ad > a');

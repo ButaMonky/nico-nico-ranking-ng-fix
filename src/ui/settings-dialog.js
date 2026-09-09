@@ -849,7 +849,7 @@
           <div class=hint>「自動」はニコニコ画面の実際の背景色を見てライト/ダークを判定します。ダーク配色は真っ黒・真っ白を避け、暗い青灰色の背景と少し抑えた文字色にして長時間見ても眩しすぎない配色にしています。</div>
           <div class=row><label><input type=checkbox id=openNewWindow>動画を新しいタブで開く</label></div>
           <div class=row><label><input type=checkbox id=spaNavigationFix>SPA移動に合わせてNG判定を更新する（推奨）</label></div>
-          <div class=hint>タグ・検索語・ページ番号・並び順・絞り込みを変えたとき、画面を再読み込みせず新しい検索結果のNG判定を開始します。「戻る・進む」にも対応します。ONでは元のページ番号リンクを保ち、走査済みの番号に斜線と範囲を表示します。次へリンクの行き先は変えません。</div>
+          <div class=hint>タグ・検索語・ページ番号・並び順・絞り込みを変えたとき、画面を再読み込みせず新しい検索結果のNG判定を開始します。「戻る・進む」にも対応します。ページ番号の範囲圧縮は、サイトのSPA移動機能を利用できる場合に働きます。未表示の候補が残るページは飛ばしません。</div>
           <div class=row><label><input type=checkbox id=useGetThumbInfo>動画詳細情報を取得する</label></div>
           <div class=row><label><input type=checkbox id=movieInfoTogglable>タグ・ユーザー・チャンネルの表示切替</label></div>
           <div class=row><label><input type=checkbox id=descriptionTogglable>動画説明の表示切替</label></div>
@@ -892,8 +892,8 @@
     autoFillDetailBatchMax: '1回に完全NG判定へ送る最大候補数です。低NG率では小さめ、高NG率では大きめが効率的です。',
     statusPanelMode: '右下の進捗パネルの表示量を選択します。',
     detailUiTheme: 'タグ・投稿者情報、操作ボタン、設定画面などスクリプト独自UIの配色です。自動はニコニコ本体の実背景色から判定します。',
-    autoFillPagerMode: 'SPA対応がONのときは、走査済みのページに斜線と範囲の説明を表示します。番号・次へリンクの行き先は変わりません。SPA対応がOFFのときだけ、従来の範囲圧縮・取得済みページのスキップを使います。OFFならページ番号を装飾しません。',
-    pagerPreviewCount: 'SPA対応がOFFのとき、走査済み範囲のあとに何ページ分の番号を残すかを指定します。SPA対応がONのときは元の番号をすべて残すため、この設定は使いません。',
+    autoFillPagerMode: '範囲圧縮では、全動画の表示またはNG判定を終えた追加ページを「4–8」のように斜線付きでまとめ、前後の矢印で飛ばします。未表示の候補が残るページは飛ばしません。SPA移動機能に接続できない場合は元のリンクと斜線だけを残します。検索条件・NG設定を変えると記録を分けます。OFFなら装飾しません。',
+    pagerPreviewCount: '範囲圧縮のとき、現在ページの前後に表示する未処理ページ番号の数です。斜線の範囲は一つにまとめます。SPA移動機能に接続できない場合は元の番号を保ちます。',
     statusAnimationEnabled: '処理中だけ右下ステータスに回転インジケーターを表示します。',
     sessionDetailCacheEnabled: '取得済みのタグ・投稿者情報を同じタブに保存して、再読み込み後も再利用します。保存中に情報が変わると、有効期限まで古い情報で判定する場合があります。OFFでもSPA移動中は直近2分・最大512件をメモリに保持します。NG判定は常に現在の設定でやり直します。',
     sessionDetailCacheTtlMinutes: 'キャッシュを何分まで有効とみなすかです。期限切れは自動削除します。',

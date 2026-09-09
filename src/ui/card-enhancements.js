@@ -77,7 +77,7 @@
     function attach(root, movie, page) {
       let frame = null, ownerSignature = '', previousSignature = ''
       const doc = page.doc
-      const nativeOwner = root.elem.querySelector('a[href*="/user/"]:not(.nrn-contributor-link), a[href*="/channel/"]:not(.nrn-contributor-link)')
+      let nativeOwner = root.elem.querySelector('a[href*="/user/"]:not(.nrn-contributor-link), a[href*="/channel/"]:not(.nrn-contributor-link)')
       const render = function() {
         frame = null
         if (root._disposed || page._disposed) return
@@ -94,6 +94,12 @@
           const text = 'NG：' + detail.labels.join(' / ')
           if (label.textContent !== text) label.textContent = text
         }
+        // React may replace its owner row. Mark the current native row without moving it.
+        const currentOwner = [...root.elem.querySelectorAll('a[href*="/user/"], a[href*="/channel/"]')]
+          .find(link => !link.closest('.nrn-movie-info-container'))
+        if (currentOwner !== nativeOwner) nativeOwner?.classList.remove('nrn-native-owner')
+        nativeOwner = currentOwner || null
+        nativeOwner?.classList.add('nrn-native-owner')
         const container = root.movieInfo.elem.querySelector('.nrn-contributor-container')
         const owner = movie.contributor
         const signature = JSON.stringify([owner?.type, owner?.id, owner?.name, owner?.ngName])
@@ -106,6 +112,7 @@
           } else container.prepend(link)
           ownerSignature = signature
         }
+        root.elem.classList.toggle('nrn-owner-detail-ready', Boolean(container?.querySelector('.nrn-owner-row')))
         const summary = JSON.stringify([detail.labels, [...detail.fields], movie.tags.map(t => [t.name, t.lock]), movie.pageContributorCount])
         if (summary === previousSignature && root._nrnPresentationRendered) return
         previousSignature = summary; root._nrnPresentationRendered = true
@@ -133,6 +140,7 @@
       const schedule = () => { if (frame == null && !page._disposed) frame = requestAnimationFrame(render) }
       movie.on('ngReasonsChanged', schedule); movie.on('thumbInfoDone', schedule)
       root._disposeEnhancements = () => {
+        nativeOwner?.classList.remove('nrn-native-owner'); root.elem.classList.remove('nrn-owner-detail-ready')
         cancelAnimationFrame(frame); movie.off('ngReasonsChanged', schedule); movie.off('thumbInfoDone', schedule)
       }
       schedule()
@@ -142,10 +150,18 @@
 .nrn-ng-reasons { color:#ad2431; background:#fff0f1; font-size:12px; line-height:1.5; padding:3px 5px; overflow-wrap:anywhere; flex-basis:100%; }
 .nrn-ng-reasons[hidden] { display:none !important; }
 .nrn-reason-mark, .nrn-movie-info-container .nrn-movie-tag-link.nrn-reason-tag, .nrn-info-section-title mark { background:#ffe29a; color:#612e00; text-decoration:none; }
+.nrn-info-expanded.nrn-owner-detail-ready .nrn-native-owner { display:none !important; }
 .nrn-owner-row { display:inline-flex; align-items:center; gap:4px; min-width:0; font-weight:bold; }
 .nrn-owner-row img { width:24px; height:24px; min-width:24px; border-radius:50%; object-fit:cover; }
 .nrn-owner-unavailable { color:#828892 !important; }
 .nrn-page-consumed { background:repeating-linear-gradient(135deg,transparent,transparent 5px,#8c929755 5px,#8c929755 6px); text-decoration:line-through; }
+.nrn-native-pager-replaced { display:none !important; }
+.nrn-journey-pager { display:flex; align-items:center; justify-content:center; flex-wrap:wrap; gap:4px; margin:12px 0; }
+.nrn-journey-pager > * { display:inline-flex; align-items:center; justify-content:center; min-width:32px; min-height:32px; padding:2px 6px; border-radius:4px; }
+.nrn-journey-pager a { color:inherit; border:1px solid #8893a044; text-decoration:none; }
+.nrn-journey-pager a:hover { background:#71829c22; }
+.nrn-journey-pager [aria-disabled=true] { color:#828892; cursor:default; }
+.nrn-journey-pager [aria-current=page] { color:inherit; font-weight:bold; border:2px solid currentColor; }
 .nrn-pager-summary { display:block; font-size:12px; color:#626a75; margin:4px 0; }
 a.nrn-parsed[data-anchor-detail="nicoad"] { padding-bottom:28px; }
 a.nrn-parsed[data-anchor-detail="nicoad"] > .nrn-movie-info-toggle { background:#fff; box-shadow:0 0 0 1px #aeb5be; }
