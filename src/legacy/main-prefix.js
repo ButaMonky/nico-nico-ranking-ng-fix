@@ -124,6 +124,9 @@
         movies,
         movieViewModes,
         requestThumbInfo,
+        refreshSearchOwners(rows) {
+          for (const row of rows) applySearchOwner(row.movie.id, OwnerEvidence.fromRow(row))
+        },
         createMovies(resultsOfParsing) {
           movies.setIfAbsent(resultsOfParsing.map(function(r) {
             return new Movie(r.movie.id, r.movie.title)
@@ -163,6 +166,13 @@
           page.observeMutation(function(resultOfParsing, prefer) {
             setup(resultOfParsing, model, page, controller)
             model.requestThumbInfo(prefer)
+          }, function(rows) {
+            for (const row of rows) {
+              const root = page.movieRoots.find(root => root.elem === row.rootElem && root.movieId === row.movie.id)
+              if (!root || root._disposed) continue
+              model.refreshSearchOwners([row])
+              root._refreshOwnerPresentation?.()
+            }
           })
         },
       }

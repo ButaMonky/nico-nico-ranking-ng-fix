@@ -68,6 +68,45 @@ try {
  });
  assert.equal(await page.evaluate(()=>fixtureModel.movies.get('sm123456789').contributor.id),12345,'actual injected card feeds item owner to model');
  assert.equal(await page.evaluate(()=>fixtureModel.movies.get('sm123456789').ng),true);
+ // Remove the native row before first parsing on a fresh route/fixture.
+ await page.reload();
+ await page.setContent('<main aria-label="nicovideo-content">'+fixture+'</main>');
+ await page.evaluate(()=>{
+  const card=[...document.querySelectorAll('[data-decoration-video-id]')].find(c=>c.querySelector('a[data-group-ignore]'));
+  document.querySelector('main').replaceChildren(card);
+  window.lateId=card.dataset.decorationVideoId;
+  window.lateOwner=card.querySelector('a[data-group-ignore]');window.ownerParent=lateOwner.parentElement;
+  lateOwner.href='https://www.nicovideo.jp/user/12345';lateOwner.dataset.anchorHref=lateOwner.href;
+  lateOwner.querySelector('p').textContent='';lateOwner.remove();window.requests=0;
+  window.GM_getValue=(key,fallback)=>({autoFillEnabled:false,selfAdWarningEnabled:false,ngUserIds:'[12345]'}[key]??fallback);
+  window.GM_setValue=()=>{};
+  window.GM_xmlhttpRequest=o=>{requests++;const t=setTimeout(()=>o.onload({status:200,responseText:'<nicovideo_thumb_response status="ok"><thumb><title>fixture</title><description/><tags><tag>test</tag></tags></thumb></nicovideo_thumb_response>'}),10);return {abort(){clearTimeout(t)}}};
+ });
+ await page.addScriptTag({content:source});
+ await page.waitForFunction(()=>window.fixtureModel?.movies.get(lateId)?.thumbInfoDone);
+ assert.equal(await page.evaluate(()=>fixtureModel.movies.get(lateId).contributor.type),'unknown');
+ await page.evaluate(()=>{window.ownerChanges=0;fixtureModel.movies.get(lateId).on('contributorChanged',()=>ownerChanges++);ownerParent.append(lateOwner)});
+ await page.waitForFunction(()=>fixtureModel.movies.get(lateId).ng && fixtureModel.movies.get(lateId).contributor.id===12345);
+ await page.evaluate(()=>lateOwner.querySelector('p').textContent='late owner');
+ await page.waitForFunction(()=>fixtureModel.movies.get(lateId).contributor.name==='late owner');
+ await page.waitForFunction(()=>fixturePage.movieRoots[0].movieInfo.elem.querySelector('.nrn-owner-name')?.textContent==='late owner');
+ assert.equal(await page.evaluate(()=>requests),1,'late ID and name do not fetch again');
+ const stable=await page.evaluate(()=>ownerChanges);
+ await page.evaluate(()=>{lateOwner.remove();ownerParent.append(lateOwner);for(let i=0;i<20;i++)lateOwner.querySelector('p').firstChild.data='late owner'});
+ await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
+ assert.equal(await page.evaluate(()=>ownerChanges),stable,'remount/repeated text does not emit another model change');
+ // A conflicting native ID retracts the fallback; it is not guessed from the name.
+ await page.evaluate(()=>{lateOwner.href='https://www.nicovideo.jp/user/999';lateOwner.dataset.anchorHref=lateOwner.href});
+ await page.waitForFunction(()=>fixtureModel.movies.get(lateId).contributor.type==='unknown' && !fixtureModel.movies.get(lateId).ng);
+ // A mutation queued before the URL changes must not update an old route's model.
+ await page.evaluate(()=>{
+  window.staleModel=fixtureModel;window.staleChanges=ownerChanges;
+  delete staleModel.movies.get(lateId)._nrnSearchOwnerConflict;
+  lateOwner.href='https://www.nicovideo.jp/user/123';lateOwner.dataset.anchorHref=lateOwner.href;
+  queueMicrotask(()=>history.replaceState(null,'','/tag/another'));
+ });
+ await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
+ assert.equal(await page.evaluate(()=>staleModel.movies.get(lateId).contributor.type),'unknown');
  assert.deepEqual(errors,[]);
- console.log('Owner Chrome fixture PASS: same-owner NG with missing API ID, distinct-owner separation, live unblock, no extra requests, strict native row extraction, conflicting/description/other-video rejection, injected item identity.');
+ console.log('Owner Chrome fixture PASS: same-owner NG with missing API ID, distinct-owner separation, live unblock, no extra requests, strict native row extraction, conflicting/description/other-video rejection, injected item identity, delayed native row/name, idempotent remount, conflicting href, route invalidation.');
 } finally {await browser.close()}

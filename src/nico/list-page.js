@@ -767,36 +767,63 @@
         var togglable = doc.getElementById('togglable')
         if (togglable) togglable.hidden = true
       },
-      observeMutation(callback) {
+      observeMutation(callback, refreshOwners) {
         const transient = '[data-scope="presence"], [data-scope="tooltip"], video, canvas, .nrn-movie-info-container, .nrn-ng-reasons'
-        this._observer = new MutationObserver(records => {
-          if (this._disposed || !isTargetPage()) return
+        const ownerSelector = 'a[data-group-ignore="true"][data-anchor-area="main"]'
+        const ownerRoots = new Set()
+        let parsePending = false
+        const currentRoute = () => {
+          if (this._disposed || !isTargetPage()) return false
           const source = new URL(this._sourceUrl)
-          if (source.pathname + source.search !== location.pathname + location.search) return
-          const relevant = records.some(record => {
-            if (record.target.nodeType === 1 && record.target.closest(transient)) return false
-            if (record.type === 'attributes') {
+          return source.pathname + source.search === location.pathname + location.search
+        }
+        this._observer = new MutationObserver(records => {
+          if (!currentRoute()) return
+          let relevant = false
+          for (const record of records) {
+            const target = record.target.nodeType === 1 ? record.target : record.target.parentElement
+            if (!target || target.closest(transient)) continue
+            if (record.type === 'attributes' && record.attributeName === 'class') {
               const nativeClasses = value => String(value || '').split(/\s+/).filter(name => name && !name.startsWith('nrn-')).sort().join(' ')
-              if (nativeClasses(record.oldValue) === nativeClasses(record.target.className)) {
-                this.resultLayout.rememberState(record.target)
-                return false
+              if (nativeClasses(record.oldValue) === nativeClasses(target.className)) {
+                this.resultLayout.rememberState(target)
+                continue
               }
             }
             const nodes = [...record.addedNodes, ...record.removedNodes]
-            if (nodes.length && nodes.every(node => node.nodeType !== 1 || node.matches(transient))) return false
-            return true
-          })
-          if (!relevant || this._mutationFrame != null) return
+            // Recheck only cards whose native owner row changed, including late text/href.
+            const ownerChanged = (record.type !== 'attributes' || record.attributeName !== 'class') &&
+              (target.closest(ownerSelector) || nodes.some(node => node.nodeType === 1 &&
+                (node.matches(ownerSelector) || node.querySelector(ownerSelector))))
+            if (ownerChanged) {
+              const root = target.closest('[data-decoration-video-id]')
+              if (root) ownerRoots.add(root)
+            }
+            // Owner-only text/URL updates do not need a whole-page parse.
+            if (record.type === 'characterData' || (record.type === 'attributes' && record.attributeName !== 'class')) continue
+            if (nodes.length && nodes.every(node => node.nodeType !== 1 || node.matches(transient))) continue
+            relevant = true
+          }
+          parsePending ||= relevant
+          if ((!parsePending && !ownerRoots.size) || this._mutationFrame != null) return
           this._mutationFrame = requestAnimationFrame(() => {
             this._mutationFrame = null
-            if (this._disposed) return
-            const parsed = this.parse()
-            if (parsed.length > 0) { callback(parsed, true); this.unbindUnconnectedMovieRoots() }
-            this.addConfigBar()
-            this._refreshPagerAnnotations?.()
+            if (!currentRoute()) { ownerRoots.clear(); return }
+            const rows = [...ownerRoots].filter(root => root.isConnected && root.classList.contains('nrn-parsed'))
+              .map(root => ({rootElem:root, movie:{id:root.dataset.decorationVideoId}}))
+            ownerRoots.clear()
+            if (rows.length) refreshOwners?.(rows)
+            if (parsePending) {
+              parsePending = false
+              const parsed = this.parse()
+              if (parsed.length > 0) { callback(parsed, true); this.unbindUnconnectedMovieRoots() }
+              this.addConfigBar()
+              this._refreshPagerAnnotations?.()
+            }
           })
         })
-        this._observer.observe(this.doc.body, {childList:true, subtree:true, attributes:true, attributeFilter:['class'], attributeOldValue:true})
+        this._observer.observe(this.doc.body, {childList:true, subtree:true, characterData:true, attributes:true,
+          attributeFilter:['class','href','data-anchor-href','data-group-ignore','data-anchor-area'], attributeOldValue:true})
       },
       get css() {
         return ResultLayout.css + `#nrn-config-button,

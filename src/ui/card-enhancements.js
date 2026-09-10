@@ -140,10 +140,12 @@
         }
       }
       const schedule = () => { if (frame == null && !page._disposed) frame = requestAnimationFrame(render) }
-      movie.on('ngReasonsChanged', schedule); movie.on('thumbInfoDone', schedule)
+      movie.on('ngReasonsChanged', schedule); movie.on('thumbInfoDone', schedule); movie.on('contributorChanged', schedule)
+      root._refreshOwnerPresentation = schedule
       root._disposeEnhancements = () => {
         nativeOwner?.classList.remove('nrn-native-owner'); root.elem.classList.remove('nrn-owner-detail-ready')
-        cancelAnimationFrame(frame); movie.off('ngReasonsChanged', schedule); movie.off('thumbInfoDone', schedule)
+        delete root._refreshOwnerPresentation
+        cancelAnimationFrame(frame); movie.off('ngReasonsChanged', schedule); movie.off('thumbInfoDone', schedule); movie.off('contributorChanged', schedule)
       }
       schedule()
     }

@@ -38,7 +38,7 @@
       return function(o, source) {
         if (o.type === 'unknown') return Contributor.NULL;
         var map = typeToMap.get(o.type)
-        const key = (source || 'detail') + ':' + o.id
+        const key = (source || 'detail') + ':' + o.id + (source === 'search' ? ':' + o.name : '')
         if (map.has(key)) return map.get(key)
         var contributor = Contributor.new(o.type, o.id, o.name)
         map.set(key, contributor)
@@ -54,7 +54,8 @@
     function selectOwner(movie, getContributorBy) {
       const owner = movie._nrnDetailContributor || movie._nrnSearchContributor
       movie._nrnContributorSource = movie._nrnDetailContributor ? 'detail' : owner ? 'search' : 'unknown'
-      movie.contributor = owner ? getContributorBy(owner,movie._nrnContributorSource) : Contributor.NULL
+      const selected = owner ? getContributorBy(owner,movie._nrnContributorSource) : Contributor.NULL
+      if (movie.contributor !== selected) movie.contributor = selected
     }
     return {
       forSearch(movies) {
@@ -63,6 +64,7 @@
           const movie = movies.get(id), owner = OwnerEvidence.normalize(evidence)
           if (!movie || !owner || movie._nrnSearchOwnerConflict) return
           const previous = movie._nrnSearchContributor
+          if (OwnerEvidence.same(previous,owner) && (previous.name || !owner.name)) return
           if (previous && !OwnerEvidence.same(previous,owner)) {
             movie._nrnSearchContributor = null
             movie._nrnSearchOwnerConflict = true

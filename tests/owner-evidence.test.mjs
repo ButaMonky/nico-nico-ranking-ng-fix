@@ -58,3 +58,15 @@ test('persistent detail cache does not promote search evidence into authoritativ
  save('sm1');assert.equal(written[0].contributor,null);
  detail(info('sm1',{type:'user',id:66,name:'API owner'}));save('sm1');assert.equal(written[1].contributor.id,66);
 });
+
+test('repeated search evidence is idempotent and a late name can fill an empty one',async()=>{
+ const {movies,search,detail}=await setup();const movie=movies.get('sm1');let changes=0;
+ movie.on('contributorChanged',()=>changes++);
+ detail(info('sm1'));
+ search('sm1',{id:55,name:''});const afterFirst=changes;
+ for(let i=0;i<100;i++)search('sm1',{id:55,name:''});
+ assert.equal(changes,afterFirst);
+ search('sm1',{id:55,name:'late name'});
+ assert.equal(movie.contributor.name,'late name');assert.equal(changes,afterFirst+1);
+ search('sm1',{id:55,name:'late name'});assert.equal(changes,afterFirst+1);
+});
