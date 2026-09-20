@@ -27,7 +27,14 @@ try {
  await page.evaluate(()=>{store.value=true;for(const f of store.listeners)f(true)});
  await page.locator('#native').hover();await page.waitForTimeout(250);
  assert.equal(await page.evaluate(()=>requests.length),0,'native card gets no controller requests');
- await page.locator('#a').hover();await page.locator('#native').hover();await page.waitForTimeout(250);
+ // Keep the transient hover below the saved official 50ms motion debounce.
+ // Two locator.hover() calls can spend longer than that in automation overhead.
+ await page.evaluate(async()=>{
+  const card=document.querySelector('#a'),native=document.querySelector('#native');
+  card.dispatchEvent(new MouseEvent('mouseover',{bubbles:true,relatedTarget:native}));
+  await new Promise(r=>setTimeout(r,10));
+  card.dispatchEvent(new MouseEvent('mouseout',{bubbles:true,relatedTarget:native}));
+ });await page.waitForTimeout(100);
  assert.equal(await page.evaluate(()=>requests.length),0,'short hover cancels before fetch');
  await page.locator('#a').hover();await page.waitForFunction(()=>requests.length===1&&plays===1);
  assert.equal(await page.locator('#a .nrn-preview video').count(),1);

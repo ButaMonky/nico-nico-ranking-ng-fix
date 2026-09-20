@@ -6,7 +6,7 @@
 // @match        *://www.nicovideo.jp/ranking*
 // @match        *://www.nicovideo.jp/search/*
 // @match        *://www.nicovideo.jp/tag/*
-// @version      160.20
+// @version      160.21
 // @grant        unsafeWindow
 // @grant        GM_getValue
 // @grant        GM_setValue
@@ -202,7 +202,7 @@
 
   // This facade is scoped to this userscript; other scripts keep their console.
   var nrnConsoleConfig = null
-  var NRN_VERSION = '160.20'
+  var NRN_VERSION = '160.21'
   var nrnNativeConsole = globalThis.console
   var nrnConsoleCounts = {warnings:0,errors:0}
   var nrnSetConsoleConfig = function(config) { nrnConsoleConfig = config }
@@ -8403,7 +8403,7 @@ var PreviewData = (function () {
   'use strict';
   const NVAPI = 'https://nvapi.nicovideo.jp';
   const COMMENT_ORIGIN = 'https://public.nvcomment.nicovideo.jp';
-  const COMMANDS = new Set(['ue','shita','naka','big','medium','small','white','red','pink','orange','yellow','green','cyan','blue','purple','black']);
+  const COMMANDS = new Set(['ue','shita','naka','big','medium','small','white','red','pink','orange','yellow','green','cyan','blue','purple','black','gothic','mincho','defont','ender','full','patissier']);
   const headers = () => ({Accept:'application/json','X-Frontend-Id':'6','X-Frontend-Version':'0','X-Niconico-Language':'ja-jp'});
   const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
   const string = (value, max) => typeof value === 'string' && value.length > 0 && value.length <= max;
@@ -8478,14 +8478,48 @@ var PreviewData = (function () {
     if (!string(nv.threadKey,8192)) throw failure('invalid');
     return {nvComment:{server,threadKey:nv.threadKey,params:{targets:targets(nv.params),language:nv.params.language}},ng:comment.ng};
   }
-  function emptyNg(ng) {
-    // Unknown/nonempty rules fail closed. Implementing word/user/command matching
-    // without the service's full semantics could reveal comments the user blocked.
+  function validateNg(ng) {
+    // Saved official client: literal case-insensitive words (without line breaks),
+    // exact IDs, and command token subsets. Unknown schemas still fail closed.
     if (!object(ng) || Object.keys(ng).some(k => !['ngScore','owner','channel','viewer'].includes(k)) ||
         !object(ng.ngScore) || typeof ng.ngScore.isDisabled !== 'boolean' || Object.keys(ng.ngScore).some(k=>k!=='isDisabled') ||
         !Array.isArray(ng.owner) || ng.owner.length || !Array.isArray(ng.channel) || ng.channel.length ||
-        !object(ng.viewer) || !Array.isArray(ng.viewer.items) || ng.viewer.items.length || ng.viewer.count !== 0 ||
+        !object(ng.viewer) || !Array.isArray(ng.viewer.items) || ng.viewer.items.length > 2000 || ng.viewer.count !== ng.viewer.items.length ||
         Object.keys(ng.viewer).some(k=>!['revision','count','items'].includes(k))) throw failure('unsupported_ng');
+    for (const rule of ng.viewer.items) {
+      if (!object(rule) || !['word','id','command'].includes(rule.type) || !string(rule.source,10000) ||
+          (rule.type === 'command' && !rule.source.trim()) ||
+          Object.keys(rule).some(k=>!['type','source','registeredAt'].includes(k))) throw failure('unsupported_ng');
+    }
+  }
+  function viewerFilter(ng, enabled) {
+    const words=[],ids=new Set(),commands=[];
+    if (enabled !== false) for (const rule of ng.viewer.items) {
+      if (rule.type === 'word') words.push(rule.source.toLowerCase());
+      else if (rule.type === 'id') ids.add(rule.source);
+      else commands.push(rule.source.trim().toLowerCase().split(/\s+/));
+    }
+    return item => {
+      const text=item.body.replace(/[\r\n]/g,'').toLowerCase(), tokens=item.commands.map(c=>c.toLowerCase());
+      return words.some(word=>text.includes(word)) || (ids.size > 0 && !string(item.userId,1000)) || ids.has(item.userId) ||
+        (tokens.length > 0 && commands.some(rule=>rule.every(token=>tokens.includes(token))));
+    };
+  }
+  function preferences(storage, now=Date.now()) {
+    // Read only these public player preferences. Never copy/emit browser storage.
+    function read(namespace) {
+      try { const raw=storage?.getItem(namespace);return raw && raw.length<=100000 ? JSON.parse(raw) : null; } catch (_) {return null;}
+    }
+    function value(state,key,fallback) {
+      const entry=state?.data?.[key], expire=Number(entry?.meta?.expire);
+      return !object(entry) || (Number.isInteger(expire)&&expire<=now) ? fallback : entry.data;
+    }
+    const player=read('@nvweb-packages/video-renderer'),watch=read('nvpc:watch'),userNg=read('@nvweb-packages/comments:userng:v2');
+    const volume=value(player,'volume',1),visible=value(player,'isCommentVisible',true),alpha=value(player,'commentAlpha','none');
+    const threshold=value(watch,'ngScoreThreshold','middle'),enabled=value(userNg,'isEnabled',true),scores={high:-1000,middle:-4800,low:-10000,none:0};
+    return {volume:Number.isFinite(volume)&&volume>=0&&volume<=1?volume:1,commentVisible:typeof visible==='boolean'?visible:true,
+      commentOpacity:alpha==='low'?.6:alpha==='high'?.4:1,scoreThreshold:typeof threshold==='string'&&Object.hasOwn(scores,threshold)?scores[threshold]:-4800,
+      userNgEnabled:typeof enabled==='boolean'?enabled:true};
   }
   async function load(videoId, {signal,fetch:fetchFn=fetch,now=()=>Date.now(),report=()=>{}} = {}) {
     checkAbort(signal);
@@ -8521,8 +8555,9 @@ var PreviewData = (function () {
     });
     return {...rights,duration:preview.duration,comment:preview.comment,ng:preview.comment && preview.comment.ng};
   }
-  function normalizeComments(body, requestedTargets, ng) {
-    emptyNg(ng);
+  function normalizeComments(body, requestedTargets, ng, options={}) {
+    validateNg(ng);
+    const blocked=viewerFilter(ng,options.userNgEnabled),threshold=[0,-1000,-4800,-10000].includes(options.scoreThreshold)?options.scoreThreshold:-4800;
     const data = envelope(body,[200]);
     if (!Array.isArray(data.threads) || data.threads.length > 100 || !Array.isArray(requestedTargets)) throw failure('invalid');
     const allowed = new Set(requestedTargets.map(t=>String(t.id)+':'+t.fork));
@@ -8533,40 +8568,71 @@ var PreviewData = (function () {
       for (const item of thread.comments) {
         if (++scanned > 5000 || result.length >= 300) return result.sort((a,b)=>a.vposMs-b.vposMs);
         if (!matched || !object(item) || !Number.isFinite(item.vposMs) || item.vposMs < 0 || item.vposMs >= 30000 ||
-            !string(item.body,10000) || !Number.isFinite(item.score) || item.score < 0 || item.isAI === true || item.isAi === true ||
-            !Array.isArray(item.commands) || item.commands.length > 100 || item.commands.some(c=>typeof c!=='string' || /^ai(?:$|[:_])/i.test(c))) continue;
+            !string(item.body,10000) || !Number.isFinite(item.score) || item.deleted === true || item.isAI === true || item.isAi === true ||
+            !Array.isArray(item.commands) || item.commands.length > 100 || item.commands.some(c=>typeof c!=='string' || /^ai(?:$|[:_])/i.test(c) || c.toLowerCase()==='invisible')) continue;
+        if (thread.fork === 'owner') {
+          if (/^[@＠]/.test(item.body.trim()) || item.body.startsWith('/')) continue;
+        } else if ((!ng.ngScore.isDisabled && threshold && item.score<=threshold) || blocked(item)) continue;
         // Text only; consumers must draw text, never interpret this as markup.
-        result.push({vposMs:item.vposMs,text:item.body.slice(0,200),commands:item.commands.filter(c=>COMMANDS.has(c)).slice(0,10)});
+        result.push({vposMs:item.vposMs,text:item.body.slice(0,200),commands:item.commands.map(c=>c.toLowerCase()).filter(c=>COMMANDS.has(c)).slice(0,10)});
       }
     }
     return result.sort((a,b)=>a.vposMs-b.vposMs);
   }
-  async function comments(data, {signal,fetch:fetchFn=fetch,report=()=>{}} = {}) {
+  async function comments(data, {signal,fetch:fetchFn=fetch,report=()=>{},scoreThreshold=-4800,userNgEnabled=true} = {}) {
     checkAbort(signal);
     let config;
     try {
       config = commentConfig(data && data.comment);
-      emptyNg(config.ng);
+      validateNg(config.ng);
     } catch (error) {
       reportSafe(report,'comments','invalid');
       throw failure(error && error.code === 'unsupported_ng' ? 'unsupported_ng' : 'invalid');
     }
     const nv = config.nvComment;
-    return request('comments',nv.server+'/v1/threads?pc=1',{method:'POST',credentials:'omit',headers:{...headers(),'X-Client-Os-Type':'others','Content-Type':'text/plain;charset=UTF-8'},body:JSON.stringify({params:nv.params,threadKey:nv.threadKey,additionals:{}})},{signal,fetch:fetchFn,report},body=>normalizeComments(body,nv.params.targets,config.ng));
+    return request('comments',nv.server+'/v1/threads?pc=1',{method:'POST',credentials:'omit',headers:{...headers(),'X-Client-Os-Type':'others','Content-Type':'text/plain;charset=UTF-8'},body:JSON.stringify({params:nv.params,threadKey:nv.threadKey,additionals:{}})},{signal,fetch:fetchFn,report},body=>normalizeComments(body,nv.params.targets,config.ng,{scoreThreshold,userNgEnabled}));
   }
-  return {load,comments,selectOutputs,normalizeComments};
+  return {load,comments,selectOutputs,normalizeComments,preferences};
 })();
   var HoverPreview = (function() {
     const css = `
-.nrn-preview-host { position:relative; }
-.nrn-preview { position:absolute; inset:0; z-index:2; overflow:hidden; border-radius:inherit; pointer-events:none; background:#111; color:#fff; }
+.nrn-preview-host { position:relative; border-radius:var(--radii-m,8px); }
+.nrn-preview { position:absolute; inset:0; z-index:2; overflow:hidden; border-radius:inherit; pointer-events:none; background:var(--colors-monotone--l0,#000); color:#fff; opacity:0; transition:opacity var(--durations-medium,.3s); }
 .nrn-preview[data-phase="loading"] { visibility:hidden; }
+.nrn-preview[data-phase="playing"] { opacity:1; }
 .nrn-preview video,.nrn-preview canvas { position:absolute; inset:0; width:100%; height:100%; object-fit:contain; pointer-events:none; }
-.nrn-preview-mute { position:absolute; right:6px; bottom:6px; z-index:3; pointer-events:auto; border:1px solid #ddd; border-radius:4px; color:#fff; background:#222c; padding:4px 8px; cursor:pointer; }
+.nrn-preview-mute,.nrn-preview-loading { position:absolute; right:4px; top:4px; width:28px; height:28px; box-sizing:border-box; z-index:3; padding:4px; border:0; border-radius:var(--radii-s,4px); }
+.nrn-preview-mute { display:flex; align-items:center; justify-content:center; pointer-events:auto; color:#fff; background:var(--colors-layer-surface-overlay-black,rgba(0,0,0,.8)); cursor:pointer; }
+.nrn-preview-mute[hidden] { display:none; }
+.nrn-preview-mute:hover { background:var(--colors-layer-surface-high-em-black,#000); }
+.nrn-preview-mute svg { width:100%; height:100%; fill:currentColor; pointer-events:none; }
+.nrn-preview-loading { pointer-events:none; }
+.nrn-preview-loading::after { content:''; display:block; box-sizing:border-box; width:20px; height:20px; border:2px solid white; border-bottom-color:transparent; border-radius:50%; animation:nrn-preview-spin .8s linear infinite; filter:drop-shadow(0 0 2px #0009); }
+@keyframes nrn-preview-spin { to {transform:rotate(360deg)} }
 .nrn-preview-mute:focus-visible { outline:3px solid #58b4ff; }
 .nrn-preview-status { position:absolute; left:4px; top:4px; font:12px/1.4 sans-serif; background:#111c; padding:2px 4px; }
-.nrn-preview-progress { position:absolute; bottom:0; left:0; height:3px; background:#168cf6; }
+.nrn-preview-track { position:absolute; bottom:0; left:0; width:100%; height:4px; background:var(--colors-monotone--l90,#e6e6e6); }
+.nrn-preview-progress { position:absolute; bottom:0; left:0; height:100%; background:var(--colors-layer-surface-accent-azure,#0080ff); }
 `;
+    function layoutComments(comments, ctx, w, h) {
+      const colors={white:'#ffffff',red:'#ff0000',pink:'#ff8080',orange:'#ffc000',yellow:'#ffff00',green:'#00ff00',cyan:'#00ffff',blue:'#0000ff',purple:'#c000ff',black:'#000000'}
+      const rows=[]
+      for(const comment of comments.slice(0,300)) {
+        const commands=comment.commands||[],position=commands.find(c=>['ue','shita','naka'].includes(c))||'naka'
+        const defaultSize=commands.some(c=>['gothic','mincho','defont','ender','full','patissier'].includes(c))?24:39
+        const size=Math.max(8,({big:39,small:15,medium:24}[commands.find(c=>['big','small','medium'].includes(c))]||defaultSize)*h/360)
+        const lineHeight=size*1.2,font='bold '+size+'px '+(commands.includes('mincho')?'serif':'sans-serif'),lines=comment.text.split(/\r?\n/),height=lineHeight*lines.length
+        ctx.font=font
+        const width=Math.max(...lines.map(line=>ctx.measureText(line).width)),duration=4000
+        for(let offset=0;offset+height<=h;offset+=lineHeight) {
+          const y=position==='shita'?h-offset-height:offset
+          if(rows.some(row=>row.end>comment.vposMs&&row.y<y+height&&row.y+row.height>y))continue
+          rows.push({...comment,position,size,font,lines,height,width,y,duration,end:comment.vposMs+duration,color:colors[commands.find(c=>Object.hasOwn(colors,c))]||'#ffffff'})
+          break
+        }
+      }
+      return rows
+    }
     function media(video, data, {onError}) {
       // This private lazy factory does not read/replace the site's Hls global.
       const Hls = getNnrPreviewHls()
@@ -8595,6 +8661,7 @@ var PreviewData = (function () {
       const mountMedia = options.media || media
       const source = new URL(page._sourceUrl || doc.location.href)
       let disposed = false, hovered = null, blockedRoot = null, session = null, timer = null, muted = true, attempt = 0
+      let hoverUntil=0,pointerUntil=0,scrollUntil=0
       const counts = {started:0,playing:0,stopped:0,blocked:0,error:0,unavailable:0,commentsUnavailable:0,
         preview:0,rights:0,comments:0,http:0,invalid:0,aborted:0,network:0}
       const report = (kind,result) => {
@@ -8620,7 +8687,7 @@ var PreviewData = (function () {
           s.video.pause();s.adapter?.destroy();s.adapter=null
           s.video.removeAttribute('src');s.video.load();s.video.remove();s.video=null
         } else {s.adapter?.destroy();s.adapter=null}
-        s.canvas?.remove();s.canvas=null;s.rows=[]
+        s.spinner?.remove();s.canvas?.remove();s.canvas=null;s.rows=[];s.comments=[]
       }
       function stop() {
         clearTimeout(timer);timer=null
@@ -8651,15 +8718,17 @@ var PreviewData = (function () {
         const t=s.video.currentTime,limit=Math.min(30,s.data.duration)
         if (t>=limit || Date.now()>=s.data.expiresAt) {terminal(s,'ended');return}
         s.progress.style.width=Math.min(100,t/limit*100)+'%'
-        if (s.canvas && s.rows.length) {
+        if (s.canvas && s.comments.length) {
           const w=s.host.clientWidth,h=s.host.clientHeight,dpr=Math.min(2,win.devicePixelRatio||1)
           if (s.canvas.width!==Math.round(w*dpr)||s.canvas.height!==Math.round(h*dpr)) {s.canvas.width=Math.round(w*dpr);s.canvas.height=Math.round(h*dpr)}
           const ctx=s.canvas.getContext('2d');ctx.setTransform(dpr,0,0,dpr,0,0);ctx.clearRect(0,0,w,h)
-          const size=Math.max(12,Math.min(22,h/5));ctx.font='bold '+size+'px sans-serif';ctx.lineWidth=3;ctx.strokeStyle='#111';ctx.fillStyle='#fff'
+          if(s.layoutKey!==w+':'+h) {s.rows=layoutComments(s.comments,ctx,w,h);s.layoutKey=w+':'+h}
+          ctx.lineWidth=Math.max(1,h/180);ctx.strokeStyle='#111';ctx.textBaseline='top'
           for (const row of s.rows) {
-            const elapsed=t*1000-row.vposMs;if(elapsed<0||elapsed>=4000)continue
-            const x=w-(w+ctx.measureText(row.text).width)*elapsed/4000,y=(row.lane+1)*size
-            ctx.strokeText(row.text,x,y);ctx.fillText(row.text,x,y)
+            const elapsed=t*1000-row.vposMs;if(elapsed<0||elapsed>=row.duration)continue
+            ctx.font=row.font;ctx.fillStyle=row.color
+            const x=row.position==='naka'?w-(w+row.width)*elapsed/row.duration:(w-row.width)/2
+            row.lines.forEach((line,index)=>{const y=row.y+index*row.size*1.2;ctx.strokeText(line,x,y);ctx.fillText(line,x,y)})
           }
         }
         s.frame=win.requestAnimationFrame(()=>draw(s))
@@ -8669,13 +8738,17 @@ var PreviewData = (function () {
         if(!eligible(root,id)||hovered!==root)return
         stop()
         const host=root.querySelector('.nrn-thumb-anchor-wrap');if(!host)return
-        const s={root,id,host,attempt:++attempt,abort:new AbortController(),rows:[]}
+        let prefs={volume:1,commentVisible:true,commentOpacity:1,scoreThreshold:-4800,userNgEnabled:true}
+        try {if(typeof PreviewData!=='undefined')prefs=PreviewData.preferences(win.localStorage)}catch(_){}
+        const s={root,id,host,attempt:++attempt,abort:new AbortController(),rows:[],comments:[],prefs}
         session=s;counts.started++
         s.layer=doc.createElement('div');s.layer.className='nrn-preview';s.layer.dataset.phase='loading'
-        s.status=doc.createElement('span');s.status.className='nrn-preview-status';s.status.textContent='プレビューを読み込み中'
+        s.status=doc.createElement('span');s.status.className='nrn-preview-status';s.status.hidden=true
+        s.spinner=doc.createElement('span');s.spinner.className='nrn-preview-loading';s.spinner.setAttribute('role','status');s.spinner.setAttribute('aria-label','プレビュー再生の読み込み中')
         s.button=doc.createElement('button');s.button.type='button';s.button.className='nrn-preview-mute';s.button.hidden=true
         s.progress=doc.createElement('div');s.progress.className='nrn-preview-progress'
-        s.layer.append(s.status,s.button,s.progress);host.classList.add('nrn-preview-host');host.append(s.layer)
+        s.track=doc.createElement('div');s.track.className='nrn-preview-track';s.track.append(s.progress)
+        s.layer.append(s.status,s.button,s.track);host.classList.add('nrn-preview-host');host.append(s.layer,s.spinner)
         s.button.addEventListener('click',event=>{
           event.preventDefault();event.stopPropagation()
           if(!live(s)||!s.video)return
@@ -8693,7 +8766,7 @@ var PreviewData = (function () {
           s.data=await load(id,{signal:s.abort.signal,report})
           if(!live(s))return
           if(!s.data||!Number.isFinite(s.data.duration)||s.data.duration<=0||!Number.isFinite(s.data.expiresAt)||s.data.expiresAt<=Date.now()){terminal(s,'unavailable');return}
-          const video=doc.createElement('video');s.video=video;video.muted=muted;video.defaultMuted=true;video.playsInline=true;video.preload='none';video.volume=.3
+          const video=doc.createElement('video');s.video=video;video.muted=muted;video.defaultMuted=true;video.playsInline=true;video.preload='none';video.volume=prefs.volume
           video.onended=()=>terminal(s,'ended');video.onerror=()=>terminal(s,'error')
           s.layer.prepend(video);s.adapter=mountMedia(video,s.data,{onError:()=>terminal(s,'error'),signal:s.abort.signal})
           if(!live(s)){s.adapter?.destroy();s.adapter=null;return}
@@ -8701,24 +8774,38 @@ var PreviewData = (function () {
           if(!live(s))return
           if(!await waitForFrame(s)||!live(s))return
           clearTimeout(s.deadline);s.deadline=setTimeout(()=>{if(session===s)terminal(s,'ended')},45000)
-          s.layer.dataset.phase='playing';counts.playing++;s.status.textContent='';s.button.hidden=false;updateButton(s)
-          s.canvas=doc.createElement('canvas');s.canvas.setAttribute('aria-hidden','true');s.layer.insertBefore(s.canvas,s.status)
+          s.layer.dataset.phase='playing';counts.playing++;s.spinner.remove();s.button.hidden=false;updateButton(s)
+          if(prefs.commentVisible){s.canvas=doc.createElement('canvas');s.canvas.setAttribute('aria-hidden','true');s.canvas.style.opacity=String(prefs.commentOpacity);s.layer.insertBefore(s.canvas,s.status)}
           draw(s)
+          if(!prefs.commentVisible)return
           s.commentAbort=new AbortController();s.commentDeadline=setTimeout(()=>s.commentAbort.abort(),8000)
-          fetchComments(s.data,{signal:s.commentAbort.signal,report}).then(comments=>{
+          fetchComments(s.data,{signal:s.commentAbort.signal,report,scoreThreshold:prefs.scoreThreshold,userNgEnabled:prefs.userNgEnabled}).then(comments=>{
             if(!live(s))return
-            // Four lanes, with at most one four-second comment per lane.
-            // Dense comments are dropped instead of overlapping or growing DOM.
-            const ends=[-1,-1,-1,-1]
-            for(const row of comments.slice(0,300)) {
-              const lane=ends.findIndex(end=>end<=row.vposMs);if(lane<0)continue
-              ends[lane]=row.vposMs+4000;s.rows.push({...row,lane})
-            }
-          }).catch(error=>{if(live(s)){counts.commentsUnavailable++;s.status.textContent=error?.code==='unsupported_ng'?'コメントNGに未対応のため映像のみ':'コメントは表示できません'}})
+            s.comments=comments.slice(0,300);s.layoutKey=null
+          }).catch(error=>{if(live(s)){counts.commentsUnavailable++;s.button.title=error?.code==='unsupported_ng'?'未対応のコメントNG形式のため映像のみ':'コメントは表示できません'}})
             .finally(()=>clearTimeout(s.commentDeadline))
         } catch(_) {if(live(s))terminal(s,'unavailable')}
       }
-      function updateButton(s) {s.button.textContent=muted?'音声ON':'消音';s.button.setAttribute('aria-label',muted?'プレビューの音声を出す':'プレビューを消音');s.button.setAttribute('aria-pressed',String(!muted))}
+      function updateButton(s) {
+        const ns='http://www.w3.org/2000/svg',svg=doc.createElementNS(ns,'svg'),path=doc.createElementNS(ns,'path')
+        svg.setAttribute('viewBox','0 0 24 24');svg.setAttribute('aria-hidden','true')
+        path.setAttribute('fill-rule','evenodd');path.setAttribute('clip-rule','evenodd')
+        path.setAttribute('d',muted?"m6.3 6.28 4.65-5a.8.8 0 0 1 .95-.2 1 1 0 0 1 .54.9v20.03a1 1 0 0 1-.54.91.8.8 0 0 1-.95-.2l-4.64-5H2.76A1.76 1.76 0 0 1 1 15.96V8.04a1.76 1.76 0 0 1 1.76-1.76zm12.3 4.12 2.52-2.52a.96.96 0 0 1 1.36 0l.24.24c.37.38.37.99 0 1.36L20.2 12l2.52 2.52c.37.37.37.98 0 1.36l-.24.24a.96.96 0 0 1-1.36 0L18.6 13.6l-2.52 2.52a.96.96 0 0 1-1.36 0l-.24-.24a.96.96 0 0 1 0-1.36L17 12l-2.52-2.52a.96.96 0 0 1 0-1.36l.24-.24a.96.96 0 0 1 1.36 0z":"m6.3 6.28 4.65-5a.8.8 0 0 1 .95-.2 1 1 0 0 1 .54.9v20.03a1 1 0 0 1-.54.91.8.8 0 0 1-.95-.2l-4.64-5H2.76A1.76 1.76 0 0 1 1 15.96V8.04a1.76 1.76 0 0 1 1.76-1.76zm11.3-2.05.13-.15.31-.32a.9.9 0 0 1 1.2-.04 11 11 0 0 1 0 16.56.9.9 0 0 1-1.2-.04l-.2-.2-.12-.12a.9.9 0 0 1 .05-1.29 9 9 0 0 0 1.85-2.23l.04-.07.07-.13.02-.03.02-.04a9 9 0 0 0 .97-3.1v-.05q.06-.48.06-.98c0-2.32-.9-4.44-2.38-6.01l-.02-.03-.02-.01-.19-.2-.03-.04-.03-.02-.42-.4-.13-.18h-.01V5.1l-.02-.04a.9.9 0 0 1 .04-.8zm-2.92 2.9q.12-.14.24-.25a.9.9 0 0 1 1.16-.07q.3.23.56.49a6.6 6.6 0 0 1-.6 9.91l-.01.01q-.21.15-.47.15h-.01a1 1 0 0 1-.63-.25l-.2-.2-.12-.12-.14-.2h-.01l-.01-.03a.9.9 0 0 1 .24-1.09 4.38 4.38 0 0 0 0-6.97.87.87 0 0 1-.08-1.3l.04-.05z")
+        svg.append(path);s.button.replaceChildren(svg);s.button.setAttribute('aria-label',muted?'プレビューの音声を出す':'プレビューを消音');s.button.setAttribute('aria-pressed',String(!muted))
+      }
+      function schedule() {
+        clearTimeout(timer);timer=null
+        if(!hovered||hovered===blockedRoot||!eligible(hovered,hovered.dataset.decorationVideoId)||session?.layer.dataset.phase==='playing')return
+        const root=hovered,id=root.dataset.decorationVideoId,delay=Math.max(0,hoverUntil-Date.now(),pointerUntil-Date.now(),scrollUntil-Date.now())
+        timer=setTimeout(()=>start(root,id),delay)
+      }
+      function motion(event) {
+        if(event.type==='scroll')scrollUntil=Date.now()+400
+        else pointerUntil=Date.now()+50
+        if(!hovered||session?.layer.dataset.phase==='playing')return
+        if(session)stop()
+        schedule()
+      }
       function over(event) {
         if(!setting?.value||disposed)return
         const root=event.target.closest?.('[data-nrn-autofill="true"]')
@@ -8728,7 +8815,7 @@ var PreviewData = (function () {
         hovered=null;stop()
         if(!root||!eligible(root,root.dataset.decorationVideoId))return
         hovered=root;const id=root.dataset.decorationVideoId
-        timer=setTimeout(()=>start(root,id),200)
+        hoverUntil=Date.now()+200;pointerUntil=Date.now()+50;schedule()
       }
       function out(event) {
         if(blockedRoot&&!blockedRoot.contains(event.relatedTarget))blockedRoot=null
@@ -8737,10 +8824,11 @@ var PreviewData = (function () {
       function suspend(){blockedRoot=hovered||session?.root||blockedRoot;hovered=null;stop()}
       const changed=()=>{if(!setting.value)suspend()}
       doc.addEventListener('mouseover',over);doc.addEventListener('mouseout',out)
+      doc.addEventListener('mousemove',motion,{passive:true});doc.addEventListener('scroll',motion,{passive:true,capture:true})
       doc.addEventListener('visibilitychange',suspend);win.addEventListener('pagehide',suspend)
       setting?.on('changed',changed)
       return {snapshot(){return {...counts,active:Boolean(session?.video),enabled:Boolean(setting?.value),controlRequestsOnly:true}},
-        dispose(){if(disposed)return;disposed=true;suspend();doc.removeEventListener('mouseover',over);doc.removeEventListener('mouseout',out);doc.removeEventListener('visibilitychange',suspend);win.removeEventListener('pagehide',suspend);setting?.off('changed',changed)}}
+        dispose(){if(disposed)return;disposed=true;suspend();doc.removeEventListener('mouseover',over);doc.removeEventListener('mouseout',out);doc.removeEventListener('mousemove',motion);doc.removeEventListener('scroll',motion,true);doc.removeEventListener('visibilitychange',suspend);win.removeEventListener('pagehide',suspend);setting?.off('changed',changed)}}
     }
     return {create,css,media}
   })()

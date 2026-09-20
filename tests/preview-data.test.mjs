@@ -86,11 +86,63 @@ test('unsupported NG rules and untrusted comment server suppress comments before
  }
 });
 
-test('normalization enforces target, timing, text, AI and negative-score boundaries',()=>{
- const data=threads([comment({vposMs:-1}),comment({vposMs:30000}),comment({vposMs:NaN}),comment({score:-1}),comment({isAI:true}),comment({commands:['ai']}),comment({vposMs:29999,body:'<b>'+ 'x'.repeat(250),commands:['ue','red','javascript:bad','big']})]);
+test('normalization enforces target, timing, text, AI and configured-score boundaries',()=>{
+ const data=threads([comment({vposMs:-1}),comment({vposMs:30000}),comment({vposMs:NaN}),comment({score:-4800}),comment({isAI:true}),comment({commands:['ai']}),comment({vposMs:29999,body:'<b>'+ 'x'.repeat(250),commands:['ue','red','javascript:bad','big']})]);
  data.data.threads.push({id:'999',fork:'main',comments:[comment()]},{id:'123',fork:'owner',comments:[comment()]});
  const out=plain(api().normalizeComments(data,[{id:'123',fork:'main'}],ng()));
  assert.equal(out.length,1);assert.equal(out[0].vposMs,29999);assert.equal(out[0].text.length,200);assert.ok(out[0].text.startsWith('<b>'));assert.deepEqual(out[0].commands,['ue','red','big']);
+});
+
+test('viewer word, ID and command NG filter matches without suppressing unrelated comments',async()=>{
+ const c=config();c.ng.viewer.items=[{type:'word',source:'a.b'},{type:'id',source:'blocked-user'},{type:'command',source:'UE red'},{type:'command',source:'184'}];c.ng.viewer.count=4;
+ let calls=0;
+ const rows=await api().comments({comment:c},{fetch:async()=>{calls++;return response(threads([
+  comment({body:'A.\nB'}),comment({userId:'blocked-user'}),comment({commands:['red','ue','big']}),comment({commands:['184']}),
+  comment({body:'allowed axb',commands:['red']}),comment({body:'allowed',score:-4799})
+ ]));}});
+ assert.equal(calls,1);assert.deepEqual(plain(rows).map(r=>r.text),['allowed axb','allowed']);
+});
+
+test('score threshold respects disabled NG scoring and exact official boundary',()=>{
+ const items=threads([-10000,-4800,-4799,-1000,-999,0].map(score=>comment({score,body:String(score)})));
+ const client=api();
+ assert.deepEqual(plain(client.normalizeComments(items,[{id:'123',fork:'main'}],ng())).map(r=>r.text),['-4799','-1000','-999','0']);
+ assert.deepEqual(plain(client.normalizeComments(items,[{id:'123',fork:'main'}],ng(),{scoreThreshold:-1000})).map(r=>r.text),['-999','0']);
+ const disabled=ng();disabled.ngScore.isDisabled=true;
+ assert.equal(client.normalizeComments(items,[{id:'123',fork:'main'}],disabled).length,6);
+});
+
+test('malformed and unknown viewer NG never silently reveal filtered comments',async()=>{
+ for(const rule of [{type:'regex',source:'.*'},{type:'word',source:''},{type:'command',source:'  '},{type:'id',source:5}]){
+  const c=config();c.ng.viewer.items=[rule];c.ng.viewer.count=1;let calls=0;
+  await assert.rejects(api().comments({comment:c},{fetch:async()=>{calls++}}),{code:'unsupported_ng'});assert.equal(calls,0);
+ }
+});
+
+test('ID NG cannot be bypassed by a missing or malformed comment identity',()=>{
+ const rules=ng();rules.viewer.items=[{type:'id',source:'blocked-user'}];rules.viewer.count=1;
+ const rows=threads([comment({userId:undefined}),comment({userId:42}),comment({userId:''}),comment({userId:'allowed-user',body:'allowed'})]);
+ assert.deepEqual(plain(api().normalizeComments(rows,[{id:'123',fork:'main'}],rules)).map(r=>r.text),['allowed']);
+});
+
+test('invisible comments stay invisible and preview font commands survive normalization',()=>{
+ const rows=threads([comment({commands:['invisible']}),comment({commands:['gothic'],body:'visible'})]);
+ assert.deepEqual(plain(api().normalizeComments(rows,[{id:'123',fork:'main'}],ng())),[{vposMs:0,text:'visible',commands:['gothic']}]);
+});
+
+test('preview reads official player preferences without modifying their storage',()=>{
+ const values={
+  '@nvweb-packages/video-renderer':{data:{volume:{data:.72,meta:{}},isCommentVisible:{data:false,meta:{}},commentAlpha:{data:'low',meta:{}}}},
+  'nvpc:watch':{data:{ngScoreThreshold:{data:'high',meta:{}}}},
+  '@nvweb-packages/comments:userng:v2':{data:{isEnabled:{data:false,meta:{}}}}
+ };
+ const storage={getItem:k=>JSON.stringify(values[k]??{}),setItem(){assert.fail('must not write official settings')}};
+ assert.deepEqual(plain(api().preferences(storage)),{volume:.72,commentVisible:false,commentOpacity:.6,scoreThreshold:-1000,userNgEnabled:false});
+ values['@nvweb-packages/video-renderer'].data.volume.meta.expire=1;
+ assert.equal(api().preferences(storage).volume,1);
+ assert.equal(api().preferences({getItem(){throw Error('unavailable')}}).commentVisible,true);
+ values['nvpc:watch'].data.ngScoreThreshold.data='__proto__';
+ assert.equal(api().preferences(storage).scoreThreshold,-4800);
 });
 
 test('normalization caps output at 300 and processing at 5000 received comments',()=>{

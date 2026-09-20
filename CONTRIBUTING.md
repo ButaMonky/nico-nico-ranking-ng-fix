@@ -37,6 +37,7 @@ node scripts/test-hover-preview.mjs
 node scripts/test-preview-boundaries.mjs
 node scripts/test-preview-hls.mjs
 node scripts/test-preview-failure-ui.mjs
+node scripts/test-preview-official-contract.mjs
 node scripts/test-pager-native-style.mjs
 ```
 

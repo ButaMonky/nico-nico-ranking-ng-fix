@@ -5,7 +5,7 @@ var PreviewData = (function () {
   'use strict';
   const NVAPI = 'https://nvapi.nicovideo.jp';
   const COMMENT_ORIGIN = 'https://public.nvcomment.nicovideo.jp';
-  const COMMANDS = new Set(['ue','shita','naka','big','medium','small','white','red','pink','orange','yellow','green','cyan','blue','purple','black']);
+  const COMMANDS = new Set(['ue','shita','naka','big','medium','small','white','red','pink','orange','yellow','green','cyan','blue','purple','black','gothic','mincho','defont','ender','full','patissier']);
   const headers = () => ({Accept:'application/json','X-Frontend-Id':'6','X-Frontend-Version':'0','X-Niconico-Language':'ja-jp'});
   const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
   const string = (value, max) => typeof value === 'string' && value.length > 0 && value.length <= max;
@@ -80,14 +80,48 @@ var PreviewData = (function () {
     if (!string(nv.threadKey,8192)) throw failure('invalid');
     return {nvComment:{server,threadKey:nv.threadKey,params:{targets:targets(nv.params),language:nv.params.language}},ng:comment.ng};
   }
-  function emptyNg(ng) {
-    // Unknown/nonempty rules fail closed. Implementing word/user/command matching
-    // without the service's full semantics could reveal comments the user blocked.
+  function validateNg(ng) {
+    // Saved official client: literal case-insensitive words (without line breaks),
+    // exact IDs, and command token subsets. Unknown schemas still fail closed.
     if (!object(ng) || Object.keys(ng).some(k => !['ngScore','owner','channel','viewer'].includes(k)) ||
         !object(ng.ngScore) || typeof ng.ngScore.isDisabled !== 'boolean' || Object.keys(ng.ngScore).some(k=>k!=='isDisabled') ||
         !Array.isArray(ng.owner) || ng.owner.length || !Array.isArray(ng.channel) || ng.channel.length ||
-        !object(ng.viewer) || !Array.isArray(ng.viewer.items) || ng.viewer.items.length || ng.viewer.count !== 0 ||
+        !object(ng.viewer) || !Array.isArray(ng.viewer.items) || ng.viewer.items.length > 2000 || ng.viewer.count !== ng.viewer.items.length ||
         Object.keys(ng.viewer).some(k=>!['revision','count','items'].includes(k))) throw failure('unsupported_ng');
+    for (const rule of ng.viewer.items) {
+      if (!object(rule) || !['word','id','command'].includes(rule.type) || !string(rule.source,10000) ||
+          (rule.type === 'command' && !rule.source.trim()) ||
+          Object.keys(rule).some(k=>!['type','source','registeredAt'].includes(k))) throw failure('unsupported_ng');
+    }
+  }
+  function viewerFilter(ng, enabled) {
+    const words=[],ids=new Set(),commands=[];
+    if (enabled !== false) for (const rule of ng.viewer.items) {
+      if (rule.type === 'word') words.push(rule.source.toLowerCase());
+      else if (rule.type === 'id') ids.add(rule.source);
+      else commands.push(rule.source.trim().toLowerCase().split(/\s+/));
+    }
+    return item => {
+      const text=item.body.replace(/[\r\n]/g,'').toLowerCase(), tokens=item.commands.map(c=>c.toLowerCase());
+      return words.some(word=>text.includes(word)) || (ids.size > 0 && !string(item.userId,1000)) || ids.has(item.userId) ||
+        (tokens.length > 0 && commands.some(rule=>rule.every(token=>tokens.includes(token))));
+    };
+  }
+  function preferences(storage, now=Date.now()) {
+    // Read only these public player preferences. Never copy/emit browser storage.
+    function read(namespace) {
+      try { const raw=storage?.getItem(namespace);return raw && raw.length<=100000 ? JSON.parse(raw) : null; } catch (_) {return null;}
+    }
+    function value(state,key,fallback) {
+      const entry=state?.data?.[key], expire=Number(entry?.meta?.expire);
+      return !object(entry) || (Number.isInteger(expire)&&expire<=now) ? fallback : entry.data;
+    }
+    const player=read('@nvweb-packages/video-renderer'),watch=read('nvpc:watch'),userNg=read('@nvweb-packages/comments:userng:v2');
+    const volume=value(player,'volume',1),visible=value(player,'isCommentVisible',true),alpha=value(player,'commentAlpha','none');
+    const threshold=value(watch,'ngScoreThreshold','middle'),enabled=value(userNg,'isEnabled',true),scores={high:-1000,middle:-4800,low:-10000,none:0};
+    return {volume:Number.isFinite(volume)&&volume>=0&&volume<=1?volume:1,commentVisible:typeof visible==='boolean'?visible:true,
+      commentOpacity:alpha==='low'?.6:alpha==='high'?.4:1,scoreThreshold:typeof threshold==='string'&&Object.hasOwn(scores,threshold)?scores[threshold]:-4800,
+      userNgEnabled:typeof enabled==='boolean'?enabled:true};
   }
   async function load(videoId, {signal,fetch:fetchFn=fetch,now=()=>Date.now(),report=()=>{}} = {}) {
     checkAbort(signal);
@@ -123,8 +157,9 @@ var PreviewData = (function () {
     });
     return {...rights,duration:preview.duration,comment:preview.comment,ng:preview.comment && preview.comment.ng};
   }
-  function normalizeComments(body, requestedTargets, ng) {
-    emptyNg(ng);
+  function normalizeComments(body, requestedTargets, ng, options={}) {
+    validateNg(ng);
+    const blocked=viewerFilter(ng,options.userNgEnabled),threshold=[0,-1000,-4800,-10000].includes(options.scoreThreshold)?options.scoreThreshold:-4800;
     const data = envelope(body,[200]);
     if (!Array.isArray(data.threads) || data.threads.length > 100 || !Array.isArray(requestedTargets)) throw failure('invalid');
     const allowed = new Set(requestedTargets.map(t=>String(t.id)+':'+t.fork));
@@ -135,26 +170,29 @@ var PreviewData = (function () {
       for (const item of thread.comments) {
         if (++scanned > 5000 || result.length >= 300) return result.sort((a,b)=>a.vposMs-b.vposMs);
         if (!matched || !object(item) || !Number.isFinite(item.vposMs) || item.vposMs < 0 || item.vposMs >= 30000 ||
-            !string(item.body,10000) || !Number.isFinite(item.score) || item.score < 0 || item.isAI === true || item.isAi === true ||
-            !Array.isArray(item.commands) || item.commands.length > 100 || item.commands.some(c=>typeof c!=='string' || /^ai(?:$|[:_])/i.test(c))) continue;
+            !string(item.body,10000) || !Number.isFinite(item.score) || item.deleted === true || item.isAI === true || item.isAi === true ||
+            !Array.isArray(item.commands) || item.commands.length > 100 || item.commands.some(c=>typeof c!=='string' || /^ai(?:$|[:_])/i.test(c) || c.toLowerCase()==='invisible')) continue;
+        if (thread.fork === 'owner') {
+          if (/^[@＠]/.test(item.body.trim()) || item.body.startsWith('/')) continue;
+        } else if ((!ng.ngScore.isDisabled && threshold && item.score<=threshold) || blocked(item)) continue;
         // Text only; consumers must draw text, never interpret this as markup.
-        result.push({vposMs:item.vposMs,text:item.body.slice(0,200),commands:item.commands.filter(c=>COMMANDS.has(c)).slice(0,10)});
+        result.push({vposMs:item.vposMs,text:item.body.slice(0,200),commands:item.commands.map(c=>c.toLowerCase()).filter(c=>COMMANDS.has(c)).slice(0,10)});
       }
     }
     return result.sort((a,b)=>a.vposMs-b.vposMs);
   }
-  async function comments(data, {signal,fetch:fetchFn=fetch,report=()=>{}} = {}) {
+  async function comments(data, {signal,fetch:fetchFn=fetch,report=()=>{},scoreThreshold=-4800,userNgEnabled=true} = {}) {
     checkAbort(signal);
     let config;
     try {
       config = commentConfig(data && data.comment);
-      emptyNg(config.ng);
+      validateNg(config.ng);
     } catch (error) {
       reportSafe(report,'comments','invalid');
       throw failure(error && error.code === 'unsupported_ng' ? 'unsupported_ng' : 'invalid');
     }
     const nv = config.nvComment;
-    return request('comments',nv.server+'/v1/threads?pc=1',{method:'POST',credentials:'omit',headers:{...headers(),'X-Client-Os-Type':'others','Content-Type':'text/plain;charset=UTF-8'},body:JSON.stringify({params:nv.params,threadKey:nv.threadKey,additionals:{}})},{signal,fetch:fetchFn,report},body=>normalizeComments(body,nv.params.targets,config.ng));
+    return request('comments',nv.server+'/v1/threads?pc=1',{method:'POST',credentials:'omit',headers:{...headers(),'X-Client-Os-Type':'others','Content-Type':'text/plain;charset=UTF-8'},body:JSON.stringify({params:nv.params,threadKey:nv.threadKey,additionals:{}})},{signal,fetch:fetchFn,report},body=>normalizeComments(body,nv.params.targets,config.ng,{scoreThreshold,userNgEnabled}));
   }
-  return {load,comments,selectOutputs,normalizeComments};
+  return {load,comments,selectOutputs,normalizeComments,preferences};
 })();
