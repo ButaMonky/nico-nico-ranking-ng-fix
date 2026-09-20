@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import vm from 'node:vm';
 import { readFile } from 'node:fs/promises';
-import { baseline } from '../scripts/build.mjs';
+import { baseline, output } from '../scripts/build.mjs';
 
 // Execute the unchanged browser prefix only; never run Main or a DOM/API request.
 async function load(path) {
@@ -14,7 +14,7 @@ async function load(path) {
 }
 const plain = value => JSON.parse(JSON.stringify(value));
 const paths = [baseline];
-if (process.env.NRN_TEST_GENERATED) paths.push(new URL('../dist/nico-nico-ranking-ng-v14.1-performance-pager-fix (2).user.js', import.meta.url));
+if (process.env.NRN_TEST_GENERATED) paths.push(output);
 
 for (const [index, path] of paths.entries()) {
   const label = index ? 'generated' : 'v14.1';

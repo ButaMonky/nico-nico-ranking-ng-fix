@@ -11,6 +11,8 @@
       this._description = ''
       this._error = Movie.NO_ERROR
       this._thumbInfoDone = false
+      this.metadata = Object.fromEntries(MetadataReadiness.fields.map(field => [field,'unknown']))
+      this.owner = null
       this._ng = false
       this.ngByLockedTagCount = false
       this._lockedTagCountEnabled = false
@@ -57,25 +59,31 @@
       get description() { return this._description },
       set description(description) {
         this._description = description
+        this.metadata.description = 'known'
         this.emit('descriptionChanged', this._description)
         this._updateAdvancedRule()
         this._updateNg()
+        this.emit('metadataChanged')
       },
       get tags() { return this._tags },
       set tags(tags) {
         this._tags = tags
+        this.metadata.tags = 'known'
+        this.metadata.lockedTags = 'known'
         this.ngByLockedTagCount = this._ngByLockedTagCountValue()
         this.emit('tagsChanged', this._tags)
         this._updateAdvancedRule()
         this._updateNg()
         var update = this._updateNg.bind(this)
         for (var t of this._tags) t.on('ngChanged', update)
+        this.emit('metadataChanged')
       },
       _lockedTagCount() {
         return this._tags.filter(function(t) { return t.lock }).length
       },
       _ngByLockedTagCountValue() {
         return this._lockedTagCountEnabled
+            && this.metadata.lockedTags === 'known'
             && this._lockedTagCount() >= this._lockedTagCountThreshold
       },
       updateLockedTagCountConfig(enabled, threshold) {
@@ -103,10 +111,20 @@
         this.nicoadSelfAdIdMatch = Boolean(result.idMatch)
         this.nicoadSelfAdNameMatch = Boolean(result.nameMatch)
         this.nicoadSelfAdSponsors = Array.isArray(result.sponsors) ? result.sponsors : []
+        this._nicoadSponsorsKnown = Boolean(result.checked && Array.isArray(result.sponsors))
+        this._refreshNicoadMatches()
         this.nicoadSelfAdError = result.error || null
         this.emit('nicoadSelfAdChanged', result)
         this._updateAdvancedRule()
         this._updateNg()
+      },
+      _refreshNicoadMatches() {
+        if (!this._nicoadSponsorsKnown) return
+        const owner = this.owner
+        const normalize = value => String(value ?? '').normalize('NFKC').trim().replace(/\s+/g,' ').toUpperCase()
+        const name = normalize(owner?.name)
+        this.nicoadSelfAdIdMatch = Boolean(owner?.type === 'user' && this.nicoadSelfAdSponsors.some(s => s.userId === owner.id))
+        this.nicoadSelfAdNameMatch = Boolean(name && this.nicoadSelfAdSponsors.some(s => normalize(s.advertiserName) === name))
       },
       get contributor() { return this._contributor },
       set contributor(contributor) {
@@ -132,11 +150,34 @@
         this._updateNg()
       },
       get thumbInfoDone() { return this._thumbInfoDone },
+      get metadataSettled() {
+        return this.thumbInfoDone || MetadataReadiness.ready(this,this._metadataConfig)
+      },
+      requestDetails(descriptionOnly) {
+        if (descriptionOnly ? this._descriptionRequested : this._detailsRequested) return
+        if (descriptionOnly) this._descriptionRequested = true
+        else this._detailsRequested = true
+        this.emit('metadataDemandChanged')
+        this.emit('metadataChanged')
+      },
+      setOwnerKnowledge(owner) {
+        this.owner = owner
+        this.metadata.ownerId = this.metadata.ownerType = owner ? 'known' : 'unknown'
+        this.metadata.ownerName = owner && owner.name !== null ? 'known' : 'unknown'
+        this.metadata.ownerVisibility = owner && owner.visibility !== null ? 'known' : 'unknown'
+        this._refreshNicoadMatches()
+      },
+      metadataChanged() {
+        this._updateAdvancedRule()
+        this._updateNg()
+        this.emit('metadataChanged')
+      },
       setThumbInfoDone() {
         this._thumbInfoDone = true
         this._updateAdvancedRule()
         this._updateNg()
         this.emit('thumbInfoDone')
+        this.emit('metadataChanged')
       },
       get ng() { return this._ng },
       setPageContributorCount(value) {
@@ -196,6 +237,7 @@
         var map = this._idToMovie
         for (var m of movies) {
           if (map.has(m.id)) continue
+          m._metadataConfig = this.config
           map.set(m.id, m)
           m.updateNgId(ngIds)
           m.updateNgTitle(ngTitles)

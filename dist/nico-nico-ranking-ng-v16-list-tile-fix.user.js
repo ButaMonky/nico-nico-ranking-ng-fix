@@ -6,7 +6,7 @@
 // @match        *://www.nicovideo.jp/ranking*
 // @match        *://www.nicovideo.jp/search/*
 // @match        *://www.nicovideo.jp/tag/*
-// @version      160.11
+// @version      160.12
 // @grant        unsafeWindow
 // @grant        GM_getValue
 // @grant        GM_setValue
@@ -746,10 +746,13 @@
       });
     };
     var contributor = function(rootElem, type, id, name) {
+      const raw = rootElem.querySelector(id).textContent
+      const numericId = /^[0-9]+$/.test(raw) ? Number(raw) : NaN
+      if (!Number.isSafeInteger(numericId) || numericId <= 0) return {type:'unknown',id:-1,name:null}
       return {
         type: type,
-        id: parseInt(rootElem.querySelector(id).textContent),
-        name: rootElem.querySelector(name)?.textContent ?? '',
+        id: numericId,
+        name: rootElem.querySelector(name)?.textContent ?? null,
       }
     }
     var user = function(rootElem) {
@@ -766,15 +769,17 @@
     }
     var parseContributor = function(rootElem) {
       const userId = rootElem.querySelector('thumb > user_id');
-      if (userId) return user(rootElem);
       const chId = rootElem.querySelector('thumb > ch_id');
+      if (userId && chId) return {type:'unknown',id:-1,name:null};
+      if (userId) return user(rootElem);
       if (chId) return channel(rootElem);
-      return {type: 'unknown', id: -1, name: ''};
+      return {type: 'unknown', id: -1, name: null};
     }
     var parseThumbInfo = function(rootElem) {
       return {
+        ...(rootElem.querySelector('thumb > video_id') ? {videoId:rootElem.querySelector('thumb > video_id').textContent} : {}),
         description: rootElem.querySelector('thumb > description').textContent,
-        tags: parseTags(rootElem.querySelectorAll('thumb > tags > tag')),
+        tags: rootElem.querySelector('thumb > tags') ? parseTags(rootElem.querySelectorAll('thumb > tags > tag')) : undefined,
         contributor: parseContributor(rootElem),
         title: rootElem.querySelector('thumb > title').textContent,
         error: {type: 'NO_ERROR', message: 'no error'},
@@ -842,6 +847,10 @@
         this._requestAsPossible()
         if (res.status === 200) {
           var thumbInfo = parseResText(res.responseText)
+          if (thumbInfo.videoId != null && thumbInfo.videoId !== id) {
+            this.emit('errorOccurred',error('VIDEO_ID_MISMATCH','動画IDが一致しません',id))
+            return
+          }
           thumbInfo.id = id
           if (thumbInfo.error.type === 'NO_ERROR') {
             this.emit('completed', thumbInfo)
@@ -1043,6 +1052,54 @@
   // v11 Advanced NG Rules
   // ルール間 = OR / ルール内条件 = AND
   // ============================================================
+  // Field knowledge is independent from the completion of a detail request.
+  var MetadataReadiness = (function() {
+    const fields = ['ownerId','ownerType','ownerName','ownerVisibility','tags','lockedTags','description']
+    const ruleFields = {
+      contributorId:'ownerId', userId:'ownerId', channelId:'ownerId', contributorName:'ownerName',
+      tag:'tags', tagCount:'tags', lockedTag:'lockedTags', lockedTagCount:'lockedTags', description:'description',
+      selfAdIdMatch:'ownerId', selfAdNameMatch:'ownerName'
+    }
+    const settings = ['ngUserIds','ngChannelIds','ngUserNames','ngTags','ngLockedTags',
+      'ngLockedTagCountEnabled','advancedNgRulesEnabled','advancedNgRulesJson',
+      'visibleContributorType','unknownContributorMovieVisible','movieInfoTogglable',
+      'descriptionTogglable','selfAdWarningEnabled','useGetThumbInfo']
+    const ruleDemandCache = new Map()
+    function ruleRequirements(raw) {
+      const key = typeof raw === 'string' ? raw : JSON.stringify(raw)
+      if (ruleDemandCache.has(key)) return ruleDemandCache.get(key)
+      const need = new Set()
+      const visit = function(node) {
+        if (node.kind === 'condition' && ruleFields[node.field]) need.add(ruleFields[node.field])
+        if (node.children) node.children.forEach(visit)
+      }
+      AdvancedNgRules.parse(raw).filter(rule => rule.enabled !== false).forEach(rule => visit(rule.expression))
+      ruleDemandCache.set(key,need)
+      if (ruleDemandCache.size > 32) ruleDemandCache.delete(ruleDemandCache.keys().next().value)
+      return need
+    }
+    function required(movie, config) {
+      // The owner row and contributor-type visibility need a trustworthy identity.
+      const need = new Set(['ownerId','ownerType'])
+      if (!config) return need
+      if (config.ngUserNames.set.size) need.add('ownerName')
+      if (config.ngTags.set.size) need.add('tags')
+      if (config.ngLockedTags.set.size || config.ngLockedTagCountEnabled.value) need.add('lockedTags')
+      if (config.selfAdWarningEnabled.value) { need.add('ownerId'); need.add('ownerName') }
+      if (config.advancedNgRulesEnabled.value) {
+        for (const field of ruleRequirements(config.advancedNgRulesJson.value)) need.add(field)
+      }
+      if (movie._detailsRequested || !config.movieInfoTogglable.value) {
+        need.add('ownerName'); need.add('tags'); need.add('lockedTags')
+      }
+      if (movie._detailsRequested || movie._descriptionRequested || !config.descriptionTogglable.value) need.add('description')
+      return need
+    }
+    function ready(movie, config) {
+      return [...required(movie,config)].every(field => movie.metadata[field] === 'known')
+    }
+    return {fields,ruleFields,settings,required,ready}
+  })()
   var AdvancedNgRules = (function() {
     // v12 recursive expression format:
     // group     = {kind:'group', op:'AND'|'OR', not:false, children:[...]}
@@ -1245,8 +1302,10 @@
       if (field === 'pageContributorCount') return Number.isFinite(movie.pageContributorCount)
         ? movie.pageContributorCount : {__notReady:true}
 
-      // 詳細情報依存項目。
-      if (!movie.thumbInfoDone || (movie.error && movie.error.type !== 'NO_ERROR')) return {__notReady:true}
+      // Partial metadata must not become an empty value under NOT / notExists.
+      var requiredField = MetadataReadiness.ruleFields[field]
+      if (movie.metadata ? (requiredField && movie.metadata[requiredField] !== 'known')
+        : (!movie.thumbInfoDone || (movie.error && movie.error.type !== 'NO_ERROR'))) return {__notReady:true}
 
       if (field === 'description') return movie.description || ''
       if (field === 'lockedTagCount') {
@@ -1472,6 +1531,8 @@
       this._description = ''
       this._error = Movie.NO_ERROR
       this._thumbInfoDone = false
+      this.metadata = Object.fromEntries(MetadataReadiness.fields.map(field => [field,'unknown']))
+      this.owner = null
       this._ng = false
       this.ngByLockedTagCount = false
       this._lockedTagCountEnabled = false
@@ -1518,25 +1579,31 @@
       get description() { return this._description },
       set description(description) {
         this._description = description
+        this.metadata.description = 'known'
         this.emit('descriptionChanged', this._description)
         this._updateAdvancedRule()
         this._updateNg()
+        this.emit('metadataChanged')
       },
       get tags() { return this._tags },
       set tags(tags) {
         this._tags = tags
+        this.metadata.tags = 'known'
+        this.metadata.lockedTags = 'known'
         this.ngByLockedTagCount = this._ngByLockedTagCountValue()
         this.emit('tagsChanged', this._tags)
         this._updateAdvancedRule()
         this._updateNg()
         var update = this._updateNg.bind(this)
         for (var t of this._tags) t.on('ngChanged', update)
+        this.emit('metadataChanged')
       },
       _lockedTagCount() {
         return this._tags.filter(function(t) { return t.lock }).length
       },
       _ngByLockedTagCountValue() {
         return this._lockedTagCountEnabled
+            && this.metadata.lockedTags === 'known'
             && this._lockedTagCount() >= this._lockedTagCountThreshold
       },
       updateLockedTagCountConfig(enabled, threshold) {
@@ -1564,10 +1631,20 @@
         this.nicoadSelfAdIdMatch = Boolean(result.idMatch)
         this.nicoadSelfAdNameMatch = Boolean(result.nameMatch)
         this.nicoadSelfAdSponsors = Array.isArray(result.sponsors) ? result.sponsors : []
+        this._nicoadSponsorsKnown = Boolean(result.checked && Array.isArray(result.sponsors))
+        this._refreshNicoadMatches()
         this.nicoadSelfAdError = result.error || null
         this.emit('nicoadSelfAdChanged', result)
         this._updateAdvancedRule()
         this._updateNg()
+      },
+      _refreshNicoadMatches() {
+        if (!this._nicoadSponsorsKnown) return
+        const owner = this.owner
+        const normalize = value => String(value ?? '').normalize('NFKC').trim().replace(/\s+/g,' ').toUpperCase()
+        const name = normalize(owner?.name)
+        this.nicoadSelfAdIdMatch = Boolean(owner?.type === 'user' && this.nicoadSelfAdSponsors.some(s => s.userId === owner.id))
+        this.nicoadSelfAdNameMatch = Boolean(name && this.nicoadSelfAdSponsors.some(s => normalize(s.advertiserName) === name))
       },
       get contributor() { return this._contributor },
       set contributor(contributor) {
@@ -1593,11 +1670,34 @@
         this._updateNg()
       },
       get thumbInfoDone() { return this._thumbInfoDone },
+      get metadataSettled() {
+        return this.thumbInfoDone || MetadataReadiness.ready(this,this._metadataConfig)
+      },
+      requestDetails(descriptionOnly) {
+        if (descriptionOnly ? this._descriptionRequested : this._detailsRequested) return
+        if (descriptionOnly) this._descriptionRequested = true
+        else this._detailsRequested = true
+        this.emit('metadataDemandChanged')
+        this.emit('metadataChanged')
+      },
+      setOwnerKnowledge(owner) {
+        this.owner = owner
+        this.metadata.ownerId = this.metadata.ownerType = owner ? 'known' : 'unknown'
+        this.metadata.ownerName = owner && owner.name !== null ? 'known' : 'unknown'
+        this.metadata.ownerVisibility = owner && owner.visibility !== null ? 'known' : 'unknown'
+        this._refreshNicoadMatches()
+      },
+      metadataChanged() {
+        this._updateAdvancedRule()
+        this._updateNg()
+        this.emit('metadataChanged')
+      },
       setThumbInfoDone() {
         this._thumbInfoDone = true
         this._updateAdvancedRule()
         this._updateNg()
         this.emit('thumbInfoDone')
+        this.emit('metadataChanged')
       },
       get ng() { return this._ng },
       setPageContributorCount(value) {
@@ -1657,6 +1757,7 @@
         var map = this._idToMovie
         for (var m of movies) {
           if (map.has(m.id)) continue
+          m._metadataConfig = this.config
           map.set(m.id, m)
           m.updateNgId(ngIds)
           m.updateNgTitle(ngTitles)
@@ -1677,16 +1778,20 @@
     const injected = new WeakMap()
     function normalize(owner) {
       if (!owner) return null
-      const declared = owner.ownerType || owner.type
-      if (declared && !['user','channel'].includes(declared)) return null
+      if (owner.type != null && !['user','channel'].includes(owner.type)) return null
+      const types = [owner.ownerType,owner.type].filter(value => value != null && value !== 'hidden')
+      if (!types.length || types.some(value => !['user','channel'].includes(value)) || new Set(types).size !== 1) return null
+      const type = types[0]
       const raw = String(owner.id ?? '')
-      const type = declared || (/^ch[0-9]+$/.test(raw) ? 'channel' : 'user')
+      // Only explicitly channel-typed sources and native channel URLs accept ch.
       const text = type === 'channel' ? raw.replace(/^ch/,'') : raw
       if (!/^[0-9]+$/.test(text)) return null
       const id = Number(text)
       if (!Number.isSafeInteger(id) || id <= 0) return null
-      const name = typeof owner.name === 'string' ? owner.name.trim() : ''
-      return {type,id,name}
+      const name = typeof owner.name === 'string' ? owner.name.trim() : null
+      const visibility = owner.visibility === 'hidden' || owner.ownerType === 'hidden'
+        ? 'hidden' : owner.visibility === 'visible' ? 'visible' : null
+      return {type,id,name,visibility}
     }
     function fromUrl(value, base) {
       try {
@@ -1768,9 +1873,9 @@
       return function(o, source) {
         if (o.type === 'unknown') return Contributor.NULL;
         var map = typeToMap.get(o.type)
-        const key = (source || 'detail') + ':' + o.id + (source === 'search' ? ':' + o.name : '')
+        const key = JSON.stringify([source || 'detail',o.id,o.name])
         if (map.has(key)) return map.get(key)
-        var contributor = Contributor.new(o.type, o.id, o.name)
+        var contributor = Contributor.new(o.type, o.id, o.name || '')
         map.set(key, contributor)
         contributor.bindToConfig(config)
         return contributor
@@ -1784,8 +1889,10 @@
     function selectOwner(movie, getContributorBy) {
       const owner = movie._nrnDetailContributor || movie._nrnSearchContributor
       movie._nrnContributorSource = movie._nrnDetailContributor ? 'detail' : owner ? 'search' : 'unknown'
+      movie.setOwnerKnowledge(owner || null)
       const selected = owner ? getContributorBy(owner,movie._nrnContributorSource) : Contributor.NULL
       if (movie.contributor !== selected) movie.contributor = selected
+      movie.metadataChanged()
     }
     return {
       forSearch(movies) {
@@ -1794,12 +1901,14 @@
           const movie = movies.get(id), owner = OwnerEvidence.normalize(evidence)
           if (!movie || !owner || movie._nrnSearchOwnerConflict) return
           const previous = movie._nrnSearchContributor
-          if (OwnerEvidence.same(previous,owner) && (previous.name || !owner.name)) return
+          if (OwnerEvidence.same(previous,owner) && (previous.name || previous.name === owner.name || owner.name === null)
+              && (previous.visibility !== null || owner.visibility === null)) return
           if (previous && !OwnerEvidence.same(previous,owner)) {
             movie._nrnSearchContributor = null
             movie._nrnSearchOwnerConflict = true
           } else {
-            movie._nrnSearchContributor = previous?.name ? previous : owner
+            movie._nrnSearchContributor = previous ? {...owner,
+              name:previous.name || (owner.name ?? previous.name),visibility:previous.visibility ?? owner.visibility} : owner
           }
           selectOwner(movie,getContributorBy)
         }
@@ -1810,11 +1919,15 @@
         return function(thumbInfo) {
           var m = movies.get(thumbInfo.id)
           if (m.error && m.error.type !== 'NO_ERROR') m.error = Movie.NO_ERROR
-          m.description = thumbInfo.description
-          m.tags = getTagsBy(thumbInfo.tags)
+          if (typeof thumbInfo.description === 'string') m.description = thumbInfo.description
+          if (Array.isArray(thumbInfo.tags)) m.tags = getTagsBy(thumbInfo.tags)
           // Keep raw API/cache objects unchanged; search evidence belongs to this route's movie.
           const detailOwner = OwnerEvidence.normalize(thumbInfo.contributor)
-          if (detailOwner) m._nrnDetailContributor = detailOwner
+          if (detailOwner) {
+            const previous = m._nrnDetailContributor
+            m._nrnDetailContributor = OwnerEvidence.same(previous,detailOwner) ? {...detailOwner,
+              name:detailOwner.name ?? previous.name,visibility:detailOwner.visibility ?? previous.visibility} : detailOwner
+          }
           selectOwner(m,getContributorBy)
           m.setThumbInfoDone()
         }
@@ -1823,6 +1936,9 @@
         return function(thumbInfo) {
           var m = movies.get(thumbInfo.id)
           m.error = thumbInfo.error
+          for (const field of MetadataReadiness.fields) {
+            if (m.metadata[field] !== 'known') m.metadata[field] = 'failed'
+          }
           m.setThumbInfoDone()
         }
       },
@@ -3825,7 +3941,7 @@ html[data-nrn-ui-theme="dark"] .nrn-contributor-ng-name-button:hover {
           this._createAndSetTagViews(movie.tags)
           this._createAndSetContributorView(movie.contributor)
           this.error = movie.error
-          if (!movie.thumbInfoDone) this._listeners.bind(movie)
+          this._listeners.bind(movie)
         },
         unbind() {
           this._listeners.unbind()
@@ -3892,6 +4008,13 @@ html[data-nrn-ui-theme="dark"] .nrn-contributor-ng-name-button:hover {
         })
       }
       Description.prototype = {
+        get text() { return this._text || '' },
+        set text(value) {
+          if (this._text === value) return
+          this._text = value
+          this.linkified = false
+          if (this.elem?.parentNode) this.linkify()
+        },
         linkify() {
           if (this.linkified) return
           this.linkified = true
@@ -3906,7 +4029,7 @@ html[data-nrn-ui-theme="dark"] .nrn-contributor-ng-name-button:hover {
           }
           f.appendChild(d.createTextNode(t.slice(lastIndex)))
           f.normalize()
-          this.elem.firstChild.appendChild(f)
+          this.elem.firstChild.replaceChildren(f)
         },
         bindToMovie(movie) {
           this.text = movie.description
@@ -3933,6 +4056,7 @@ html[data-nrn-ui-theme="dark"] .nrn-contributor-ng-name-button:hover {
         this.movieTitle = null
         this._movieListeners = new Listeners({
           thumbInfoDone: this.setThumbInfoDone.bind(this),
+          metadataChanged: this.updateMetadataPresentation.bind(this),
         })
         this._movieViewModeListeners = new Listeners({
           changed: set(this, 'viewMode'),
@@ -4040,6 +4164,7 @@ html[data-nrn-ui-theme="dark"] .nrn-contributor-ng-name-button:hover {
         },
         set _movieInfoVisible(visible) {
           if (visible) {
+            this._movie?.requestDetails()
             this._pinMovieInfoTogglePosition()
             this._addMovieInfo()
             this.elem.classList.add('nrn-info-expanded')
@@ -4330,9 +4455,11 @@ html[data-nrn-ui-theme="dark"] .nrn-contributor-ng-name-button:hover {
           return Boolean(this.description.elem.parentNode)
         },
         set _descriptionExpanded(expanded) {
+          if (expanded) this._movie?.requestDetails(true)
           var o = this._originalDescriptionElem
           var d = this.description
-          if (expanded && o.parentNode) {
+          if (!o) return
+          if (expanded && o?.parentNode) {
             d.linkify()
             o.parentNode.replaceChild(d.elem, o)
           } else if (!expanded && d.elem.parentNode) {
@@ -4340,17 +4467,18 @@ html[data-nrn-ui-theme="dark"] .nrn-contributor-ng-name-button:hover {
           }
         },
         _updateByDescriptionTogglable() {
-          if (!this.description.text) return
+          if (!this.description.text && this._movie?.metadata.description === 'known') return
           if (this.description.togglable) {
             this._originalDescriptionElem?.appendChild(this.description.openButton)
             this.description.elem.appendChild(this.description.closeButton)
           } else {
             this.description.closeButton.remove()
           }
-          this._descriptionExpanded = !this.description.togglable
+          this._descriptionExpanded = this.description.togglable ? Boolean(this._nrnManualDescriptionExpanded) : true
         },
         toggleDescription() {
-          this._descriptionExpanded = !this._descriptionExpanded
+          this._nrnManualDescriptionExpanded = !this._descriptionExpanded
+          this._descriptionExpanded = this._nrnManualDescriptionExpanded
         },
         get descriptionTogglable() {
           return this.description.togglable
@@ -4362,14 +4490,22 @@ html[data-nrn-ui-theme="dark"] .nrn-contributor-ng-name-button:hover {
         setThumbInfoDone() {
           this.elem.classList.add('nrn-thumb-info-done')
         },
+        updateMetadataPresentation() {
+          this.elem.classList.toggle('nrn-metadata-settled',Boolean(this._movie?.metadataSettled))
+          this._updateByMovieInfoTogglable()
+          this._updateByDescriptionTogglable()
+        },
         get thumbInfoDone() {
           return this.elem.classList.contains('nrn-thumb-info-done')
         },
         bindToMovie(movie) {
+          this._movie = movie
           this.movieInfo.bindToMovie(movie)
           this.description.bindToMovie(movie)
           if (movie.thumbInfoDone) this.setThumbInfoDone()
-          else this._movieListeners.bind(movie)
+          this._movieListeners.bind(movie)
+          this.updateMetadataPresentation()
+          if (this._movieInfoVisible) movie.requestDetails()
         },
         bindToMovieViewMode(movieViewMode) {
           this.viewMode = movieViewMode.value
@@ -4789,6 +4925,15 @@ html[data-nrn-ui-theme="dark"] .nrn-contributor-ng-name-button:hover {
           this.movieInfo.elem.dataset.nrnLayout = 'reserved-below-card'
           this.elem.appendChild(this.movieInfo.elem)
         },
+        _addMovieInfoToggle() {
+          if (!this.movieInfo.toggle.parentNode) this.elem.appendChild(this.movieInfo.toggle)
+          this._scheduleMovieInfoTogglePin()
+        },
+        bindToConfig(config) {
+          _super.prototype.bindToConfig.call(this,config)
+          this.movieInfoTogglable = config.movieInfoTogglable.value
+          config.movieInfoTogglable.on('changed',set(this,'movieInfoTogglable'))
+        },
         setThumbInfoDone() {
           _super.prototype.setThumbInfoDone.call(this);
           if (!this.movieInfo.toggle.parentNode) {
@@ -5103,11 +5248,7 @@ html[data-nrn-ui-theme="dark"] .nrn-contributor-ng-name-button:hover {
                 view: metaSpans[0] ? parseCount(metaSpans[0].textContent) : 0,
                 comment: metaSpans[1] ? parseCount(metaSpans[1].textContent) : 0
               },
-              owner: {
-                id: ownerId,
-                name: ownerNameElem ? ownerNameElem.textContent.trim() : '',
-                iconUrl: ownerImg ? ownerImg.getAttribute('src') : ''
-              }
+              owner: OwnerEvidence.fromRow({rootElem:root,movie:{id:id}})
             }
           }).filter(Boolean)
 
@@ -5224,10 +5365,10 @@ html[data-nrn-ui-theme="dark"] .nrn-contributor-ng-name-button:hover {
           }
         })
 
-        const ownerIds = items.map(item => item.owner?.id == null ? '' : String(item.owner.id))
-        if (ownerIds.length && ownerIds.every(id => /^(?:ch)?[1-9][0-9]*$/.test(id))) {
+        const owners = items.map(item => OwnerEvidence.normalize(item.owner))
+        if (owners.length && owners.every(Boolean)) {
           const counts = new Map(), seen = new Set()
-          const keys = ownerIds.map((id, i) => (items[i].owner.ownerType || items[i].owner.type || (id.startsWith('ch') ? 'channel' : 'user')) + ':' + id.replace(/^ch/, ''))
+          const keys = owners.map(owner => owner.type + ':' + owner.id)
           items.forEach((item, i) => {
             if (seen.has(item.id)) return
             seen.add(item.id); counts.set(keys[i], (counts.get(keys[i]) || 0) + 1)
@@ -5312,8 +5453,8 @@ html[data-nrn-ui-theme="dark"] .nrn-contributor-ng-name-button:hover {
         var owner = item.owner || {}
         var ownerName = owner.name || (owner.visibility === 'hidden' ? '(投稿者非公開)' : '不明')
         var ownerIcon = owner.iconUrl || 'https://secure-dcdn.cdn.nimg.jp/nicoaccount/usericon/defaults/blank.jpg'
-        var channelOwner = owner.ownerType === 'channel' || owner.type === 'channel' || /^ch[0-9]+$/.test(String(owner.id))
-        var ownerUrl = owner.id ? (channelOwner ? 'https://ch.nicovideo.jp/channel/ch' + String(owner.id).replace(/^ch/, '') : 'https://www.nicovideo.jp/user/' + owner.id) : ''
+        var identity = OwnerEvidence.normalize(owner)
+        var ownerUrl = identity ? (identity.type === 'channel' ? 'https://ch.nicovideo.jp/channel/ch' + identity.id : 'https://www.nicovideo.jp/user/' + identity.id) : ''
         var root = doc.createElement('div')
         root.className = 'Pressable cursor_pointer d_flex cq-t_inline-size min-w_thumbnail.min max-w_thumbnail.max w_100% nrn-autofill-pending'
         root.setAttribute('data-decoration-video-id', item.id)
@@ -6042,7 +6183,7 @@ div:has(> div > a[data-anchor-page="ranking_genre"][href^="/watch/"] > div > p),
 [data-anchor-page="tag"]:has(> :not(.pos_relative) > [data-anchor-page="tag"][href^="/watch/"]),
 [data-anchor-page="search"]:has(> :not(.pos_relative) > [data-anchor-page="search"][href^="/watch/"]) {
   visibility: hidden;
-  &.nrn-thumb-info-done {
+  &.nrn-thumb-info-done, &.nrn-metadata-settled {
     visibility: inherit;
   }
 }
@@ -6785,9 +6926,13 @@ div:has(> div > a[data-anchor-page="ranking_genre"][href^="/watch/"] > div > p),
 .contentBody.video.uad .item[data-video-item-muted],
 .contentBody.video.uad .item[data-video-item-sensitive],
 .contentBody.video.uad .item.nrn-thumb-info-done,
+.contentBody.video.uad .item.nrn-metadata-settled,
 #tsukuaso .item.nrn-thumb-info-done,
+#tsukuaso .item.nrn-metadata-settled,
 .contentBody.video.uad.searchUad .item,
 .contentBody.video.uad .nicoadVideoItemWrapper.nrn-thumb-info-done,
+.contentBody.video.uad .nicoadVideoItemWrapper.nrn-metadata-settled,
+.contentBody.video.uad .nicoadVideoItemWrapper.nrn-metadata-settled .item,
 .contentBody.video.uad .nicoadVideoItemWrapper.nrn-thumb-info-done .item {
   visibility: inherit;
 }
@@ -7559,7 +7704,7 @@ div:has(> div > a[data-anchor-page="ranking_genre"][href^="/watch/"] > div > p),
         const container = root.movieInfo.elem.querySelector('.nrn-contributor-container')
         const owner = movie.contributor
         const signature = JSON.stringify([owner?.type, owner?.id, owner?.name, owner?.ngName])
-        if (container && movie.thumbInfoDone && (ownerSignature !== signature || !container.querySelector('.nrn-owner-row img'))) {
+        if (container && (movie.metadata.ownerId === 'known' || movie.thumbInfoDone) && (ownerSignature !== signature || !container.querySelector('.nrn-owner-row img'))) {
           const existing = container.querySelector('.nrn-contributor-link')
           const link = ownerLink(doc, owner?.type === 'unknown' ? null : owner, nativeOwner)
           if (existing) {
@@ -7578,9 +7723,9 @@ div:has(> div > a[data-anchor-page="ranking_genre"][href^="/watch/"] > div > p),
         if (count) {
           count.replaceChildren()
           const locked = doc.createElement(detail.fields.has('lockedTagCount') ? 'mark' : 'span')
-          locked.className = 'nrn-lock-count'; locked.textContent = '🔒' + movie.tags.filter(t => t.lock).length
+          locked.className = 'nrn-lock-count'; locked.textContent = '🔒' + (movie.metadata.lockedTags === 'known' ? movie.tags.filter(t => t.lock).length : '未取得')
           const all = doc.createElement(detail.fields.has('tagCount') ? 'mark' : 'span')
-          all.textContent = String(movie.tags.length)
+          all.textContent = movie.metadata.tags === 'known' ? String(movie.tags.length) : '未取得'
           count.append(locked, doc.createTextNode(' / '), all)
           if (Number.isFinite(movie.pageContributorCount)) {
             const posts = doc.createElement(detail.fields.has('pageContributorCount') ? 'mark' : 'span')
@@ -7697,6 +7842,8 @@ a.nrn-parsed[data-anchor-detail="nicoad"] > .nrn-movie-info-toggle { background:
     // Short-lived successful metadata only; NG decisions always use current settings.
     var recentDetails = new Map()
     var createThumbInfoRequester = function(movies, movieViewModes) {
+      var disposed = false, scheduled = false
+      var watched = new Set()
       var applyDetails = ThumbInfoListener.forCompleted(movies)
       var thumbInfo = new ThumbInfo(
           gmXmlHttpRequest(),
@@ -7708,24 +7855,42 @@ a.nrn-parsed[data-anchor-detail="nicoad"] > .nrn-movie-info-toggle { background:
           applyDetails(info)
         })
         .on('errorOccurred', ThumbInfoListener.forErrorOccurred(movies))
-      movies.config.thumbInfoConcurrency.on('changed', function(v) {
+      var updateConcurrency = function(v) {
         thumbInfo.setConcurrent(v)
         console.log('[NicoNicoRankingNG ThumbInfo] 同時取得数を変更:', thumbInfo.concurrent)
-      })
+      }
+      movies.config.thumbInfoConcurrency.on('changed', updateConcurrency)
+      var schedule = function() {
+        if (disposed || scheduled) return
+        scheduled = true
+        queueMicrotask(function() { scheduled = false; if (!disposed) request() })
+      }
+      var settingsChanged = function() {
+        if (disposed) return
+        for (var movie of movies._idToMovie.values()) movie.metadataChanged()
+        schedule()
+      }
+      for (var key of MetadataReadiness.settings) movies.config[key].on('changed',settingsChanged)
       var request = function(prefer) {
+        if (disposed || !movies.config.useGetThumbInfo.value) return
         var allIds = movieViewModes.sort().map(function(m) { return m.movie.id })
         for (var id of allIds) {
+          var movie = movies.get(id)
+          if (!watched.has(movie)) {
+            watched.add(movie)
+            movie.on('metadataDemandChanged',schedule).on('metadataChanged',schedule)
+          }
           var cached = recentDetails.get(id)
           if (cached && Date.now() - cached.at > 120000) { recentDetails.delete(id); cached = null }
           if (cached && !movies.get(id).thumbInfoDone) applyDetails(cached.info)
         }
         var pendingIds = allIds.filter(function(id) {
           var movie = movies.get(id)
-          return movie && !movie.thumbInfoDone
+          return movie && !movie.thumbInfoDone && !MetadataReadiness.ready(movie,movies.config)
         })
         var skippedDone = allIds.length - pendingIds.length
         if (skippedDone > 0) {
-          console.log('[NicoNicoRankingNG ThumbInfo] 既に詳細情報取得済みのため通信を省略:', {
+          console.log('[NicoNicoRankingNG ThumbInfo] 必要項目が既知または取得終了のため通信を省略:', {
             totalIds: allIds.length,
             requestIds: pendingIds.length,
             skippedDone: skippedDone
@@ -7733,13 +7898,21 @@ a.nrn-parsed[data-anchor-detail="nicoad"] > .nrn-movie-info-toggle { background:
         }
         thumbInfo.request(pendingIds, prefer)
       }
-      request.dispose = function() { thumbInfo.dispose() }
+      request.dispose = function() {
+        disposed = true
+        thumbInfo.dispose()
+        movies.config.thumbInfoConcurrency.off('changed',updateConcurrency)
+        for (var key of MetadataReadiness.settings) movies.config[key].off('changed',settingsChanged)
+        for (var movie of watched) {
+          movie.off('metadataDemandChanged',schedule)
+          movie.off('metadataChanged',schedule)
+        }
+        watched.clear()
+      }
       return request
     }
     var getThumbInfoRequester = function(movies, movieViewModes) {
-      return movies.config.useGetThumbInfo.value
-           ? createThumbInfoRequester(movies, movieViewModes)
-           : function() {}
+      return createThumbInfoRequester(movies, movieViewModes)
     }
     var createModel = function(config) {
       var movies = new Movies(config)
@@ -7857,7 +8030,7 @@ a.nrn-parsed[data-anchor-detail="nicoad"] > .nrn-movie-info-toggle { background:
     // ------------------------------------------------------------------
     var getNnrSessionDetailCache = function(config) {
       var STORAGE_KEY = 'NicoNicoRankingNG:detailCache:v2'
-      if (window.__nrnSessionDetailCacheService) {
+      if (window.__nrnSessionDetailCacheService?.schema === 3) {
         window.__nrnSessionDetailCacheService.configure(config)
         return window.__nrnSessionDetailCacheService
       }
@@ -7908,7 +8081,7 @@ a.nrn-parsed[data-anchor-detail="nicoad"] > .nrn-movie-info-toggle { background:
           var raw = sessionStorage.getItem(STORAGE_KEY)
           if (!raw) return
           var parsed = JSON.parse(raw)
-          if (!parsed || parsed.schema !== 2 || !Array.isArray(parsed.entries)) return
+          if (!parsed || parsed.schema !== 3 || !Array.isArray(parsed.entries)) return
           parsed.entries.forEach(function(pair) {
             if (Array.isArray(pair) && pair.length === 2) map.set(String(pair[0]), pair[1])
           })
@@ -7926,7 +8099,7 @@ a.nrn-parsed[data-anchor-detail="nicoad"] > .nrn-movie-info-toggle { background:
         trim()
         try {
           sessionStorage.setItem(STORAGE_KEY, JSON.stringify({
-            schema: 2,
+            schema: 3,
             savedAt: Date.now(),
             entries: [...map.entries()]
           }))
@@ -7944,6 +8117,7 @@ a.nrn-parsed[data-anchor-detail="nicoad"] > .nrn-movie-info-toggle { background:
       window.addEventListener?.('pagehide', flush)
 
       var service = {
+        schema: 3,
         configure: configure,
         flush: flush,
         get size() { trim(); return map.size },
@@ -7995,7 +8169,6 @@ a.nrn-parsed[data-anchor-detail="nicoad"] > .nrn-movie-info-toggle { background:
       window.__nrnSessionDetailCacheService = service
       return service
     }
-
   // One document only: no video data, user IDs or NG decisions are persisted here.
   var PagerJourney = (function() {
     const histories = new Map(), ttl = 30 * 60 * 1000
@@ -8230,7 +8403,7 @@ a.nrn-parsed[data-anchor-detail="nicoad"] > .nrn-movie-info-toggle { background:
       var visibleNonNgIds = function(ids) {
         return [...new Set(ids)].filter(function(id) {
           var movie = model.movies.get(id)
-          return movie && movie.thumbInfoDone && !movie.ng
+          return movie && movie.metadataSettled && !movie.ng
         })
       }
       var fetchSelfAdResult = function(movie) {
@@ -8496,7 +8669,7 @@ a.nrn-parsed[data-anchor-detail="nicoad"] > .nrn-movie-info-toggle { background:
           while (cursor < unique.length) {
             var id = unique[cursor++]
             var movie = model.movies.get(id)
-            if (!movie || !movie.thumbInfoDone) continue
+            if (!movie || !movie.metadataSettled) continue
             var result = await fetchSelfAdResult(movie)
             if (page._disposed) return
             if (!result) continue
@@ -8764,7 +8937,7 @@ a.nrn-parsed[data-anchor-detail="nicoad"] > .nrn-movie-info-toggle { background:
           if (!r || !r.elem || !r.elem.isConnected || !r.movieId || seen.has(r.movieId)) return false
           var movie = model.movies.get(r.movieId)
           if (!movie) return false
-          if (model.config.useGetThumbInfo.value && !movie.thumbInfoDone) return false
+          if (model.config.useGetThumbInfo.value && !movie.metadataSettled) return false
           if (movie.ng) return false
           if (r.elem.classList.contains('nrn-hide')) return false
           if (r.elem.classList.contains('nrn-autofill-pending')) return false
@@ -9216,17 +9389,23 @@ a.nrn-parsed[data-anchor-detail="nicoad"] > .nrn-movie-info-toggle { background:
           var done = false
           var remaining = new Set(ids.filter(function(id) {
             var movie = model.movies.get(id)
-            return movie && !movie.thumbInfoDone
+            return movie && !movie.metadataSettled
           }))
           if (!remaining.size) {
             resolve(true)
             return
           }
 
+          var listeners = new Map()
+          var cleanup = function() {
+            clearTimeout(timer)
+            for (var [movie,listener] of listeners) movie.off('metadataChanged',listener)
+            listeners.clear()
+          }
           var finish = function() {
             if (!done && remaining.size === 0) {
               done = true
-              clearTimeout(timer)
+              cleanup()
               resolve(true)
             }
           }
@@ -9237,15 +9416,19 @@ a.nrn-parsed[data-anchor-detail="nicoad"] > .nrn-movie-info-toggle { background:
               remaining.delete(id)
               return
             }
-            movie.on('thumbInfoDone', function() {
+            var listener = function() {
+              if (!movie.metadataSettled) return
               remaining.delete(id)
               finish()
-            })
+            }
+            listeners.set(movie,listener)
+            movie.on('metadataChanged',listener)
           })
 
           var timer = setTimeout(function() {
             if (done) return
             done = true
+            cleanup()
             console.warn(LOG, '詳細情報待機タイムアウト:', [...remaining])
             resolve(false)
           }, timeoutMs)
@@ -9978,7 +10161,7 @@ a.nrn-parsed[data-anchor-detail="nicoad"] > .nrn-movie-info-toggle { background:
           const displayed = new Set(uniqueVisibleRoots(page.movieRoots).map(root => root.movieId))
           const completed = useSnapshot ? [] : journey.update(knownLastPage, function(id) {
             const movie = model.movies.get(id)
-            return movie && movie.thumbInfoDone && movie.error?.type === 'NO_ERROR' && (movie.ng || displayed.has(id))
+            return movie && movie.metadataSettled && movie.error?.type === 'NO_ERROR' && (movie.ng || displayed.has(id))
           })
           if (useSnapshot) journey.restore()
           var scanned = new Set(completed)
@@ -10442,6 +10625,10 @@ a.nrn-parsed[data-anchor-detail="nicoad"] > .nrn-movie-info-toggle { background:
         ;[...new Set(ids)].forEach(function(id) {
           var key = cacheKeyForMovie(id)
           var cached = detailCache.get(key)
+          if (cached && (cached.id !== id || !cached.metadata
+              || cached.metadata.tags !== 'known' || cached.metadata.lockedTags !== 'known'
+              || cached.metadata.description !== 'known' || !Array.isArray(cached.tags)
+              || typeof cached.description !== 'string')) cached = null
           if (!cached) {
             misses++
             cacheMisses++
@@ -10458,9 +10645,10 @@ a.nrn-parsed[data-anchor-detail="nicoad"] > .nrn-movie-info-toggle { background:
           try {
             applyThumbInfoFromCache({
               id: id,
-              description: cached.description || '',
-              tags: Array.isArray(cached.tags) ? cached.tags : [],
-              contributor: cached.contributor || {type:'unknown', id:-1, name:''},
+              description: cached.description,
+              tags: cached.tags,
+              contributor: cached.contributor ? {...cached.contributor,
+                name:cached.metadata.ownerName === 'known' ? cached.contributor.name : null} : null,
               title: cached.title || movie.title,
               error: {type:'NO_ERROR', message:'cache'}
             })
@@ -10501,16 +10689,14 @@ a.nrn-parsed[data-anchor-detail="nicoad"] > .nrn-movie-info-toggle { background:
         if (!model.config.sessionDetailCacheEnabled.value) return
         var movie = model.movies.get(id)
         if (!movie || !movie.thumbInfoDone) return
+        if (movie.metadata.tags !== 'known' || movie.metadata.description !== 'known') return
         if (movie.error && movie.error.type && movie.error.type !== 'NO_ERROR') return
         var payload = {
           id: id,
+          metadata: {...movie.metadata},
           title: movie.title || '',
           description: movie.description || '',
-          contributor: movie._nrnContributorSource !== 'search' && movie.contributor ? {
-            type: movie.contributor.type,
-            id: movie.contributor.id,
-            name: movie.contributor.name
-          } : null,
+          contributor: movie._nrnDetailContributor ? {...movie._nrnDetailContributor} : null,
           tags: (movie.tags || []).map(function(t) {
             return {name:t.name, lock:Boolean(t.lock)}
           }),
@@ -11667,7 +11853,7 @@ a.nrn-parsed[data-anchor-detail="nicoad"] > .nrn-movie-info-toggle { background:
         if (page._disposed) return
         const countedMovies = [...new Set(originalRoots.filter(root => root.elem.matches('[data-decoration-video-id][data-anchor-area="main"]:not([data-anchor-detail="nicoad"])')).map(root => root.movieId))]
           .map(id => model.movies.get(id)).filter(Boolean)
-        if (completed && countedMovies.length && countedMovies.every(movie => movie.thumbInfoDone
+        if (completed && countedMovies.length && countedMovies.every(movie => movie.metadataSettled
             && movie.error.type === 'NO_ERROR' && movie.contributor?.type !== 'unknown' && Number(movie.contributor?.id) > 0)) {
           const counts = new Map()
           const ownerKey = movie => movie.contributor.type + ':' + movie.contributor.id

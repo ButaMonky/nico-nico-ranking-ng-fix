@@ -69,6 +69,8 @@
     // Short-lived successful metadata only; NG decisions always use current settings.
     var recentDetails = new Map()
     var createThumbInfoRequester = function(movies, movieViewModes) {
+      var disposed = false, scheduled = false
+      var watched = new Set()
       var applyDetails = ThumbInfoListener.forCompleted(movies)
       var thumbInfo = new ThumbInfo(
           gmXmlHttpRequest(),
@@ -80,24 +82,42 @@
           applyDetails(info)
         })
         .on('errorOccurred', ThumbInfoListener.forErrorOccurred(movies))
-      movies.config.thumbInfoConcurrency.on('changed', function(v) {
+      var updateConcurrency = function(v) {
         thumbInfo.setConcurrent(v)
         console.log('[NicoNicoRankingNG ThumbInfo] 同時取得数を変更:', thumbInfo.concurrent)
-      })
+      }
+      movies.config.thumbInfoConcurrency.on('changed', updateConcurrency)
+      var schedule = function() {
+        if (disposed || scheduled) return
+        scheduled = true
+        queueMicrotask(function() { scheduled = false; if (!disposed) request() })
+      }
+      var settingsChanged = function() {
+        if (disposed) return
+        for (var movie of movies._idToMovie.values()) movie.metadataChanged()
+        schedule()
+      }
+      for (var key of MetadataReadiness.settings) movies.config[key].on('changed',settingsChanged)
       var request = function(prefer) {
+        if (disposed || !movies.config.useGetThumbInfo.value) return
         var allIds = movieViewModes.sort().map(function(m) { return m.movie.id })
         for (var id of allIds) {
+          var movie = movies.get(id)
+          if (!watched.has(movie)) {
+            watched.add(movie)
+            movie.on('metadataDemandChanged',schedule).on('metadataChanged',schedule)
+          }
           var cached = recentDetails.get(id)
           if (cached && Date.now() - cached.at > 120000) { recentDetails.delete(id); cached = null }
           if (cached && !movies.get(id).thumbInfoDone) applyDetails(cached.info)
         }
         var pendingIds = allIds.filter(function(id) {
           var movie = movies.get(id)
-          return movie && !movie.thumbInfoDone
+          return movie && !movie.thumbInfoDone && !MetadataReadiness.ready(movie,movies.config)
         })
         var skippedDone = allIds.length - pendingIds.length
         if (skippedDone > 0) {
-          console.log('[NicoNicoRankingNG ThumbInfo] 既に詳細情報取得済みのため通信を省略:', {
+          console.log('[NicoNicoRankingNG ThumbInfo] 必要項目が既知または取得終了のため通信を省略:', {
             totalIds: allIds.length,
             requestIds: pendingIds.length,
             skippedDone: skippedDone
@@ -105,13 +125,21 @@
         }
         thumbInfo.request(pendingIds, prefer)
       }
-      request.dispose = function() { thumbInfo.dispose() }
+      request.dispose = function() {
+        disposed = true
+        thumbInfo.dispose()
+        movies.config.thumbInfoConcurrency.off('changed',updateConcurrency)
+        for (var key of MetadataReadiness.settings) movies.config[key].off('changed',settingsChanged)
+        for (var movie of watched) {
+          movie.off('metadataDemandChanged',schedule)
+          movie.off('metadataChanged',schedule)
+        }
+        watched.clear()
+      }
       return request
     }
     var getThumbInfoRequester = function(movies, movieViewModes) {
-      return movies.config.useGetThumbInfo.value
-           ? createThumbInfoRequester(movies, movieViewModes)
-           : function() {}
+      return createThumbInfoRequester(movies, movieViewModes)
     }
     var createModel = function(config) {
       var movies = new Movies(config)

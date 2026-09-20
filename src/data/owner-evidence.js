@@ -3,16 +3,20 @@
     const injected = new WeakMap()
     function normalize(owner) {
       if (!owner) return null
-      const declared = owner.ownerType || owner.type
-      if (declared && !['user','channel'].includes(declared)) return null
+      if (owner.type != null && !['user','channel'].includes(owner.type)) return null
+      const types = [owner.ownerType,owner.type].filter(value => value != null && value !== 'hidden')
+      if (!types.length || types.some(value => !['user','channel'].includes(value)) || new Set(types).size !== 1) return null
+      const type = types[0]
       const raw = String(owner.id ?? '')
-      const type = declared || (/^ch[0-9]+$/.test(raw) ? 'channel' : 'user')
+      // Only explicitly channel-typed sources and native channel URLs accept ch.
       const text = type === 'channel' ? raw.replace(/^ch/,'') : raw
       if (!/^[0-9]+$/.test(text)) return null
       const id = Number(text)
       if (!Number.isSafeInteger(id) || id <= 0) return null
-      const name = typeof owner.name === 'string' ? owner.name.trim() : ''
-      return {type,id,name}
+      const name = typeof owner.name === 'string' ? owner.name.trim() : null
+      const visibility = owner.visibility === 'hidden' || owner.ownerType === 'hidden'
+        ? 'hidden' : owner.visibility === 'visible' ? 'visible' : null
+      return {type,id,name,visibility}
     }
     function fromUrl(value, base) {
       try {

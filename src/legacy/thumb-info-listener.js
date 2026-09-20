@@ -38,9 +38,9 @@
       return function(o, source) {
         if (o.type === 'unknown') return Contributor.NULL;
         var map = typeToMap.get(o.type)
-        const key = (source || 'detail') + ':' + o.id + (source === 'search' ? ':' + o.name : '')
+        const key = JSON.stringify([source || 'detail',o.id,o.name])
         if (map.has(key)) return map.get(key)
-        var contributor = Contributor.new(o.type, o.id, o.name)
+        var contributor = Contributor.new(o.type, o.id, o.name || '')
         map.set(key, contributor)
         contributor.bindToConfig(config)
         return contributor
@@ -54,8 +54,10 @@
     function selectOwner(movie, getContributorBy) {
       const owner = movie._nrnDetailContributor || movie._nrnSearchContributor
       movie._nrnContributorSource = movie._nrnDetailContributor ? 'detail' : owner ? 'search' : 'unknown'
+      movie.setOwnerKnowledge(owner || null)
       const selected = owner ? getContributorBy(owner,movie._nrnContributorSource) : Contributor.NULL
       if (movie.contributor !== selected) movie.contributor = selected
+      movie.metadataChanged()
     }
     return {
       forSearch(movies) {
@@ -64,12 +66,14 @@
           const movie = movies.get(id), owner = OwnerEvidence.normalize(evidence)
           if (!movie || !owner || movie._nrnSearchOwnerConflict) return
           const previous = movie._nrnSearchContributor
-          if (OwnerEvidence.same(previous,owner) && (previous.name || !owner.name)) return
+          if (OwnerEvidence.same(previous,owner) && (previous.name || previous.name === owner.name || owner.name === null)
+              && (previous.visibility !== null || owner.visibility === null)) return
           if (previous && !OwnerEvidence.same(previous,owner)) {
             movie._nrnSearchContributor = null
             movie._nrnSearchOwnerConflict = true
           } else {
-            movie._nrnSearchContributor = previous?.name ? previous : owner
+            movie._nrnSearchContributor = previous ? {...owner,
+              name:previous.name || (owner.name ?? previous.name),visibility:previous.visibility ?? owner.visibility} : owner
           }
           selectOwner(movie,getContributorBy)
         }
@@ -80,11 +84,15 @@
         return function(thumbInfo) {
           var m = movies.get(thumbInfo.id)
           if (m.error && m.error.type !== 'NO_ERROR') m.error = Movie.NO_ERROR
-          m.description = thumbInfo.description
-          m.tags = getTagsBy(thumbInfo.tags)
+          if (typeof thumbInfo.description === 'string') m.description = thumbInfo.description
+          if (Array.isArray(thumbInfo.tags)) m.tags = getTagsBy(thumbInfo.tags)
           // Keep raw API/cache objects unchanged; search evidence belongs to this route's movie.
           const detailOwner = OwnerEvidence.normalize(thumbInfo.contributor)
-          if (detailOwner) m._nrnDetailContributor = detailOwner
+          if (detailOwner) {
+            const previous = m._nrnDetailContributor
+            m._nrnDetailContributor = OwnerEvidence.same(previous,detailOwner) ? {...detailOwner,
+              name:detailOwner.name ?? previous.name,visibility:detailOwner.visibility ?? previous.visibility} : detailOwner
+          }
           selectOwner(m,getContributorBy)
           m.setThumbInfoDone()
         }
@@ -93,6 +101,9 @@
         return function(thumbInfo) {
           var m = movies.get(thumbInfo.id)
           m.error = thumbInfo.error
+          for (const field of MetadataReadiness.fields) {
+            if (m.metadata[field] !== 'known') m.metadata[field] = 'failed'
+          }
           m.setThumbInfoDone()
         }
       },

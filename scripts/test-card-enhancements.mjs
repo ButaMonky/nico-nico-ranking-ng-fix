@@ -96,8 +96,8 @@ try {
         return (await fixturePage.fetchPageItems(2)).items.map(item=>item.__nrnPageContributorCount ?? null);
       };
       window.pageCountResults = [
-        await testItems([{id:'sm1',owner:{id:1}},{id:'sm2',owner:{id:1}},{id:'sm1',owner:{id:1}},{id:'so3',owner:{id:1,ownerType:'channel'}}]),
-        await testItems([{id:'sm1',owner:{id:1}},{id:'sm2',owner:{}}])
+        await testItems([{id:'sm1',owner:{type:'user',id:1}},{id:'sm2',owner:{type:'user',id:1}},{id:'sm1',owner:{type:'user',id:1}},{id:'so3',owner:{id:1,ownerType:'channel'}}]),
+        await testItems([{id:'sm1',owner:{type:'user',id:1}},{id:'sm2',owner:{}}])
       ];
     } finally {window.fetch=nativeFetch;}
   });

@@ -28,7 +28,7 @@ for(const [label,path] of [['baseline',baseline],['generated',output]]){
     assert.deepEqual(trace,[['descriptionChanged',false],['tagsChanged',false],['contributorChanged',false],['thumbInfoDone',true]]);
     assert.equal(a.title,'original');assert.equal(a.description,'detail');
     assert.equal(a.tags[0],b.tags[0]);assert.notEqual(a.tags[0],c.tags[0]);
-    assert.equal(a.contributor,b.contributor);assert.equal(b.contributor.name,'first');assert.notEqual(a.contributor,c.contributor);
+    if(label==='baseline'){assert.equal(a.contributor,b.contributor);assert.equal(b.contributor.name,'first');}else{assert.notEqual(a.contributor,b.contributor);assert.equal(b.contributor.name,'later');}assert.notEqual(a.contributor,c.contributor);
     config.ngLockedTags.add('shared');assert.deepEqual([a.ng,b.ng,c.ng],[false,false,true]);
     config.ngTags.add('shared');assert.deepEqual([a.ng,b.ng,c.ng],[true,true,true]);
     config.ngTags.clear();config.ngLockedTags.clear();assert.deepEqual([a.ng,b.ng,c.ng],[false,false,false]);
@@ -62,7 +62,7 @@ for(const [label,path] of [['baseline',baseline],['generated',output]]){
     assert.deepEqual(order,['title','ng','title','ng']);
   });
   test(`${label}: advertisement readiness and rule updates preserve event order`,async()=>{
-    const {Movie,AdvancedNgRules}=await load(path);const m=new Movie('smAd','ad');m.setThumbInfoDone();
+    const {Movie,AdvancedNgRules}=await load(path);const m=new Movie('smAd','ad');m.setThumbInfoDone();if(label==='generated')m.setOwnerKnowledge({type:'user',id:12,name:'synthetic',visibility:null});
     const expr=condition('selfAdIdMatch','isTrue','');
     m.updateAdvancedRulesConfig(true,JSON.stringify([{id:'ad',expression:expr}]));
     const state=()=>[AdvancedNgRules.evaluateNode(m,expr),AdvancedNgRules.evaluateNode(m,condition('selfAdIdMatch','isFalse',''))];
@@ -85,7 +85,7 @@ for(const [label,path] of [['baseline',baseline],['generated',output]]){
     assert.deepEqual(['gt','gte','lt','lte','eq','neq'].map(o=>evaluate('tagCount',o,2)),[false,true,false,true,true,false]);
     assert.deepEqual([evaluate('tag','contains','alpha'),evaluate('tag','contains','alp'),evaluate('lockedTag','contains','beta')],[true,false,false]);
     assert.deepEqual([evaluate('title','contains','CHINA'),evaluate('title','eq','China'),evaluate('title','notContains','Japan')],[true,false,true]);
-    assert.deepEqual([evaluate('userId','exists',''),evaluate('userId','notExists',''),evaluate('userId','eq',0)],[false,true,label==='baseline']);
+    assert.deepEqual([evaluate('userId','exists',''),evaluate('userId','notExists',''),evaluate('userId','eq',0)],[false,label==='baseline',label==='baseline']);
     assert.equal(AdvancedNgRules.evaluateNode(m,group('AND',[],true)),false);
     assert.equal(AdvancedNgRules.match(m,true,'{broken',false).length,0);
   });
@@ -119,7 +119,7 @@ for(const [label,path] of [['baseline',baseline],['generated',output]]){
     const absent=condition('userId','notExists','');
     const negated=condition('userId','exists','',true);
     const evaluate=(m,node)=>AdvancedNgRules.evaluateNode(m,node,[]);
-    assert.deepEqual([evaluate(pending,absent),evaluate(missing,absent),evaluate(pending,negated)],label==='baseline'?fixture.missingStates:[false,true,false]);
+    assert.deepEqual([evaluate(pending,absent),evaluate(missing,absent),evaluate(pending,negated)],label==='baseline'?fixture.missingStates:[false,false,false]);
     const failed=new Movie('smFailed','普通');movies.setIfAbsent([failed]);
     ThumbInfoListener.forErrorOccurred(movies)({id:failed.id,error:{type:'TEST_ERROR',message:'fixture'}});
     assert.deepEqual([failed.thumbInfoDone,evaluate(failed,absent)],label==='baseline'?fixture.failedStates:[true,false]);

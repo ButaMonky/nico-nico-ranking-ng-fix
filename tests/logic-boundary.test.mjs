@@ -32,7 +32,7 @@ test('generated: NOT waits for details then updates the live Movie decision',()=
 test('generated: missing IDs and blank numeric operands are not numeric zero',()=>{
  const m=new Movie('sm1','title');m.setThumbInfoDone();
  for(const op of ['eq','lt','lte','gt','gte','neq'])assert.equal(AdvancedNgRules.evaluateNode(m,condition('userId',op,0)),false);
- assert.equal(AdvancedNgRules.evaluateNode(m,condition('userId','notExists')),true);
+ assert.equal(AdvancedNgRules.evaluateNode(m,condition('userId','notExists')),false);
  assert.equal(AdvancedNgRules.evaluateNode(m,condition('tagCount','eq','')),false);
 });
 test('generated: failed metadata is undecided, a later successful response clears the error',async()=>{

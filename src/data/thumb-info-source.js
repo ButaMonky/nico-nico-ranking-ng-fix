@@ -8,10 +8,13 @@
       });
     };
     var contributor = function(rootElem, type, id, name) {
+      const raw = rootElem.querySelector(id).textContent
+      const numericId = /^[0-9]+$/.test(raw) ? Number(raw) : NaN
+      if (!Number.isSafeInteger(numericId) || numericId <= 0) return {type:'unknown',id:-1,name:null}
       return {
         type: type,
-        id: parseInt(rootElem.querySelector(id).textContent),
-        name: rootElem.querySelector(name)?.textContent ?? '',
+        id: numericId,
+        name: rootElem.querySelector(name)?.textContent ?? null,
       }
     }
     var user = function(rootElem) {
@@ -28,15 +31,17 @@
     }
     var parseContributor = function(rootElem) {
       const userId = rootElem.querySelector('thumb > user_id');
-      if (userId) return user(rootElem);
       const chId = rootElem.querySelector('thumb > ch_id');
+      if (userId && chId) return {type:'unknown',id:-1,name:null};
+      if (userId) return user(rootElem);
       if (chId) return channel(rootElem);
-      return {type: 'unknown', id: -1, name: ''};
+      return {type: 'unknown', id: -1, name: null};
     }
     var parseThumbInfo = function(rootElem) {
       return {
+        ...(rootElem.querySelector('thumb > video_id') ? {videoId:rootElem.querySelector('thumb > video_id').textContent} : {}),
         description: rootElem.querySelector('thumb > description').textContent,
-        tags: parseTags(rootElem.querySelectorAll('thumb > tags > tag')),
+        tags: rootElem.querySelector('thumb > tags') ? parseTags(rootElem.querySelectorAll('thumb > tags > tag')) : undefined,
         contributor: parseContributor(rootElem),
         title: rootElem.querySelector('thumb > title').textContent,
         error: {type: 'NO_ERROR', message: 'no error'},
@@ -104,6 +109,10 @@
         this._requestAsPossible()
         if (res.status === 200) {
           var thumbInfo = parseResText(res.responseText)
+          if (thumbInfo.videoId != null && thumbInfo.videoId !== id) {
+            this.emit('errorOccurred',error('VIDEO_ID_MISMATCH','動画IDが一致しません',id))
+            return
+          }
           thumbInfo.id = id
           if (thumbInfo.error.type === 'NO_ERROR') {
             this.emit('completed', thumbInfo)

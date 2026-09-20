@@ -200,8 +200,10 @@
       if (field === 'pageContributorCount') return Number.isFinite(movie.pageContributorCount)
         ? movie.pageContributorCount : {__notReady:true}
 
-      // 詳細情報依存項目。
-      if (!movie.thumbInfoDone || (movie.error && movie.error.type !== 'NO_ERROR')) return {__notReady:true}
+      // Partial metadata must not become an empty value under NOT / notExists.
+      var requiredField = MetadataReadiness.ruleFields[field]
+      if (movie.metadata ? (requiredField && movie.metadata[requiredField] !== 'known')
+        : (!movie.thumbInfoDone || (movie.error && movie.error.type !== 'NO_ERROR'))) return {__notReady:true}
 
       if (field === 'description') return movie.description || ''
       if (field === 'lockedTagCount') {

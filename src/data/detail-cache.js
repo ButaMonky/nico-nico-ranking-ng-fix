@@ -1,6 +1,6 @@
     var getNnrSessionDetailCache = function(config) {
       var STORAGE_KEY = 'NicoNicoRankingNG:detailCache:v2'
-      if (window.__nrnSessionDetailCacheService) {
+      if (window.__nrnSessionDetailCacheService?.schema === 3) {
         window.__nrnSessionDetailCacheService.configure(config)
         return window.__nrnSessionDetailCacheService
       }
@@ -51,7 +51,7 @@
           var raw = sessionStorage.getItem(STORAGE_KEY)
           if (!raw) return
           var parsed = JSON.parse(raw)
-          if (!parsed || parsed.schema !== 2 || !Array.isArray(parsed.entries)) return
+          if (!parsed || parsed.schema !== 3 || !Array.isArray(parsed.entries)) return
           parsed.entries.forEach(function(pair) {
             if (Array.isArray(pair) && pair.length === 2) map.set(String(pair[0]), pair[1])
           })
@@ -69,7 +69,7 @@
         trim()
         try {
           sessionStorage.setItem(STORAGE_KEY, JSON.stringify({
-            schema: 2,
+            schema: 3,
             savedAt: Date.now(),
             entries: [...map.entries()]
           }))
@@ -87,6 +87,7 @@
       window.addEventListener?.('pagehide', flush)
 
       var service = {
+        schema: 3,
         configure: configure,
         flush: flush,
         get size() { trim(); return map.size },
@@ -138,4 +139,3 @@
       window.__nrnSessionDetailCacheService = service
       return service
     }
-

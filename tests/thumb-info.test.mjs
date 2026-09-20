@@ -64,7 +64,7 @@ for(const [label,path] of [['baseline',baseline],['generated',output]]){
   test(`${label}: success data, API failure and parser failure notifications`,async()=>{
     const {service,calls,trace}=await setup(path,1);service.request(['ok','deleted','bad']);
     calls[0].onload({status:200,responseText:JSON.stringify({status:'ok',fields:{
-      'thumb > title':'Title','thumb > description':'Description','thumb > user_id':'42','thumb > user_nickname':'Author'
+      'thumb > title':'Title','thumb > description':'Description','thumb > tags':'','thumb > user_id':'42','thumb > user_nickname':'Author'
     },tags:[{name:'locked',lock:true},{name:'normal',lock:false}]})});
     assert.deepEqual(trace[2],['completed',{description:'Description',tags:[{name:'locked',lock:true},{name:'normal',lock:false}],
       contributor:{type:'user',id:42,name:'Author'},title:'Title',error:{type:'NO_ERROR',message:'no error'},id:'ok'}]);
@@ -80,6 +80,22 @@ test('generated: duplicate/late callbacks cannot release a slot twice',async()=>
  calls[1].onerror();calls[1].onerror();assert.equal(calls.length,3);
  assert.equal(service._requestCount,1);
  calls[2].onabort();assert.equal(calls.length,4);calls[3].onerror();assert.equal(service._requestCount,0);
+});
+
+test('generated: XML owner IDs are strict and conflicting namespaces are unknown',async()=>{
+ for(const fields of [{'thumb > user_id':'12x'},{'thumb > user_id':'12','thumb > ch_id':'13'}]){
+  const {service,calls,trace}=await setup(output,1);service.request(['sm1']);
+  calls[0].onload({status:200,responseText:JSON.stringify({status:'ok',fields:{'thumb > title':'synthetic','thumb > description':'','thumb > tags':'',...fields}})});
+  assert.equal(trace.at(-1)[1].contributor.type,'unknown');
+ }
+});
+test('generated: XML video mismatch is rejected and missing name is null',async()=>{
+ const {service,calls,trace}=await setup(output,1);service.request(['sm1','sm2']);
+ const fields={'thumb > title':'synthetic','thumb > description':'','thumb > tags':'','thumb > user_id':'12'};
+ calls[0].onload({status:200,responseText:JSON.stringify({status:'ok',fields:{...fields,'thumb > video_id':'sm9'}})});
+ assert.equal(trace.at(-1)[0],'error');assert.equal(trace.at(-1)[1].error.type,'VIDEO_ID_MISMATCH');
+ calls[1].onload({status:200,responseText:JSON.stringify({status:'ok',fields:{...fields,'thumb > video_id':'sm2'}})});
+ assert.equal(trace.at(-1)[1].contributor.name,null);
 });
 test('generated: synchronous transport exceptions and promise rejections release slots',async()=>{
  const {service}=await setup(output,1);

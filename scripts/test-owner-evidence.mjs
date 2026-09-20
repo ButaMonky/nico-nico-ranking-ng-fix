@@ -32,9 +32,9 @@ try {
   };
  });
  await page.addScriptTag({content:source});
- await page.waitForFunction(()=>window.fixtureModel && ids.every(id=>fixtureModel.movies.get(id)?.thumbInfoDone));
+ await page.waitForFunction(()=>window.fixtureModel && ids.every(id=>fixtureModel.movies.get(id)?.metadataSettled));
  assert.deepEqual(await page.evaluate(()=>ids.map(id=>{const m=fixtureModel.movies.get(id);return [m.contributor.id,m.ng,m._nrnContributorSource]})),[[12345,true,'search'],[12345,true,'search'],[23456,false,'search']]);
- assert.equal(await page.evaluate(()=>requests),3,'no extra owner API calls');
+ assert.equal(await page.evaluate(()=>requests),0,'known owner conditions need no detail or owner API calls');
  assert.deepEqual(await page.evaluate(()=>ids.map(id=>fixturePage.movieRoots.find(r=>r.movieId===id).elem.classList.contains('nrn-hide'))),[true,true,false]);
  await page.evaluate(()=>fixtureModel.config.ngUserIds.remove([12345]));
  await page.waitForFunction(()=>ids.every(id=>!fixtureModel.movies.get(id).ng));
@@ -61,7 +61,7 @@ try {
  for(const key of ['inDescription','wrongVideo','conflict','recycled'])assert.equal(parsed[key],null,key);
  assert.equal(parsed.injectedOwner.id,123);
  await page.evaluate(()=>{
-  const item={id:'sm123456789',title:'injected fixture',owner:{id:12345,name:''}};
+  const item={id:'sm123456789',title:'injected fixture',owner:{type:'user',id:12345,name:''}};
   const root=fixturePage._createInjectedTile(item);
   fixtureModel.createMovies([{movie:{id:item.id,title:item.title},rootElem:root}]);
   fixtureModel.config.ngUserIds.add(12345);

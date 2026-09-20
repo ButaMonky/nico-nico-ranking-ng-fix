@@ -18,7 +18,7 @@ async function harness(path,raw=null,failWrite=false){
 for(const [label,path] of [['baseline',baseline],['generated',output]]){
  test(`${label}: cache persistence, singleton reconfiguration and reload`,async()=>{
   const h=await harness(path),c=h.factory(config());c.set(42,{cachedAt:h.now(),title:'test'});
-  assert.equal(c.get('42').title,'test');c.flush?.();assert.equal(JSON.parse(h.raw()).schema,2);
+  assert.equal(c.get('42').title,'test');c.flush?.();assert.equal(JSON.parse(h.raw()).schema,label==='baseline'?2:3);
   assert.equal(h.factory(config(2,200)),c);assert.equal(c.diagnostics().ttlMinutes,2);
   const fresh=await harness(path,h.raw()),restored=fresh.factory(config());
   assert.equal(restored.get(42).title,'test');assert.equal(restored.diagnostics().stats.loads,1);
@@ -49,4 +49,8 @@ test('generated: cache batches writes and flushes on pagehide without losing in-
  assert.equal(c.size,50);assert.equal(h.writes.length,0);assert.equal(h.timers.size,1);
  h.events.pagehide();assert.equal(h.writes.length,1);assert.equal(h.timers.size,0);
  assert.equal(JSON.parse(h.raw()).entries.length,50);
+});
+test('generated: pre-field-status cache is invalidated instead of treating absent names as empty',async()=>{
+ const h=await harness(output,JSON.stringify({schema:2,entries:[['sm1',{cachedAt:1000000,contributor:{type:'user',id:12,name:''}}]]}));
+ assert.equal(h.factory(config()).size,0);
 });

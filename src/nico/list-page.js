@@ -70,6 +70,15 @@
           this.movieInfo.elem.dataset.nrnLayout = 'reserved-below-card'
           this.elem.appendChild(this.movieInfo.elem)
         },
+        _addMovieInfoToggle() {
+          if (!this.movieInfo.toggle.parentNode) this.elem.appendChild(this.movieInfo.toggle)
+          this._scheduleMovieInfoTogglePin()
+        },
+        bindToConfig(config) {
+          _super.prototype.bindToConfig.call(this,config)
+          this.movieInfoTogglable = config.movieInfoTogglable.value
+          config.movieInfoTogglable.on('changed',set(this,'movieInfoTogglable'))
+        },
         setThumbInfoDone() {
           _super.prototype.setThumbInfoDone.call(this);
           if (!this.movieInfo.toggle.parentNode) {
@@ -384,11 +393,7 @@
                 view: metaSpans[0] ? parseCount(metaSpans[0].textContent) : 0,
                 comment: metaSpans[1] ? parseCount(metaSpans[1].textContent) : 0
               },
-              owner: {
-                id: ownerId,
-                name: ownerNameElem ? ownerNameElem.textContent.trim() : '',
-                iconUrl: ownerImg ? ownerImg.getAttribute('src') : ''
-              }
+              owner: OwnerEvidence.fromRow({rootElem:root,movie:{id:id}})
             }
           }).filter(Boolean)
 
@@ -505,10 +510,10 @@
           }
         })
 
-        const ownerIds = items.map(item => item.owner?.id == null ? '' : String(item.owner.id))
-        if (ownerIds.length && ownerIds.every(id => /^(?:ch)?[1-9][0-9]*$/.test(id))) {
+        const owners = items.map(item => OwnerEvidence.normalize(item.owner))
+        if (owners.length && owners.every(Boolean)) {
           const counts = new Map(), seen = new Set()
-          const keys = ownerIds.map((id, i) => (items[i].owner.ownerType || items[i].owner.type || (id.startsWith('ch') ? 'channel' : 'user')) + ':' + id.replace(/^ch/, ''))
+          const keys = owners.map(owner => owner.type + ':' + owner.id)
           items.forEach((item, i) => {
             if (seen.has(item.id)) return
             seen.add(item.id); counts.set(keys[i], (counts.get(keys[i]) || 0) + 1)
@@ -593,8 +598,8 @@
         var owner = item.owner || {}
         var ownerName = owner.name || (owner.visibility === 'hidden' ? '(投稿者非公開)' : '不明')
         var ownerIcon = owner.iconUrl || 'https://secure-dcdn.cdn.nimg.jp/nicoaccount/usericon/defaults/blank.jpg'
-        var channelOwner = owner.ownerType === 'channel' || owner.type === 'channel' || /^ch[0-9]+$/.test(String(owner.id))
-        var ownerUrl = owner.id ? (channelOwner ? 'https://ch.nicovideo.jp/channel/ch' + String(owner.id).replace(/^ch/, '') : 'https://www.nicovideo.jp/user/' + owner.id) : ''
+        var identity = OwnerEvidence.normalize(owner)
+        var ownerUrl = identity ? (identity.type === 'channel' ? 'https://ch.nicovideo.jp/channel/ch' + identity.id : 'https://www.nicovideo.jp/user/' + identity.id) : ''
         var root = doc.createElement('div')
         root.className = 'Pressable cursor_pointer d_flex cq-t_inline-size min-w_thumbnail.min max-w_thumbnail.max w_100% nrn-autofill-pending'
         root.setAttribute('data-decoration-video-id', item.id)
@@ -1323,7 +1328,7 @@ div:has(> div > a[data-anchor-page="ranking_genre"][href^="/watch/"] > div > p),
 [data-anchor-page="tag"]:has(> :not(.pos_relative) > [data-anchor-page="tag"][href^="/watch/"]),
 [data-anchor-page="search"]:has(> :not(.pos_relative) > [data-anchor-page="search"][href^="/watch/"]) {
   visibility: hidden;
-  &.nrn-thumb-info-done {
+  &.nrn-thumb-info-done, &.nrn-metadata-settled {
     visibility: inherit;
   }
 }

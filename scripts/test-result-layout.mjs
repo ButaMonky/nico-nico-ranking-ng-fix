@@ -3,9 +3,9 @@ import {createRequire} from 'node:module';
 import assert from 'node:assert/strict';
 import {build,output} from './build.mjs';
 const require=createRequire(import.meta.url);
-const playwright=require(process.env.NRN_PLAYWRIGHT || '<local-path>');
+const playwright=require(process.env.NRN_PLAYWRIGHT || 'playwright');
 await build();
-const browser=await playwright.chromium.launch({headless:true,executablePath:process.env.NRN_BROWSER || 'C:/Program Files/BraveSoftware/Brave-Browser/Application/brave.exe'});
+const browser=await playwright.chromium.launch({headless:true,executablePath:process.env.NRN_BROWSER});
 try {
  const page=await browser.newPage({viewport:{width:1280,height:1000}});
  await page.route('**/*',r=>r.fulfill({body:'<html><body></body></html>',contentType:'text/html'}));

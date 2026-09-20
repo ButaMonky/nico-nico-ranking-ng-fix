@@ -1,4 +1,6 @@
-最新160.11: [後から表示される投稿者情報の反映](docs/owner-evidence-1611.md)。投稿者欄の遅延表示・空欄からの名前補完を追加通信なしでNG判定へ反映。実サイト確認は未実施。
+最新160.12: [項目別の取得状態と不要な詳細通信の省略](docs/field-readiness-16012.md)。既知の投稿者情報を保持し、現在のNG条件・表示に足りる場合は個別取得を省略。タグ条件の追加・詳細欄の展開時は必要分を取得します。実サイト上の速度測定は未実施。
+
+160.11: [後から表示される投稿者情報の反映](docs/owner-evidence-1611.md)。投稿者欄の遅延表示・空欄からの名前補完を追加通信なしでNG判定へ反映。実サイト確認は未実施。
 
 160.10: [検索結果に残る投稿者IDのNG補完](docs/owner-evidence-1610.md)。同じ動画の正規の投稿者欄・追加カードの検索データを利用。新しい投稿者API通信は不要。アプリの識別APIは未特定。
 
@@ -36,11 +38,12 @@ node --version
 node scripts/build.mjs
 node scripts/check.mjs
 node scripts/test.mjs
+node scripts/check-privacy.mjs
 ```
 
 npmが利用できる環境では同じ処理を `npm run build`、`npm run check`、`npm test` で実行できます。この作業環境にはnpmがなく、上記Node.js直接実行を検証します。npm経由の実行は未検証です。
 
-生成物は `dist/nico-nico-ranking-ng-v16-list-tile-fix.user.js`（メタデータ版番号160.4）です。baselineは編集しないでください。原本のSHA-256検証は引き続き必須です。ビルドは分割ソースの順序どおりの連結と出力一致を検証します。
+生成物は `dist/nico-nico-ranking-ng-v16-list-tile-fix.user.js`（メタデータ版番号160.12）です。baselineのスクリプト原本は編集しないでください。原本のSHA-256検証は引き続き必須です。ビルドは分割ソースの順序どおりの連結と出力一致を検証します。
 
 Git保存後は別フォルダーへ `git clone --no-hardlinks <このリポジトリの絶対パス> <新しい作業フォルダー>` を実行し、上記手順を繰り返します。distやTempの元ファイルをコピーする必要はありません。
 

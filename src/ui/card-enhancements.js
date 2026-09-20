@@ -105,7 +105,7 @@
         const container = root.movieInfo.elem.querySelector('.nrn-contributor-container')
         const owner = movie.contributor
         const signature = JSON.stringify([owner?.type, owner?.id, owner?.name, owner?.ngName])
-        if (container && movie.thumbInfoDone && (ownerSignature !== signature || !container.querySelector('.nrn-owner-row img'))) {
+        if (container && (movie.metadata.ownerId === 'known' || movie.thumbInfoDone) && (ownerSignature !== signature || !container.querySelector('.nrn-owner-row img'))) {
           const existing = container.querySelector('.nrn-contributor-link')
           const link = ownerLink(doc, owner?.type === 'unknown' ? null : owner, nativeOwner)
           if (existing) {
@@ -124,9 +124,9 @@
         if (count) {
           count.replaceChildren()
           const locked = doc.createElement(detail.fields.has('lockedTagCount') ? 'mark' : 'span')
-          locked.className = 'nrn-lock-count'; locked.textContent = '🔒' + movie.tags.filter(t => t.lock).length
+          locked.className = 'nrn-lock-count'; locked.textContent = '🔒' + (movie.metadata.lockedTags === 'known' ? movie.tags.filter(t => t.lock).length : '未取得')
           const all = doc.createElement(detail.fields.has('tagCount') ? 'mark' : 'span')
-          all.textContent = String(movie.tags.length)
+          all.textContent = movie.metadata.tags === 'known' ? String(movie.tags.length) : '未取得'
           count.append(locked, doc.createTextNode(' / '), all)
           if (Number.isFinite(movie.pageContributorCount)) {
             const posts = doc.createElement(detail.fields.has('pageContributorCount') ? 'mark' : 'span')

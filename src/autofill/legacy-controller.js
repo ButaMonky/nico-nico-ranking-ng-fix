@@ -98,7 +98,7 @@
       var visibleNonNgIds = function(ids) {
         return [...new Set(ids)].filter(function(id) {
           var movie = model.movies.get(id)
-          return movie && movie.thumbInfoDone && !movie.ng
+          return movie && movie.metadataSettled && !movie.ng
         })
       }
       var fetchSelfAdResult = function(movie) {
@@ -364,7 +364,7 @@
           while (cursor < unique.length) {
             var id = unique[cursor++]
             var movie = model.movies.get(id)
-            if (!movie || !movie.thumbInfoDone) continue
+            if (!movie || !movie.metadataSettled) continue
             var result = await fetchSelfAdResult(movie)
             if (page._disposed) return
             if (!result) continue
@@ -632,7 +632,7 @@
           if (!r || !r.elem || !r.elem.isConnected || !r.movieId || seen.has(r.movieId)) return false
           var movie = model.movies.get(r.movieId)
           if (!movie) return false
-          if (model.config.useGetThumbInfo.value && !movie.thumbInfoDone) return false
+          if (model.config.useGetThumbInfo.value && !movie.metadataSettled) return false
           if (movie.ng) return false
           if (r.elem.classList.contains('nrn-hide')) return false
           if (r.elem.classList.contains('nrn-autofill-pending')) return false
@@ -1084,17 +1084,23 @@
           var done = false
           var remaining = new Set(ids.filter(function(id) {
             var movie = model.movies.get(id)
-            return movie && !movie.thumbInfoDone
+            return movie && !movie.metadataSettled
           }))
           if (!remaining.size) {
             resolve(true)
             return
           }
 
+          var listeners = new Map()
+          var cleanup = function() {
+            clearTimeout(timer)
+            for (var [movie,listener] of listeners) movie.off('metadataChanged',listener)
+            listeners.clear()
+          }
           var finish = function() {
             if (!done && remaining.size === 0) {
               done = true
-              clearTimeout(timer)
+              cleanup()
               resolve(true)
             }
           }
@@ -1105,15 +1111,19 @@
               remaining.delete(id)
               return
             }
-            movie.on('thumbInfoDone', function() {
+            var listener = function() {
+              if (!movie.metadataSettled) return
               remaining.delete(id)
               finish()
-            })
+            }
+            listeners.set(movie,listener)
+            movie.on('metadataChanged',listener)
           })
 
           var timer = setTimeout(function() {
             if (done) return
             done = true
+            cleanup()
             console.warn(LOG, '詳細情報待機タイムアウト:', [...remaining])
             resolve(false)
           }, timeoutMs)
@@ -1846,7 +1856,7 @@
           const displayed = new Set(uniqueVisibleRoots(page.movieRoots).map(root => root.movieId))
           const completed = useSnapshot ? [] : journey.update(knownLastPage, function(id) {
             const movie = model.movies.get(id)
-            return movie && movie.thumbInfoDone && movie.error?.type === 'NO_ERROR' && (movie.ng || displayed.has(id))
+            return movie && movie.metadataSettled && movie.error?.type === 'NO_ERROR' && (movie.ng || displayed.has(id))
           })
           if (useSnapshot) journey.restore()
           var scanned = new Set(completed)
@@ -2310,6 +2320,10 @@
         ;[...new Set(ids)].forEach(function(id) {
           var key = cacheKeyForMovie(id)
           var cached = detailCache.get(key)
+          if (cached && (cached.id !== id || !cached.metadata
+              || cached.metadata.tags !== 'known' || cached.metadata.lockedTags !== 'known'
+              || cached.metadata.description !== 'known' || !Array.isArray(cached.tags)
+              || typeof cached.description !== 'string')) cached = null
           if (!cached) {
             misses++
             cacheMisses++
@@ -2326,9 +2340,10 @@
           try {
             applyThumbInfoFromCache({
               id: id,
-              description: cached.description || '',
-              tags: Array.isArray(cached.tags) ? cached.tags : [],
-              contributor: cached.contributor || {type:'unknown', id:-1, name:''},
+              description: cached.description,
+              tags: cached.tags,
+              contributor: cached.contributor ? {...cached.contributor,
+                name:cached.metadata.ownerName === 'known' ? cached.contributor.name : null} : null,
               title: cached.title || movie.title,
               error: {type:'NO_ERROR', message:'cache'}
             })
@@ -2369,16 +2384,14 @@
         if (!model.config.sessionDetailCacheEnabled.value) return
         var movie = model.movies.get(id)
         if (!movie || !movie.thumbInfoDone) return
+        if (movie.metadata.tags !== 'known' || movie.metadata.description !== 'known') return
         if (movie.error && movie.error.type && movie.error.type !== 'NO_ERROR') return
         var payload = {
           id: id,
+          metadata: {...movie.metadata},
           title: movie.title || '',
           description: movie.description || '',
-          contributor: movie._nrnContributorSource !== 'search' && movie.contributor ? {
-            type: movie.contributor.type,
-            id: movie.contributor.id,
-            name: movie.contributor.name
-          } : null,
+          contributor: movie._nrnDetailContributor ? {...movie._nrnDetailContributor} : null,
           tags: (movie.tags || []).map(function(t) {
             return {name:t.name, lock:Boolean(t.lock)}
           }),
@@ -3535,7 +3548,7 @@
         if (page._disposed) return
         const countedMovies = [...new Set(originalRoots.filter(root => root.elem.matches('[data-decoration-video-id][data-anchor-area="main"]:not([data-anchor-detail="nicoad"])')).map(root => root.movieId))]
           .map(id => model.movies.get(id)).filter(Boolean)
-        if (completed && countedMovies.length && countedMovies.every(movie => movie.thumbInfoDone
+        if (completed && countedMovies.length && countedMovies.every(movie => movie.metadataSettled
             && movie.error.type === 'NO_ERROR' && movie.contributor?.type !== 'unknown' && Number(movie.contributor?.id) > 0)) {
           const counts = new Map()
           const ownerKey = movie => movie.contributor.type + ':' + movie.contributor.id

@@ -732,9 +732,13 @@
 .contentBody.video.uad .item[data-video-item-muted],
 .contentBody.video.uad .item[data-video-item-sensitive],
 .contentBody.video.uad .item.nrn-thumb-info-done,
+.contentBody.video.uad .item.nrn-metadata-settled,
 #tsukuaso .item.nrn-thumb-info-done,
+#tsukuaso .item.nrn-metadata-settled,
 .contentBody.video.uad.searchUad .item,
 .contentBody.video.uad .nicoadVideoItemWrapper.nrn-thumb-info-done,
+.contentBody.video.uad .nicoadVideoItemWrapper.nrn-metadata-settled,
+.contentBody.video.uad .nicoadVideoItemWrapper.nrn-metadata-settled .item,
 .contentBody.video.uad .nicoadVideoItemWrapper.nrn-thumb-info-done .item {
   visibility: inherit;
 }

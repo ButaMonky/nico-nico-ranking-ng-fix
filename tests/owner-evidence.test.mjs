@@ -45,13 +45,13 @@ test('missing IDs and untrusted profile URLs never become identities; channel/us
 });
 test('same cached unknown payload uses only current route evidence',async()=>{
  const first=await setup(),second=await setup();const cached=info('sm1');
- first.search('sm1',{id:55,name:'owner'});first.detail(cached);second.detail(cached);
+ first.search('sm1',{type:'user',id:55,name:'owner'});first.detail(cached);second.detail(cached);
  assert.equal(first.movies.get('sm1').contributor.id,55);assert.equal(second.movies.get('sm1').contributor.type,'unknown');
 });
 
 test('persistent detail cache does not promote search evidence into authoritative metadata',async()=>{
  const {movies,config,search,detail}=await setup();config.sessionDetailCacheEnabled.value=true;
- search('sm1',{id:55,name:'search owner'});detail(info('sm1'));
+ search('sm1',{type:'user',id:55,name:'search owner'});detail(info('sm1'));
  const written=[];const ctx=vm.createContext({model:{movies,config},cacheKeyForMovie:id=>id,getMovieNgReasons:()=>[],detailCache:{set:(key,payload)=>written.push(payload)},cacheWrites:0});
  const begin=source.indexOf('      var cacheMovieAfterCheck = function(id) {'),end=source.indexOf('      var logCacheCandidateAudit',begin);
  const save=vm.runInContext(source.slice(begin,end)+';cacheMovieAfterCheck',ctx);
@@ -63,10 +63,10 @@ test('repeated search evidence is idempotent and a late name can fill an empty o
  const {movies,search,detail}=await setup();const movie=movies.get('sm1');let changes=0;
  movie.on('contributorChanged',()=>changes++);
  detail(info('sm1'));
- search('sm1',{id:55,name:''});const afterFirst=changes;
- for(let i=0;i<100;i++)search('sm1',{id:55,name:''});
+ search('sm1',{type:'user',id:55,name:''});const afterFirst=changes;
+ for(let i=0;i<100;i++)search('sm1',{type:'user',id:55,name:''});
  assert.equal(changes,afterFirst);
- search('sm1',{id:55,name:'late name'});
+ search('sm1',{type:'user',id:55,name:'late name'});
  assert.equal(movie.contributor.name,'late name');assert.equal(changes,afterFirst+1);
- search('sm1',{id:55,name:'late name'});assert.equal(changes,afterFirst+1);
+ search('sm1',{type:'user',id:55,name:'late name'});assert.equal(changes,afterFirst+1);
 });

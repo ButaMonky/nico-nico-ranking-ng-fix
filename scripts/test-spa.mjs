@@ -22,7 +22,7 @@ try {
     window.savedIdentity = window.documentIdentity;
     window.requests = []; window.hold = false; window.aborts = 0; window.storageWrites = 0;
     window.GM_getValue = (key, fallback) => ({autoFillEnabled:true, autoFillTargetCount:36,
-      autoFillMaxExtraPages:1, selfAdWarningEnabled:false, openNewWindow:false}[key] ?? fallback);
+      autoFillMaxExtraPages:1, selfAdWarningEnabled:false, openNewWindow:false, ngTags:'["require-details"]'}[key] ?? fallback);
     window.fetches = []; window.fetchAborts = 0;
     window.fetch = (url, options) => new Promise((resolve, reject) => {
       fetches.push({url, deliver:() => resolve({ok:true, status:200, url,

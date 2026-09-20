@@ -479,7 +479,7 @@
           this._createAndSetTagViews(movie.tags)
           this._createAndSetContributorView(movie.contributor)
           this.error = movie.error
-          if (!movie.thumbInfoDone) this._listeners.bind(movie)
+          this._listeners.bind(movie)
         },
         unbind() {
           this._listeners.unbind()
@@ -546,6 +546,13 @@
         })
       }
       Description.prototype = {
+        get text() { return this._text || '' },
+        set text(value) {
+          if (this._text === value) return
+          this._text = value
+          this.linkified = false
+          if (this.elem?.parentNode) this.linkify()
+        },
         linkify() {
           if (this.linkified) return
           this.linkified = true
@@ -560,7 +567,7 @@
           }
           f.appendChild(d.createTextNode(t.slice(lastIndex)))
           f.normalize()
-          this.elem.firstChild.appendChild(f)
+          this.elem.firstChild.replaceChildren(f)
         },
         bindToMovie(movie) {
           this.text = movie.description
@@ -587,6 +594,7 @@
         this.movieTitle = null
         this._movieListeners = new Listeners({
           thumbInfoDone: this.setThumbInfoDone.bind(this),
+          metadataChanged: this.updateMetadataPresentation.bind(this),
         })
         this._movieViewModeListeners = new Listeners({
           changed: set(this, 'viewMode'),
@@ -694,6 +702,7 @@
         },
         set _movieInfoVisible(visible) {
           if (visible) {
+            this._movie?.requestDetails()
             this._pinMovieInfoTogglePosition()
             this._addMovieInfo()
             this.elem.classList.add('nrn-info-expanded')
@@ -984,9 +993,11 @@
           return Boolean(this.description.elem.parentNode)
         },
         set _descriptionExpanded(expanded) {
+          if (expanded) this._movie?.requestDetails(true)
           var o = this._originalDescriptionElem
           var d = this.description
-          if (expanded && o.parentNode) {
+          if (!o) return
+          if (expanded && o?.parentNode) {
             d.linkify()
             o.parentNode.replaceChild(d.elem, o)
           } else if (!expanded && d.elem.parentNode) {
@@ -994,17 +1005,18 @@
           }
         },
         _updateByDescriptionTogglable() {
-          if (!this.description.text) return
+          if (!this.description.text && this._movie?.metadata.description === 'known') return
           if (this.description.togglable) {
             this._originalDescriptionElem?.appendChild(this.description.openButton)
             this.description.elem.appendChild(this.description.closeButton)
           } else {
             this.description.closeButton.remove()
           }
-          this._descriptionExpanded = !this.description.togglable
+          this._descriptionExpanded = this.description.togglable ? Boolean(this._nrnManualDescriptionExpanded) : true
         },
         toggleDescription() {
-          this._descriptionExpanded = !this._descriptionExpanded
+          this._nrnManualDescriptionExpanded = !this._descriptionExpanded
+          this._descriptionExpanded = this._nrnManualDescriptionExpanded
         },
         get descriptionTogglable() {
           return this.description.togglable
@@ -1016,14 +1028,22 @@
         setThumbInfoDone() {
           this.elem.classList.add('nrn-thumb-info-done')
         },
+        updateMetadataPresentation() {
+          this.elem.classList.toggle('nrn-metadata-settled',Boolean(this._movie?.metadataSettled))
+          this._updateByMovieInfoTogglable()
+          this._updateByDescriptionTogglable()
+        },
         get thumbInfoDone() {
           return this.elem.classList.contains('nrn-thumb-info-done')
         },
         bindToMovie(movie) {
+          this._movie = movie
           this.movieInfo.bindToMovie(movie)
           this.description.bindToMovie(movie)
           if (movie.thumbInfoDone) this.setThumbInfoDone()
-          else this._movieListeners.bind(movie)
+          this._movieListeners.bind(movie)
+          this.updateMetadataPresentation()
+          if (this._movieInfoVisible) movie.requestDetails()
         },
         bindToMovieViewMode(movieViewMode) {
           this.viewMode = movieViewMode.value
