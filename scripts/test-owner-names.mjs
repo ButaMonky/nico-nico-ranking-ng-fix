@@ -18,6 +18,8 @@ try {
  });
  const install=async(hold=false,nameOnly=false,nativePlaceholder=false)=>{
   await page.setContent('<main aria-label="nicovideo-content"><section><div id="results">'+card+'</div></section></main>');
+  // Decorations outside the result cards must not hold initial setup for 15s.
+  await page.evaluate(()=>{const decoration=document.createElement('div');decoration.dataset.decorationVideoId='sm999999';document.body.append(decoration);});
   await page.evaluate(({hold,nameOnly,nativePlaceholder})=>{
    const meta=document.createElement('meta');meta.name='server-response';
    meta.content=JSON.stringify({data:{response:{$getSearchVideoV2:{data:{items:[{id:'sm12345678',owner:{ownerType:'hidden',type:'user',visibility:'hidden',id:'55',name:null}}]}}}}});document.head.append(meta);
@@ -57,10 +59,14 @@ try {
   report:__nrnDiagnostics.snapshot()}));
  assert.equal(state.detail,1);assert.equal(state.owner,1);assert.equal(state.ng,true);assert.equal(state.name,'restored synthetic account');
  assert.equal(state.report.current.ownerNameRecovery.nicoad,1);
+ assert.ok(state.report.current.initialProcessing.domWaitMs<2500,'non-card decorations do not force the 15 second limit');
  // Unblock without additional fetch, then verify actual name in the card details.
  await page.evaluate(()=>testModel.config.ngUserNames.clear());
+ await page.locator('.nrn-compact-owner .nrn-owner-name').filter({hasText:'restored synthetic account'}).waitFor();
+ assert.equal(await page.locator('.nrn-compact-owner').isVisible(),true,'missing native owner is visible before expanding details');
  await page.locator('.nrn-movie-info-toggle').first().click();
- await page.locator('.nrn-owner-name').filter({hasText:'restored synthetic account'}).waitFor();
+ assert.equal(await page.locator('.nrn-compact-owner').isVisible(),false,'expanded details show one owner row');
+ await page.locator('.nrn-movie-info-container .nrn-owner-name').filter({hasText:'restored synthetic account'}).waitFor();
  assert.equal(await page.evaluate(()=>testModel.movies.get('sm12345678').ng),false);
  const cachedAt=await page.evaluate(()=>{__nrnSessionDetailCacheService.flush();return __nrnSessionDetailCacheService.get('sm12345678').cachedAt;});
  // Reload the document while preserving only sessionStorage, as a user reload does.

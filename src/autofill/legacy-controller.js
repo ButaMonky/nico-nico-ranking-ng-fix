@@ -1066,14 +1066,18 @@
           var check = function() {
             var candidates = currentOriginalRootCandidates()
             var count = candidates.length
-            var domCount = page.doc.querySelectorAll(
-              '[data-decoration-video-id]:not([data-nrn-autofill="true"])'
-            ).length
+            // Decoration/hover elements also carry video IDs. Only real main
+            // cards belong to the initial result readiness check.
+            var expected = [...page.doc.querySelectorAll(
+              '[data-decoration-video-id][data-anchor-area="main"]:not([data-nrn-autofill="true"])'
+            )].filter(elem => !elem.closest('[data-scope="presence"],[data-scope="tooltip"],[data-scope="menu"]'))
+            var allBound = expected.every(elem => candidates.some(root => root.movieId === elem.dataset.decorationVideoId
+              && (root.elem === elem || root.elem.contains(elem) || elem.contains(root.elem))))
 
             if (count > 0 && count === lastCount) {
               if (!stableSince) stableSince = Date.now()
               if (Date.now() - stableSince >= 300
-                  && (domCount === 0 || count >= domCount)) {
+                  && allBound) {
                 resolve(candidates.slice())
                 return
               }

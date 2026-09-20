@@ -45,6 +45,11 @@ try {
   await page.evaluate(() => fixtureModel.config.ngMovieVisible.value = true);
   await page.waitForFunction(() => document.querySelector('#ad .nrn-is-ng'));
   const adToggle = page.locator('#ad .nrn-movie-info-toggle');
+  await page.locator('#ad .nrn-compact-owner').waitFor();
+  assert.equal(await page.evaluate(()=>fixturePage.movieRoots.find(r=>r.elem.closest('#ad')).elem.contains(document.querySelector('#ad .nrn-compact-owner'))),true,'compact row stays inside its card');
+  await page.locator('#ad .nrn-compact-owner img').click();
+  assert.deepEqual(await page.evaluate(()=>opened),['https://www.nicovideo.jp/user/34567'],'compact owner click must not open outer video');
+  await page.evaluate(()=>opened.length=0);
   await adToggle.click();
   assert.deepEqual(await page.evaluate(() => opened), [], 'outer ad link cannot steal arrow click');
   assert.equal(await page.evaluate(() => fixturePage.movieRoots.find(r => r.elem.closest('#ad'))._movieInfoVisible), true);
@@ -56,7 +61,7 @@ try {
   assert.equal(await page.locator('#ad .nrn-reason-tag').textContent(), 'blocked');
   assert.equal(await page.locator('#ad mark.nrn-lock-count').count(), 1);
   assert.equal(await page.locator('#ad .nrn-owner-name mark').textContent(), 'fixture');
-  assert.equal(await page.locator('#ad .nrn-owner-row img').count(), 1);
+  assert.equal(await page.locator('#ad .nrn-owner-row:visible img').count(), 1);
   assert.equal(await page.locator('.nrn-movie-info-container #nrn-config-bar').count(),0,'global config bar never enters a card detail section');
   assert.equal(await page.locator('#ad .nrn-reason-tag').evaluate(el=>getComputedStyle(el).backgroundColor),'rgb(255, 226, 154)');
   if (process.env.NRN_ARTIFACT_DIR) {
@@ -65,12 +70,12 @@ try {
   }
   await page.evaluate(() => {window.titleTerm=fixtureModel.movies.get('sm90001001').title.slice(0,2);fixtureModel.config.ngTitles.add(titleTerm);});
   await page.waitForFunction(() => document.querySelector('#ad .nrn-movie-title mark')?.textContent === titleTerm);
-  await page.locator('#ad .nrn-owner-row img').dispatchEvent('click');
+  await page.locator('#ad .nrn-owner-row:visible img').dispatchEvent('click');
   assert.deepEqual(await page.evaluate(() => opened), ['https://www.nicovideo.jp/user/34567'], 'nested owner icon opens contributor, not outer video');
   await page.evaluate(() => {opened.length=0;fixtureModel.config.ngTitles.remove([titleTerm]);});
   await page.evaluate(() => fixtureModel.config.ngUserNames.clear());
   await page.waitForFunction(() => !document.querySelector('#ad .nrn-owner-name mark'));
-  assert.equal(await page.locator('#ad .nrn-owner-row img').count(), 1, 'NG edit preserves owner icon');
+  assert.equal(await page.locator('#ad .nrn-owner-row:visible img').count(), 1, 'NG edit preserves owner icon');
   await page.waitForFunction(() => fixturePage.movieRoots.filter(r => r.elem.matches('[data-decoration-video-id][data-anchor-area="main"]:not([data-anchor-detail="nicoad"])')).every(r => Number.isFinite(fixtureModel.movies.get(r.movieId).pageContributorCount)));
   await page.waitForFunction(() => document.querySelector('.nrn-pager-summary'));
   assert.equal(await page.locator('.nrn-pager-summary').count(), 1);
@@ -105,18 +110,19 @@ try {
   // Owner presentation: native row stays in place and only one copy is visible.
   await page.evaluate(() => {
     const root=fixturePage.movieRoots.find(r => r.elem.closest('#ad'));
-    const owner=document.createElement('a'); owner.href='/user/34567'; owner.textContent='native owner';
+    const owner=document.createElement('a'); owner.href='https://www.nicovideo.jp/user/34567'; owner.textContent='native owner';
     root.elem.prepend(owner); window.nativeOwnerFixture=owner;
     fixtureModel.movies.get(root.movieId).emit('ngReasonsChanged');
   });
   await page.waitForFunction(() => nativeOwnerFixture.classList.contains('nrn-native-owner'));
   assert.equal(await page.locator('#ad .nrn-native-owner').isVisible(),false);
-  assert.equal(await page.locator('#ad .nrn-owner-row').isVisible(),true);
+  assert.equal(await page.locator('#ad .nrn-owner-row:visible').count(),1);
   assert.equal(await page.locator('#ad .nrn-contributor-kind').count(),0);
   assert.equal(await page.locator('#ad .nrn-contributor-section .nrn-info-section-title').count(),0);
   await adToggle.click();
-  assert.equal(await page.locator('#ad .nrn-native-owner').isVisible(),true);
-  assert.equal(await page.locator('#ad .nrn-owner-row').count(),0);
+  assert.equal(await page.locator('#ad .nrn-native-owner').isVisible(),false,'stale native name stays replaced while collapsed');
+  assert.equal(await page.locator('#ad .nrn-compact-owner').isVisible(),true);
+  assert.equal(await page.locator('#ad .nrn-owner-row:visible').count(),1);
   await adToggle.click();
   assert.equal(await page.evaluate(()=>nativeOwnerFixture.parentElement === fixturePage.movieRoots.find(r=>r.elem.closest('#ad')).elem),true);
   // Decoration API ownerName must never be presented as sponsorName.

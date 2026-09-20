@@ -6,7 +6,7 @@
 // @match        *://www.nicovideo.jp/ranking*
 // @match        *://www.nicovideo.jp/search/*
 // @match        *://www.nicovideo.jp/tag/*
-// @version      160.15
+// @version      160.16
 // @grant        unsafeWindow
 // @grant        GM_getValue
 // @grant        GM_setValue
@@ -202,7 +202,7 @@
 
   // This facade is scoped to this userscript; other scripts keep their console.
   var nrnConsoleConfig = null
-  var NRN_VERSION = '160.15'
+  var NRN_VERSION = '160.16'
   var nrnNativeConsole = globalThis.console
   var nrnConsoleCounts = {warnings:0,errors:0}
   var nrnSetConsoleConfig = function(config) { nrnConsoleConfig = config }
@@ -4858,6 +4858,7 @@ html[data-nrn-ui-theme="dark"] .nrn-contributor-ng-name-button:hover {
       root.movieInfo.toggle.dataset.nrnPinned = 'false';
       root._scheduleMovieInfoTogglePin();
       root._syncMovieInfoReserve();
+      root._refreshOwnerPresentation?.();
     }
     // Keep the existing MovieRoot and its model subscriptions when React replaces a card.
     function snapshot(root) {
@@ -5735,7 +5736,7 @@ html[data-nrn-ui-theme="dark"] .nrn-contributor-ng-name-button:hover {
         if (togglable) togglable.hidden = true
       },
       observeMutation(callback, refreshOwners) {
-        const transient = '[data-scope="presence"], [data-scope="tooltip"], video, canvas, .nrn-movie-info-container, .nrn-ng-reasons'
+        const transient = '[data-scope="presence"], [data-scope="tooltip"], video, canvas, .nrn-movie-info-container, .nrn-ng-reasons, .nrn-compact-owner'
         const ownerSelector = 'a[data-group-ignore="true"][data-anchor-area="main"]'
         const ownerRoots = new Set()
         let parsePending = false
@@ -7421,7 +7422,7 @@ div:has(> div > a[data-anchor-page="ranking_genre"][href^="/watch/"] > div > p),
       if (!config || !config.openNewWindow.value) return
       // Advertisement cards can themselves be anchors. Their nested controls
       // must reach their handlers instead of opening the outer watch link.
-      if (e.target?.closest?.('button, input, select, textarea, [role="button"], .nrn-movie-info-toggle, .nrn-action-pane, .nrn-movie-info-container, .nrn-description, .nrn-card-tools')) return
+      if (e.target?.closest?.('button, input, select, textarea, [role="button"], .nrn-movie-info-toggle, .nrn-action-pane, .nrn-movie-info-container, .nrn-description, .nrn-card-tools, .nrn-compact-owner')) return
       var a = findVideoAnchor(e.target)
       if (!a) return
 
@@ -7928,7 +7929,7 @@ div:has(> div > a[data-anchor-page="ranking_genre"][href^="/watch/"] > div > p),
       return link
     }
     function attach(root, movie, page) {
-      let frame = null, ownerSignature = '', previousSignature = ''
+      let frame = null, ownerSignature = '', previousSignature = '', compact = null, compactSignature = ''
       const doc = page.doc
       let nativeOwner = root.elem.querySelector('a[href*="/user/"]:not(.nrn-contributor-link), a[href*="/channel/"]:not(.nrn-contributor-link)')
       const render = function() {
@@ -7949,8 +7950,8 @@ div:has(> div > a[data-anchor-page="ranking_genre"][href^="/watch/"] > div > p),
         }
         // React may replace its owner row. Mark the current native row without moving it.
         const currentOwner = [...root.elem.querySelectorAll('a[href*="/user/"], a[href*="/channel/"]')]
-          .find(link => !link.closest('.nrn-movie-info-container'))
-        if (currentOwner !== nativeOwner) nativeOwner?.classList.remove('nrn-native-owner')
+          .find(link => !link.closest('.nrn-movie-info-container,.nrn-compact-owner'))
+        if (currentOwner !== nativeOwner) nativeOwner?.classList.remove('nrn-native-owner','nrn-owner-replaced')
         nativeOwner = currentOwner || null
         nativeOwner?.classList.add('nrn-native-owner')
         const container = root.movieInfo.elem.querySelector('.nrn-contributor-container')
@@ -7967,6 +7968,29 @@ div:has(> div > a[data-anchor-page="ranking_genre"][href^="/watch/"] > div > p),
             ? '広告情報に残る投稿者名（現在の名前とは異なる場合があります）' : ''
         }
         const signature = JSON.stringify([owner?.type, owner?.id, owner?.name, owner?.ngName,movie._nrnOwnerNamePending,movie._nrnOwnerNameSource])
+        const nativeName = OwnerEvidence.nativeName(nativeOwner?.querySelector('p')?.textContent || nativeOwner?.textContent)
+        const needsCompact = movie.metadata.ownerName === 'known' && owner?.name && owner.type !== 'unknown'
+          && (!nativeOwner || (OwnerEvidence.same(OwnerEvidence.normalize(owner),OwnerEvidence.fromUrl(nativeOwner.href)) && nativeName !== owner.name))
+        nativeOwner?.classList.toggle('nrn-owner-replaced',Boolean(needsCompact))
+        if (needsCompact) {
+          if (!compact || !root.elem.contains(compact)) {
+            compact?.remove();compact = doc.createElement('div');compact.className = 'nrn-compact-owner';compactSignature = ''
+            compact.addEventListener('click',event => {
+              const link = event.target.closest('a.nrn-contributor-link')
+              if (link) { event.preventDefault();event.stopPropagation();NewTabService.open(link.href) }
+            })
+            if (nativeOwner) nativeOwner.after(compact)
+            else {
+              const titleAnchor = root.movieTitle?.elem?.closest('a')
+              const host = root.elem.querySelector('.nrn-card-body') || (titleAnchor === root.elem
+                ? root.movieTitle.elem.closest('div') : titleAnchor?.parentElement)
+              ;(host && root.elem.contains(host) ? host : root.elem).append(compact)
+            }
+          }
+          if (compactSignature !== signature) {
+            compact.replaceChildren(ownerLink(doc,owner,nativeOwner,movie));compactSignature = signature
+          }
+        } else { compact?.remove();compact = null;compactSignature = '' }
         if (container && (movie.metadata.ownerId === 'known' || movie.thumbInfoDone) && (ownerSignature !== signature || !container.querySelector('.nrn-owner-row img'))) {
           const existing = container.querySelector('.nrn-contributor-link')
           const link = ownerLink(doc, owner?.type === 'unknown' ? null : owner, nativeOwner, movie)
@@ -8005,7 +8029,7 @@ div:has(> div > a[data-anchor-page="ranking_genre"][href^="/watch/"] > div > p),
       movie.on('ngReasonsChanged', schedule); movie.on('thumbInfoDone', schedule); movie.on('contributorChanged', schedule)
       root._refreshOwnerPresentation = schedule
       root._disposeEnhancements = () => {
-        nativeOwner?.classList.remove('nrn-native-owner'); root.elem.classList.remove('nrn-owner-detail-ready')
+        compact?.remove();nativeOwner?.classList.remove('nrn-native-owner','nrn-owner-replaced'); root.elem.classList.remove('nrn-owner-detail-ready')
         delete root._refreshOwnerPresentation
         cancelAnimationFrame(frame); movie.off('ngReasonsChanged', schedule); movie.off('thumbInfoDone', schedule); movie.off('contributorChanged', schedule)
       }
@@ -8017,6 +8041,9 @@ div:has(> div > a[data-anchor-page="ranking_genre"][href^="/watch/"] > div > p),
 .nrn-ng-reasons[hidden] { display:none !important; }
 .nrn-reason-mark, .nrn-movie-info-container .nrn-movie-tag-link.nrn-reason-tag, .nrn-info-section-title mark { background:#ffe29a; color:#612e00; text-decoration:none; }
 .nrn-info-expanded.nrn-owner-detail-ready .nrn-native-owner { display:none !important; }
+.nrn-owner-replaced, .nrn-info-expanded .nrn-compact-owner { display:none !important; }
+.nrn-compact-owner { min-width:0; margin-top:4px; font-size:14px; }
+.nrn-compact-owner .nrn-owner-name { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .nrn-owner-row { display:inline-flex; align-items:center; gap:4px; min-width:0; font-weight:bold; }
 .nrn-owner-row img { width:24px; height:24px; min-width:24px; border-radius:50%; object-fit:cover; }
 .nrn-owner-unavailable { color:#828892 !important; }
@@ -9720,14 +9747,18 @@ a.nrn-parsed[data-anchor-detail="nicoad"] > .nrn-movie-info-toggle { background:
           var check = function() {
             var candidates = currentOriginalRootCandidates()
             var count = candidates.length
-            var domCount = page.doc.querySelectorAll(
-              '[data-decoration-video-id]:not([data-nrn-autofill="true"])'
-            ).length
+            // Decoration/hover elements also carry video IDs. Only real main
+            // cards belong to the initial result readiness check.
+            var expected = [...page.doc.querySelectorAll(
+              '[data-decoration-video-id][data-anchor-area="main"]:not([data-nrn-autofill="true"])'
+            )].filter(elem => !elem.closest('[data-scope="presence"],[data-scope="tooltip"],[data-scope="menu"]'))
+            var allBound = expected.every(elem => candidates.some(root => root.movieId === elem.dataset.decorationVideoId
+              && (root.elem === elem || root.elem.contains(elem) || elem.contains(root.elem))))
 
             if (count > 0 && count === lastCount) {
               if (!stableSince) stableSince = Date.now()
               if (Date.now() - stableSince >= 300
-                  && (domCount === 0 || count >= domCount)) {
+                  && allBound) {
                 resolve(candidates.slice())
                 return
               }

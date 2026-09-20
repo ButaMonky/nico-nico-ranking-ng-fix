@@ -177,7 +177,7 @@
       if (!config || !config.openNewWindow.value) return
       // Advertisement cards can themselves be anchors. Their nested controls
       // must reach their handlers instead of opening the outer watch link.
-      if (e.target?.closest?.('button, input, select, textarea, [role="button"], .nrn-movie-info-toggle, .nrn-action-pane, .nrn-movie-info-container, .nrn-description, .nrn-card-tools')) return
+      if (e.target?.closest?.('button, input, select, textarea, [role="button"], .nrn-movie-info-toggle, .nrn-action-pane, .nrn-movie-info-container, .nrn-description, .nrn-card-tools, .nrn-compact-owner')) return
       var a = findVideoAnchor(e.target)
       if (!a) return
 

@@ -20,6 +20,7 @@
       root.movieInfo.toggle.dataset.nrnPinned = 'false';
       root._scheduleMovieInfoTogglePin();
       root._syncMovieInfoReserve();
+      root._refreshOwnerPresentation?.();
     }
     // Keep the existing MovieRoot and its model subscriptions when React replaces a card.
     function snapshot(root) {
