@@ -1,0 +1,37 @@
+[
+  {
+    "path": "vendor/d3-dsv/LICENSE",
+    "version": "1.0.0",
+    "source": "https://github.com/d3/d3-dsv/blob/v1.0.0/LICENSE",
+    "name": "d3-dsv",
+    "sha256": "8b5304265ccedbd17567aa14a0dc6b9bf4013fee44964c46aa54fdf8527d6a68"
+  },
+  {
+    "path": "vendor/hls.js/dependencies/eventemitter3/LICENSE",
+    "version": "5.0.1",
+    "source": "https://cdn.jsdelivr.net/npm/eventemitter3@5.0.1/LICENSE",
+    "name": "eventemitter3",
+    "sha256": "3aecc12b1cb28832b5f65ab64291de96568c3f236a74d646281b4491f7bcadbf"
+  },
+  {
+    "path": "vendor/hls.js/dependencies/url-toolkit/LICENSE",
+    "version": "2.2.5",
+    "source": "https://cdn.jsdelivr.net/npm/url-toolkit@2.2.5/LICENSE",
+    "name": "url-toolkit",
+    "sha256": "0fa4bd51fab4d066970c481917d77f222253ee82344caf07efd03801aa558dff"
+  },
+  {
+    "path": "vendor/hls.js/dependencies/common-media-library/LICENSE",
+    "version": "0.17.1",
+    "source": "https://cdn.jsdelivr.net/npm/@svta/common-media-library@0.17.1/LICENSE",
+    "name": "@svta/common-media-library",
+    "sha256": "95cdf13a152329c8a60cf739d442f578a172727f0584bff42406126719312f62"
+  },
+  {
+    "path": "vendor/hls.js/dependencies/common-media-library/NOTICE",
+    "version": "0.17.1",
+    "source": "https://cdn.jsdelivr.net/npm/@svta/common-media-library@0.17.1/NOTICE",
+    "name": "@svta/common-media-library",
+    "sha256": "ae55a4168482117b80b555f07b0b56a65d579a1910b7d38e1a4b0c81292976e5"
+  }
+]

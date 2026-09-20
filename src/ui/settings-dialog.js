@@ -890,7 +890,7 @@
         </div>
       </details></div>
     </div>
-    <div class=footer><small>設定は変更時に保存されます。Escキーでも閉じられます。</small><small>Nico Nico Ranking NG / Umonky</small></div>
+    <div class=footer><small>設定は変更時に保存されます。Escキーでも閉じられます。</small><small>Nico Nico Ranking NG</small></div>
   </div>
 <script>
 (function(){

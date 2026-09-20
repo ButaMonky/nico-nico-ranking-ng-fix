@@ -21,8 +21,17 @@ export async function build(source = baseline, destination = output) {
   verify(bytes);
   const hls = await readFile(resolve(root,'vendor/hls.js/hls.min.js'));
   if (createHash('sha256').update(hls).digest('hex').toUpperCase() !== '72B87A6E58DB623FECA73AB370970C1126EC06EB3DCD0A67FD14B47B6340B820') throw new Error('Vendored HLS.js fingerprint mismatch');
-  const assembled = Buffer.concat(await Promise.all(sourceParts.map(part => readFile(resolve(root, part)))));
-  // Functional development: baseline remains immutable; output is the ordered source assembly.
+  const manifest = JSON.parse(await readFile(resolve(root, 'vendor/third-party-manifest.json'), 'utf8'));
+  const notices = [await readFile(resolve(root, 'src/licenses/distribution-notice.txt'), 'utf8'), await readFile(resolve(root, 'LICENSE'), 'utf8')];
+  for (const entry of manifest) {
+    const content = await readFile(resolve(root, entry.path));
+    if (createHash('sha256').update(content).digest('hex') !== entry.sha256) throw new Error(`License fingerprint mismatch: ${entry.path}`);
+    notices.push(`${entry.name} ${entry.version} — ${entry.path}\n${content.toString('utf8')}`);
+  }
+  // Line comments preserve notice text without allowing embedded */ to end a comment.
+  const appendix = '\n' + notices.join('\n\n').split(/\r?\n/).map(line => line.trimEnd() ? '// ' + line.trimEnd() : '//').join('\n') + '\n';
+  const assembled = Buffer.concat([...await Promise.all(sourceParts.map(part => readFile(resolve(root, part)))), Buffer.from(appendix)]);
+  // Baseline is immutable; runtime sources stay in order, followed by license comments.
   await mkdir(dirname(destination), { recursive: true });
   await writeFile(destination, assembled);
   if (!(await readFile(destination)).equals(assembled)) throw new Error('Output differs from source assembly');

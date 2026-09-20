@@ -1,12 +1,12 @@
 // ==UserScript==
 // @name         Nico Nico Ranking NG
 // @namespace    http://userscripts.org/users/121129
-// @author       Umonky
-// @description  ニコニコ動画のランキングとキーワード・タグ検索結果に NG 機能を追加
+// @author       kengo321 (original)
+// @description  ニコニコ動画のランキング・検索結果にNG、複合NG、検索結果の自動補充を追加する非公式の改変版
 // @match        *://www.nicovideo.jp/ranking*
 // @match        *://www.nicovideo.jp/search/*
 // @match        *://www.nicovideo.jp/tag/*
-// @version      160.24
+// @version      160.25
 // @grant        unsafeWindow
 // @grant        GM_getValue
 // @grant        GM_setValue
@@ -16,14 +16,15 @@
 // @grant        GM.setValue
 // @grant        GM.xmlHttpRequest
 // @grant        GM.openInTab
-// @license      MIT License
+// @license      MIT (main code); see bundled notices and LICENSING.md for component terms
 // @noframes
 // @run-at       document-start
 // @connect      ext.nicovideo.jp
 // @connect      snapshot.search.nicovideo.jp
 // @connect      api.nicoad.nicovideo.jp
-// @downloadURL https://update.greasyfork.org/scripts/880/Nico%20Nico%20Ranking%20NG.user.js
-// @updateURL https://update.greasyfork.org/scripts/880/Nico%20Nico%20Ranking%20NG.meta.js
+// @downloadURL  none
+// @homepageURL  https://github.com/ButaMonky/nico-nico-ranking-ng
+// @supportURL   https://github.com/ButaMonky/nico-nico-ranking-ng/issues
 // ==/UserScript==
 
 
@@ -202,7 +203,7 @@
 
   // This facade is scoped to this userscript; other scripts keep their console.
   var nrnConsoleConfig = null
-  var NRN_VERSION = '160.24'
+  var NRN_VERSION = '160.25'
   var nrnNativeConsole = globalThis.console
   var nrnConsoleCounts = {warnings:0,errors:0}
   var nrnSetConsoleConfig = function(config) { nrnConsoleConfig = config }

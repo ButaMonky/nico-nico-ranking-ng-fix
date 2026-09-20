@@ -20,12 +20,44 @@ test('build assembles approved source order and produces repeatable output', asy
     const original = await readFile(baseline);
     await build(baseline, destination);
     const first = await readFile(destination);
-    assert.deepEqual(first, Buffer.concat(await Promise.all(sourceParts.map(part => readFile(join(root,part))))));
+    const source = Buffer.concat(await Promise.all(sourceParts.map(part => readFile(join(root,part)))));
+    assert.deepEqual(first.subarray(0, source.length), source);
+    const appendix = first.subarray(source.length).toString('utf8');
+    assert.ok(appendix.split(/\r?\n/).every(line => !line || line.startsWith('//')));
+    const plainNotices = appendix.replace(/^\/\/ ?/gm, '');
+    const notices = JSON.parse(await readFile(join(root, 'vendor/third-party-manifest.json'), 'utf8'));
+    for (const path of ['LICENSE', ...notices.map(entry => entry.path)]) {
+      const expected = (await readFile(join(root, path), 'utf8')).split(/\r?\n/).map(line => line.trimEnd()).join('\n');
+      assert.ok(plainNotices.includes(expected), `Complete license text missing: ${path}`);
+    }
     const metadata = bytes => bytes.toString('utf8').match(/\/\/ ==UserScript==[\s\S]*?\/\/ ==\/UserScript==/)[0];
-    assert.equal(metadata(first).replace(/\/\/ @grant        unsafeWindow[\r\n]+/, '').replace(/@version[^\r\n]+/, '@version'), metadata(original).replace(/@version[^\r\n]+/, '@version'));
-    assert.match(metadata(first), /@version\s+160\.24/);
+    const unchanged = text => text.split(/\r?\n/).filter(line => !/\/\/ @(?:version|author|description|license|updateURL|downloadURL|homepageURL|supportURL)\s/.test(line) && !/\/\/ @grant\s+unsafeWindow/.test(line)).join('\n');
+    assert.equal(unchanged(metadata(first)), unchanged(metadata(original)));
+    assert.match(metadata(first), /@version\s+160\.25/);
     await build(baseline, destination);
     assert.deepEqual(await readFile(destination), first);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('manual distribution keeps existing identity, disables remote updates and includes dependency permissions', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'nrn-distribution-test-'));
+  try {
+    const destination = join(dir, 'manual.user.js');
+    await build(baseline, destination);
+    const text = await readFile(destination, 'utf8');
+    const header = text.match(/^\/\/ ==UserScript==[\s\S]*?\/\/ ==\/UserScript==/)[0];
+    assert.match(header, /^\/\/ @name\s+Nico Nico Ranking NG$/m);
+    assert.match(header, /^\/\/ @namespace\s+http:\/\/userscripts.org\/users\/121129$/m);
+    assert.match(header, /^\/\/ @downloadURL\s+none$/m);
+    assert.doesNotMatch(header, /@updateURL|@require/);
+    assert.match(header, /@supportURL\s+https:\/\/github.com\/ButaMonky\/nico-nico-ranking-ng\/issues/);
+    // A user installing just this file must receive the dependency terms too.
+    assert.ok(text.includes('Redistributions of source code must retain the above copyright notice'));
+    assert.ok(text.includes('Copyright (c) 2014 Arnout Kazemier'));
+    assert.ok(text.includes('Copyright 2016 Tom Jenkinson'));
+    assert.ok(text.includes('Copyright (c) 2020 Jxck'));
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

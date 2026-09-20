@@ -2,3 +2,6 @@
 baseline/*.user.js -text
 src/**/*.js -text
 vendor/hls.js/hls.min.js -text
+vendor/**/LICENSE -text
+vendor/**/NOTICE -text
+dist/*.user.js -text

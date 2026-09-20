@@ -1,0 +1,26 @@
+Nico Nico Ranking NG — licensing scope
+
+Original script: kengo321, https://greasyfork.org/ja/scripts/880-nico-nico-ranking-ng
+This repository contains an unofficial modified version of the original script.
+The main script and original modifications made for this version use the MIT License.
+Third-party components retain their respective terms; they are not relicensed by
+the main script's MIT declaration. The following notices accompany this file.
+HLS.js and its existing Apache license notice also appear earlier in this file.
+
+Official-site-derived icons/styles and inherited material whose reuse terms
+remain unverified are not offered under this project's MIT grant. Their source
+and unresolved scope are recorded in LICENSING.md and THIRD_PARTY_NOTICES.md:
+https://github.com/ButaMonky/nico-nico-ranking-ng/blob/master/LICENSING.md
+Those records do not themselves grant permission for third-party material.
+
+An inherited UTF conversion helper in @svta/common-media-library carries this
+separate notice (the upstream contact address is omitted):
+
+utf.js - UTF-8 <=> UTF-16 convertion
+Copyright (C) 1999 Masanao Izumo
+Version: 1.0
+LastModified: Dec 25 1999
+This library is free. You can redistribute it and/or modify it.
+
+Source: https://cdn.jsdelivr.net/npm/@svta/common-media-library@0.17.1/dist/utils/utf8ArrayToStr.js
+This short upstream permission is retained as such, not relabeled MIT or Apache.

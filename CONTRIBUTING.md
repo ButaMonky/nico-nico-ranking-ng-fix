@@ -20,7 +20,7 @@ node scripts/check-privacy.mjs
 node scripts/check-privacy-history.mjs HEAD
 ```
 
-`build.mjs` は原本のSHA-256と連結した生成物の一致を、`check.mjs` は原本と生成物の構文を検査します。生成物は `dist/nico-nico-ranking-ng-v16-list-tile-fix.user.js` です。npmが利用できる場合は `npm run build`、`npm run check`、`npm test` も定義されていますが、既存の記録で検証している経路はNode直接実行です。
+`build.mjs` は原本・HLS・ライセンス原文のSHA-256を検証し、srcの順序連結とライセンスコメントから配布物を生成します。`check.mjs` は原本と生成物の構文を検査します。生成物は `dist/nico-nico-ranking-ng-v16-list-tile-fix.user.js` です。npmが利用できる場合は `npm run build`、`npm run check`、`npm test` も定義されていますが、既存の記録で検証している経路はNode直接実行です。
 
 基本試験の成功だけでブラウザや実サイトの動作を確認済みとはしません。UI・SPA・ページ送り等の変更では、該当する既存のブラウザ試験も実施します。
 
@@ -55,6 +55,8 @@ node scripts/test-pager-native-style.mjs
 プレビューのHLS試験はリポジトリ内の単色映像・合成音を使い、実際のHLS.jsで別音声配信を再生します。すべての要求を置き換えるため、公式配信の認証・CORSの確認とは別です。ライブラリの版・ハッシュ・ライセンスは `vendor/hls.js/` に記録し、ビルド時にも検証します。ネットワークからコードを取得するビルド手順は不要です。
 
 ## 文書・コミット・Issueの役割
+
+配布は手動更新です。[配布・更新仕様](docs/distribution.md)にメタデータ、版番号、設定保持、生成・送信手順をまとめています。第三者の条件は[LICENSING](LICENSING.md)と[THIRD_PARTY_NOTICES](THIRD_PARTY_NOTICES.md)を確認し、上流の版と原文を固定します。変更した配布物を同じ版番号で差し替えないでください。
 
 | 記録 | 内容 |
 | --- | --- |
