@@ -14,7 +14,7 @@
       const key = searchKey(href)
       for (const [k, entry] of histories) if (now - entry.created > ttl) histories.delete(k)
       let entry = histories.get(key)
-      if (!entry || entry.signature !== signature) entry = {signature, created:now, pages:new Map(), starts:new Set()}
+      if (!entry || entry.signature !== signature) entry = {signature, created:now, pages:new Map()}
       entry.time = now; histories.delete(key); histories.set(key, entry)
       while (histories.size > 8) histories.delete(histories.keys().next().value)
       return entry
@@ -64,14 +64,14 @@
       }
       function update(last, isSettled) {
         const state = history(href, settingsKey(config))
-        state.starts.add(current)
         for (const [number, ids] of fetched) {
           if (ids.every(isSettled)) state.pages.set(number, true)
           else state.pages.delete(number)
         }
-        for (const number of state.starts) state.pages.delete(number)
+        // A past visit is not a permanent exemption: a later fetch can fully
+        // settle that page. Keep only the current page as the selected anchor.
+        state.pages.delete(current)
         while (state.pages.size > 256) state.pages.delete(state.pages.keys().next().value)
-        while (state.starts.size > 128) state.starts.delete(state.starts.values().next().value)
         const consumed = [...state.pages.keys()].filter(n => last == null || n <= last)
         if (config.autoFillPagerMode.value !== 'compactSkip' || !router(page.doc)) { restore(); return consumed }
         const nativePagers = [...page.doc.querySelectorAll('nav[data-scope="pagination"]')]

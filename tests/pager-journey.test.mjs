@@ -26,3 +26,21 @@ test('history survives same-query SPA pages, resets for criteria, NG changes, ex
   pager.history(url,'ng-B',200).pages.set(5,true);
   assert.equal(pager.history(url,'ng-B',200+31*60*1000).pages.size,0);
 });
+test('a previously visited page becomes consumed only after all its fetched videos settle', () => {
+  const config={autoFillPagerMode:{value:'off'},pagerPreviewCount:{value:2},ngTitles:{set:new Set()}};
+  const page={doc:{},_disposed:false},href='https://www.nicovideo.jp/tag/revisit';
+  const earlier=pager.create(page,config,href+'?page=3');
+  earlier.update(30,()=>true);
+  const current=pager.create(page,config,href+'?page=1');
+  assert.deepEqual(normalize(current.update(30,()=>true)),[],'visiting page 3 alone does not consume it');
+  for(let n=2;n<=4;n++)current.record(n,[{id:'synthetic-'+n}]);
+  current.record(3,[{id:'synthetic-3'},{id:'unshown'}]);
+  assert.deepEqual(normalize(current.update(30,id=>id!=='unshown')),[2,4],'partially processed page remains accessible');
+  assert.deepEqual(normalize(current.update(30,()=>true)).sort((a,b)=>a-b),[2,3,4],'completed page 3 joins the consumed range');
+  assert.equal(pager.layout(1,current.update(30,()=>true),30).next,5);
+  assert.deepEqual(normalize(current.update(30,id=>id!=='unshown')).sort((a,b)=>a-b),[2,4],'newly unsettled page becomes accessible again');
+  current.record(1,[{id:'current'}]);
+  assert.ok(!current.update(30,()=>true).includes(1),'current page remains the selected anchor');
+  config.ngTitles.set.add('changed');
+  assert.deepEqual(normalize(current.update(30,()=>false)),[],'changed rules invalidate previous consumption');
+});

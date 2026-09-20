@@ -62,6 +62,26 @@ try {
  await page.locator('.nrn-journey-pager a').filter({hasText:'→'}).click();
  await page.waitForFunction(()=>!document.querySelector('.nrn-journey-pager'));
  assert.equal(await page.locator('nav[data-scope=pagination]').isVisible(),true,'failed routing restores native controls');
+ await page.evaluate(()=>{
+  config.ngTitles.set.add('revisit regression');
+  __reactRouterDataRouter.navigate=async href=>{calls.push(href);history.pushState({},'',href)};
+  journey=PagerJourney.create(routePage,config,'http://nrn.test/tag/fixture?page=3');
+  journey.update(30,()=>true);
+  journey.restore();
+  journey=PagerJourney.create(routePage,config,'http://nrn.test/tag/fixture?page=1');
+  for(let n=2;n<=27;n++)journey.record(n,[{id:'synthetic-'+n}]);
+  journey.update(30,id=>id!=='synthetic-27');
+ });
+ assert.deepEqual(await page.locator('.nrn-journey-pager .nrn-page-consumed').allTextContents(),['2–26'],'previous page 3 joins the completed range');
+ assert.equal(await page.locator('.nrn-journey-pager [aria-current=page]').textContent(),'1');
+ assert.equal(await page.locator('.nrn-journey-pager [aria-label="次の未処理ページ"]').getAttribute('href'),'http://nrn.test/tag/fixture?page=27','partially processed last page stays next');
+ await page.evaluate(()=>journey.update(30,id=>!['synthetic-3','synthetic-27'].includes(id)));
+ assert.deepEqual(await page.locator('.nrn-journey-pager .nrn-page-consumed').allTextContents(),['2','4–26'],'unsettled page 3 is not skipped');
+ assert.equal(await page.locator('.nrn-journey-pager [aria-label="次の未処理ページ"]').getAttribute('href'),'http://nrn.test/tag/fixture?page=3');
+ await page.evaluate(()=>journey.update(30,id=>id!=='synthetic-27'));
+ await page.locator('.nrn-journey-pager [aria-label="次の未処理ページ"]').click();
+ await page.waitForFunction(()=>new URL(location.href).searchParams.get('page')==='27');
+ assert.equal(await page.evaluate(()=>marker),docMarker,'fixed navigation retains the document');
  assert.deepEqual(errors,[]);
- console.log('Pager Chrome fixture PASS: range history, SPA router call, no reload, unshown-page protection, disabled ends, settings invalidation, capability and error fallback.');
+ console.log('Pager Chrome fixture PASS: range history, visited page reprocessed into range, SPA router call, no reload, unshown-page protection, disabled ends, settings invalidation, capability and error fallback.');
 } finally {await browser.close()}

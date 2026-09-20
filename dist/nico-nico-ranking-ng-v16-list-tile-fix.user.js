@@ -6,7 +6,7 @@
 // @match        *://www.nicovideo.jp/ranking*
 // @match        *://www.nicovideo.jp/search/*
 // @match        *://www.nicovideo.jp/tag/*
-// @version      160.17
+// @version      160.18
 // @grant        unsafeWindow
 // @grant        GM_getValue
 // @grant        GM_setValue
@@ -202,7 +202,7 @@
 
   // This facade is scoped to this userscript; other scripts keep their console.
   var nrnConsoleConfig = null
-  var NRN_VERSION = '160.17'
+  var NRN_VERSION = '160.18'
   var nrnNativeConsole = globalThis.console
   var nrnConsoleCounts = {warnings:0,errors:0}
   var nrnSetConsoleConfig = function(config) { nrnConsoleConfig = config }
@@ -8563,7 +8563,7 @@ a.nrn-parsed[data-anchor-detail="nicoad"] > .nrn-movie-info-toggle { background:
       const key = searchKey(href)
       for (const [k, entry] of histories) if (now - entry.created > ttl) histories.delete(k)
       let entry = histories.get(key)
-      if (!entry || entry.signature !== signature) entry = {signature, created:now, pages:new Map(), starts:new Set()}
+      if (!entry || entry.signature !== signature) entry = {signature, created:now, pages:new Map()}
       entry.time = now; histories.delete(key); histories.set(key, entry)
       while (histories.size > 8) histories.delete(histories.keys().next().value)
       return entry
@@ -8613,14 +8613,14 @@ a.nrn-parsed[data-anchor-detail="nicoad"] > .nrn-movie-info-toggle { background:
       }
       function update(last, isSettled) {
         const state = history(href, settingsKey(config))
-        state.starts.add(current)
         for (const [number, ids] of fetched) {
           if (ids.every(isSettled)) state.pages.set(number, true)
           else state.pages.delete(number)
         }
-        for (const number of state.starts) state.pages.delete(number)
+        // A past visit is not a permanent exemption: a later fetch can fully
+        // settle that page. Keep only the current page as the selected anchor.
+        state.pages.delete(current)
         while (state.pages.size > 256) state.pages.delete(state.pages.keys().next().value)
-        while (state.starts.size > 128) state.starts.delete(state.starts.values().next().value)
         const consumed = [...state.pages.keys()].filter(n => last == null || n <= last)
         if (config.autoFillPagerMode.value !== 'compactSkip' || !router(page.doc)) { restore(); return consumed }
         const nativePagers = [...page.doc.querySelectorAll('nav[data-scope="pagination"]')]
