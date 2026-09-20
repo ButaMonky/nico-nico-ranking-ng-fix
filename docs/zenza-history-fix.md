@@ -1,5 +1,6 @@
 # ZenzaWatch終了時の再読み込み修正 — 160.2
 
+公開用履歴の注記: 本文の動画・投稿者識別子と検索語は架空値へ置換しています。観測資料の実値ではありません。
 ユーザー提供ログに `history.replaceState` による `/watch/sm90001003` から元のタグ検索への復帰をSPA検索として扱い、`location.reload()`を実行した記録がありました。
 
 提供されたZenzaWatch 2.6.3-fix-playlist.55の `WatchPageHistory` は、再生時に動画URLへ置換し、終了時と30秒後の復元処理で元のURLへ戻します。検索結果のDOMはそのまま残ります。
