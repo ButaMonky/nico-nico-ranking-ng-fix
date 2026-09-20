@@ -10,7 +10,7 @@ HLS.js and its existing Apache license notice also appear earlier in this file.
 Official-site-derived icons/styles and inherited material whose reuse terms
 remain unverified are not offered under this project's MIT grant. Their source
 and unresolved scope are recorded in LICENSING.md and THIRD_PARTY_NOTICES.md:
-https://github.com/ButaMonky/nico-nico-ranking-ng/blob/master/LICENSING.md
+https://github.com/ButaMonky/nico-nico-ranking-ng-fix/blob/master/LICENSING.md
 Those records do not themselves grant permission for third-party material.
 
 An inherited UTF conversion helper in @svta/common-media-library carries this

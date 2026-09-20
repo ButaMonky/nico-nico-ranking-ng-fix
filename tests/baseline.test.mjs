@@ -2,8 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile, mkdtemp, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import { baseline, build, expectedHash, verify, sourceParts, root } from '../scripts/build.mjs';
+import { join, basename } from 'node:path';
+import { baseline, build, expectedHash, verify, sourceParts, root, output } from '../scripts/build.mjs';
 
 test('frozen baseline matches the approved fingerprint and manifest', async () => {
   const bytes = await readFile(baseline);
@@ -33,7 +33,7 @@ test('build assembles approved source order and produces repeatable output', asy
     const metadata = bytes => bytes.toString('utf8').match(/\/\/ ==UserScript==[\s\S]*?\/\/ ==\/UserScript==/)[0];
     const unchanged = text => text.split(/\r?\n/).filter(line => !/\/\/ @(?:version|author|description|license|updateURL|downloadURL|homepageURL|supportURL)\s/.test(line) && !/\/\/ @grant\s+unsafeWindow/.test(line)).join('\n');
     assert.equal(unchanged(metadata(first)), unchanged(metadata(original)));
-    assert.match(metadata(first), /@version\s+160\.25/);
+    assert.match(metadata(first), /@version\s+160\.26/);
     await build(baseline, destination);
     assert.deepEqual(await readFile(destination), first);
   } finally {
@@ -52,7 +52,8 @@ test('manual distribution keeps existing identity, disables remote updates and i
     assert.match(header, /^\/\/ @namespace\s+http:\/\/userscripts.org\/users\/121129$/m);
     assert.match(header, /^\/\/ @downloadURL\s+none$/m);
     assert.doesNotMatch(header, /@updateURL|@require/);
-    assert.match(header, /@supportURL\s+https:\/\/github.com\/ButaMonky\/nico-nico-ranking-ng\/issues/);
+    assert.match(header, /@supportURL\s+https:\/\/github.com\/ButaMonky\/nico-nico-ranking-ng-fix\/issues/);
+    assert.match(header, /@homepageURL\s+https:\/\/github.com\/ButaMonky\/nico-nico-ranking-ng-fix\r?$/m);
     // A user installing just this file must receive the dependency terms too.
     assert.ok(text.includes('Redistributions of source code must retain the above copyright notice'));
     assert.ok(text.includes('Copyright (c) 2014 Arnout Kazemier'));
@@ -61,6 +62,15 @@ test('manual distribution keeps existing identity, disables remote updates and i
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
+});
+
+test('default build publishes the fixed filename and an identical compatibility file', async () => {
+  assert.equal(basename(output), 'nico-nico-ranking-ng.user.js');
+  await build();
+  const current = await readFile(output);
+  const compatibility = await readFile(join(root, 'dist/nico-nico-ranking-ng-v16-list-tile-fix.user.js'));
+  assert.deepEqual(compatibility, current);
+  assert.match(current.toString('utf8'), /@version\s+160\.26/);
 });
 
 test('modified input is rejected before an existing output is overwritten', async () => {

@@ -6,7 +6,7 @@
 
 [Tampermonkey](https://www.tampermonkey.net/)を用意し、[READMEのインストールリンク](../README.md#インストール)から導入します。ランキング・キーワード検索・タグ検索のページを開き直し、追加された操作欄の「設定」を開いてください。
 
-インストール画面が開かない場合は、[配布ファイル](../dist/nico-nico-ranking-ng-v16-list-tile-fix.user.js)の全文をコピーし、Tampermonkeyの「新規スクリプト」へ貼り付けて保存できます。すでに利用している場合は新規項目を作らず、[既存項目への更新手順](distribution.md#設定を保持して更新する)に従います。原配布版とこの改変版を重複して有効にしないでください。
+インストール画面が開かない場合は、[配布ファイル](../dist/nico-nico-ranking-ng.user.js)の全文をコピーし、Tampermonkeyの「新規スクリプト」へ貼り付けて保存できます。すでに利用している場合は新規項目を作らず、[既存項目への更新手順](distribution.md#設定を保持して更新する)に従います。原配布版とこの改変版を重複して有効にしないでください。
 
 動作しないときはページを再読み込みし、ブラウザでユーザースクリプトの実行が許可されているか、[Tampermonkey公式の説明](https://www.tampermonkey.net/faq.php?locale=en&q=Q209)を確認してください。
 
@@ -66,7 +66,7 @@ CSVで入出力できるのは、動画ID・タイトル・タグ・ユーザー
 
 「開発者・診断」→「匿名診断をコピー」を使います。版や処理件数を共有するための機能です。コピー内容を確認してから報告に添付してください。コンソール全体のログやHARは不要です。
 
-この改変版の[不具合報告フォーム](https://github.com/ButaMonky/nico-nico-ranking-ng/issues/new?template=bug_report.yml)へ、次の情報を分かる範囲で記載してください。原配布元への問い合わせは不要です。対応時期や継続的な更新を約束するものではありません。
+この改変版の[不具合報告フォーム](https://github.com/ButaMonky/nico-nico-ranking-ng-fix/issues/new?template=bug_report.yml)へ、次の情報を分かる範囲で記載してください。原配布元への問い合わせは不要です。対応時期や継続的な更新を約束するものではありません。
 
 - スクリプト、ブラウザ、Tampermonkeyの版
 - ランキング／検索などのページの種類と、リスト／タイルの違い

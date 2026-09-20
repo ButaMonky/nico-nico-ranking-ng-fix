@@ -7,7 +7,8 @@ export const root = fileURLToPath(new URL('../', import.meta.url));
 export const name = 'nico-nico-ranking-ng-v14.1-performance-pager-fix (2).user.js';
 export const expectedHash = 'AF382AE50FCF8CDFDFC2AE178F3BE8861AC7ECF1611F30F4E3FB94439A87F371';
 export const baseline = resolve(root, 'baseline', name);
-export const output = resolve(root, 'dist', 'nico-nico-ranking-ng-v16-list-tile-fix.user.js');
+export const output = resolve(root, 'dist', 'nico-nico-ranking-ng.user.js');
+export const compatibilityOutput = resolve(root, 'dist', 'nico-nico-ranking-ng-v16-list-tile-fix.user.js');
 export const sourceParts = ['src/legacy/prefix.js', 'src/core/events.js', 'src/core/storage.js', 'src/core/config.js', 'src/data/network.js', 'src/data/thumb-info-source.js', 'src/legacy/before-ng.js', 'src/data/metadata-readiness.js', 'src/ng/logic-rules.js', 'src/legacy/movie-models.js', 'src/data/owner-evidence.js', 'src/legacy/thumb-info-listener.js', 'src/ui/view-state.js', 'src/ui/settings-dialog.js', 'src/ui/rule-editor.js', 'src/services/theme.js', 'src/nico/page-adapter.js', 'src/ui/result-layout.js', 'src/nico/list-page.js', 'src/nico/search-page.js', 'src/diagnostics/logger.js', 'src/services/new-tab.js', 'src/app/controller.js', 'src/ui/card-enhancements.js', 'src/data/owner-name-source.js', 'src/preview/hls-license.js', 'src/preview/hls-prefix.js', 'vendor/hls.js/hls.min.js', 'src/preview/hls-suffix.js', 'src/preview/preview-data.js', 'src/preview/preview-audio.js', 'src/preview/hover-preview.js', 'src/data/card-action-data.js', 'src/ui/card-tooltip.js', 'src/ui/card-actions.js', 'src/legacy/main-prefix.js', 'src/data/detail-cache.js', 'src/ui/pager-journey.js', 'src/autofill/legacy-controller.js', 'src/nico/navigation.js', 'src/app/bootstrap.js', 'src/app/start.js'];
 export function verify(bytes) {
   const hash = createHash('sha256').update(bytes).digest('hex').toUpperCase();
@@ -35,6 +36,11 @@ export async function build(source = baseline, destination = output) {
   await mkdir(dirname(destination), { recursive: true });
   await writeFile(destination, assembled);
   if (!(await readFile(destination)).equals(assembled)) throw new Error('Output differs from source assembly');
+  // Keep existing installation links valid without maintaining a second build.
+  if (resolve(destination) === output) {
+    await writeFile(compatibilityOutput, assembled);
+    if (!(await readFile(compatibilityOutput)).equals(assembled)) throw new Error('Compatibility output differs');
+  }
 }
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   await build();

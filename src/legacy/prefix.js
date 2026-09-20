@@ -6,7 +6,7 @@
 // @match        *://www.nicovideo.jp/ranking*
 // @match        *://www.nicovideo.jp/search/*
 // @match        *://www.nicovideo.jp/tag/*
-// @version      160.25
+// @version      160.26
 // @grant        unsafeWindow
 // @grant        GM_getValue
 // @grant        GM_setValue
@@ -23,8 +23,8 @@
 // @connect      snapshot.search.nicovideo.jp
 // @connect      api.nicoad.nicovideo.jp
 // @downloadURL  none
-// @homepageURL  https://github.com/ButaMonky/nico-nico-ranking-ng
-// @supportURL   https://github.com/ButaMonky/nico-nico-ranking-ng/issues
+// @homepageURL  https://github.com/ButaMonky/nico-nico-ranking-ng-fix
+// @supportURL   https://github.com/ButaMonky/nico-nico-ranking-ng-fix/issues
 // ==/UserScript==
 
 
@@ -203,7 +203,7 @@
 
   // This facade is scoped to this userscript; other scripts keep their console.
   var nrnConsoleConfig = null
-  var NRN_VERSION = '160.25'
+  var NRN_VERSION = '160.26'
   var nrnNativeConsole = globalThis.console
   var nrnConsoleCounts = {warnings:0,errors:0}
   var nrnSetConsoleConfig = function(config) { nrnConsoleConfig = config }

@@ -12,7 +12,7 @@ Tampermonkeyなどのユーザースクリプト管理拡張で動作します�
 [Tampermonkey](https://www.tampermonkey.net/)をインストールした状態で、
 以下のリンクを開いてください。
 
-- **[ニコニコランキングNGをインストール](https://github.com/ButaMonky/nico-nico-ranking-ng/raw/refs/heads/master/dist/nico-nico-ranking-ng-v16-list-tile-fix.user.js)**
+- **[ニコニコランキングNGをインストール](https://github.com/ButaMonky/nico-nico-ranking-ng-fix/raw/refs/heads/master/dist/nico-nico-ranking-ng.user.js)**
 
 インストール後、ニコニコ動画の対象ページを開き直すと利用できます。
 すでにお使いの場合は、下の「更新」を確認してください。
@@ -45,7 +45,7 @@ Tampermonkeyなどのユーザースクリプト管理拡張で動作します�
 - 一部のランキング形式、ショート動画、モバイルでの動作は未確認です。
 
 ニコニコ側の仕様変更によって動作が変わる場合があります。
-[詳しい対応状況と検証記録](docs/distribution-16025.md)も参照してください。
+[詳しい対応状況と検証記録](docs/distribution-16026.md)も参照してください。
 
 ## 変更履歴
 
@@ -69,8 +69,8 @@ Tampermonkeyなどのユーザースクリプト管理拡張で動作します�
 
 ## フィードバック
 
-質問や使い方の相談は[Issues](https://github.com/ButaMonky/nico-nico-ranking-ng/issues)へどうぞ。
-不具合は[報告フォーム](https://github.com/ButaMonky/nico-nico-ranking-ng/issues/new?template=bug_report.yml)を利用してください。
+質問や使い方の相談は[Issues](https://github.com/ButaMonky/nico-nico-ranking-ng-fix/issues)へどうぞ。
+不具合は[報告フォーム](https://github.com/ButaMonky/nico-nico-ranking-ng-fix/issues/new?template=bug_report.yml)を利用してください。
 
 Cookie・Tokenなどの認証情報、HAR、保存ページ、個人情報は添付しないでください。
 [診断情報の確認方法](docs/usage.md#不具合の情報を確認する)も用意しています。

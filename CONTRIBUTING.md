@@ -20,7 +20,7 @@ node scripts/check-privacy.mjs
 node scripts/check-privacy-history.mjs HEAD
 ```
 
-`build.mjs` は原本・HLS・ライセンス原文のSHA-256を検証し、srcの順序連結とライセンスコメントから配布物を生成します。`check.mjs` は原本と生成物の構文を検査します。生成物は `dist/nico-nico-ranking-ng-v16-list-tile-fix.user.js` です。npmが利用できる場合は `npm run build`、`npm run check`、`npm test` も定義されていますが、既存の記録で検証している経路はNode直接実行です。
+`build.mjs` は原本・HLS・ライセンス原文のSHA-256を検証し、srcの順序連結とライセンスコメントから配布物を生成します。`check.mjs` は原本と生成物の構文を検査します。生成物は `dist/nico-nico-ranking-ng.user.js` です。npmが利用できる場合は `npm run build`、`npm run check`、`npm test` も定義されていますが、既存の記録で検証している経路はNode直接実行です。
 
 基本試験の成功だけでブラウザや実サイトの動作を確認済みとはしません。UI・SPA・ページ送り等の変更では、該当する既存のブラウザ試験も実施します。
 
