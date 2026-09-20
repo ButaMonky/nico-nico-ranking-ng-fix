@@ -22,7 +22,7 @@ async function load(path,extra={}){
  assert.equal(source.split(start).length,2);assert.equal(source.split(end).length,2);
  const logs=[],window={open:()=>null};
  const api=vm.runInNewContext(source.slice(source.indexOf(start),source.indexOf(end))+';({Diagnostics,NewTabService})',
- {NRN_VERSION:'160.14',window,location:{href:'https://www.nicovideo.jp/tag/test',origin:'https://www.nicovideo.jp'},URL,
+ {NRN_VERSION:'160.15',window,location:{href:'https://www.nicovideo.jp/tag/test',origin:'https://www.nicovideo.jp'},URL,
  console:{log:(...a)=>logs.push(['log',...a]),warn:(...a)=>logs.push(['warn',...a]),error:(...a)=>logs.push(['error',...a])},...extra},{timeout:1000});
  return {...api,logs,window};
 }
@@ -32,7 +32,7 @@ for(const [label,path] of [['baseline',baseline],['generated',output]]){
   for(let i=0;i<305;i++)d.log('test',String(i));
   assert.equal(d.getHistory().length,300);if(label==='baseline')assert.equal(d.getHistory()[0].message,'5');else assert.equal(d.getHistory()[0].sequence,6);
   const copy=d.getHistory();copy.pop();assert.equal(d.getHistory().length,300);
-  assert.equal(d.snapshot().recent.length,30);assert.equal(d.snapshot().version,label==='baseline'?'14.1':'160.14');
+  assert.equal(d.snapshot().recent.length,30);assert.equal(d.snapshot().version,label==='baseline'?'14.1':'160.15');
   d.warn('x','warning');d.error('x','failure',{id:1});
   if(label==='baseline'){assert.equal(logs.at(-2)[0],'warn');assert.equal(logs.at(-1)[0],'error');}else assert.equal(logs.length,0);
   assert.equal(window.__nrnDiagnostics,d);

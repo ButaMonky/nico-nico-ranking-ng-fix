@@ -29,6 +29,11 @@
       return null
     }
     const same = (a,b) => a && b && a.type === b.type && a.id === b.id
+    function nativeName(value) {
+      const name = typeof value === 'string' ? value.trim() : null
+      // Only presentation text has placeholders. API account names stay literal.
+      return ['(投稿者非公開)','（投稿者非公開）'].includes(name) ? null : name
+    }
     function nicoadName(id,data,owner) {
       // This endpoint has no trustworthy user/channel discriminator. Require a
       // separately established user identity, even when the numeric IDs match.
@@ -80,11 +85,13 @@
         if (!owner) continue
         const tracked = link.getAttribute('data-anchor-href')
         if (tracked && !same(owner,fromUrl(tracked,root.ownerDocument.baseURI))) continue
-        owner.name = link.querySelector(':scope > p').textContent.trim()
+        const text = link.querySelector(':scope > p').textContent.trim()
+        owner.name = nativeName(text)
+        if (text && owner.name === null) owner.visibility = 'hidden'
         owners.push(owner)
       }
       if (!owners.length || owners.some(owner => !same(owner,owners[0]))) return null
       return owners[0]
     }
-    return {normalize,fromUrl,fromRow,register,same,nicoadName,initialDocument}
+    return {normalize,fromUrl,fromRow,register,same,nativeName,nicoadName,initialDocument}
   })()

@@ -12,6 +12,12 @@ async function setup(){
  return {config,movies,search:ThumbInfoListener.forSearch(movies),detail:ThumbInfoListener.forCompleted(movies)};
 }
 const info=(id,contributor={type:'unknown',id:-1,name:''})=>({id,contributor,tags:[],description:''});
+test('native hidden-owner labels are unknown names; authoritative account names are preserved',()=>{
+ assert.equal(OwnerEvidence.nativeName('(投稿者非公開)'),null);
+ assert.equal(OwnerEvidence.nativeName(' （投稿者非公開） '),null);
+ assert.equal(OwnerEvidence.nativeName('非公開という名前のユーザー'),'非公開という名前のユーザー');
+ assert.equal(OwnerEvidence.normalize({type:'user',id:55,name:'(投稿者非公開)'}).name,'(投稿者非公開)','API names are not guessed from their wording');
+});
 test('search-only ID participates in ordinary and compound NG; unknown detail cannot erase it',async()=>{
  const {config,movies,search,detail}=await setup();config.ngUserIds.add(12345);
  search('sm1',{type:'user',id:'12345',name:'(投稿者非公開)'});

@@ -34,7 +34,7 @@ try {
  await page.addScriptTag({content:source});
  await page.waitForFunction(()=>window.fixtureModel && ids.every(id=>fixtureModel.movies.get(id)?.metadataSettled));
  assert.deepEqual(await page.evaluate(()=>ids.map(id=>{const m=fixtureModel.movies.get(id);return [m.contributor.id,m.ng,m._nrnContributorSource]})),[[12345,true,'search'],[12345,true,'search'],[23456,false,'search']]);
- assert.equal(await page.evaluate(()=>requests),0,'known owner conditions need no detail or owner API calls');
+ assert.equal(await page.evaluate(()=>requests),0,'known owner-ID conditions need no detail API calls');
  assert.deepEqual(await page.evaluate(()=>ids.map(id=>fixturePage.movieRoots.find(r=>r.movieId===id).elem.classList.contains('nrn-hide'))),[true,true,false]);
  await page.evaluate(()=>fixtureModel.config.ngUserIds.remove([12345]));
  await page.waitForFunction(()=>ids.every(id=>!fixtureModel.movies.get(id).ng));

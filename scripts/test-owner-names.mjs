@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import {build,output} from './build.mjs';
 const require=createRequire(import.meta.url),{chromium}=require(process.env.NRN_PLAYWRIGHT || 'playwright');
 await build();
-const source=(await readFile(output,'utf8')).replace('model = createModel(config)','model = createModel(config); window.testModel = model');
+const source=(await readFile(output,'utf8')).replace('model = createModel(config)','model = createModel(config); window.testModel = model; window.testPage = page; window.testAdd = item => { const root = page._createInjectedTile(item); setup([{type:"main",movie:{id:item.id,title:item.title},rootElem:root}],model,page,ctrl); model.requestThumbInfo(); }');
 const fixture=await readFile(new URL('../tests/fixtures/layout-list.html',import.meta.url),'utf8');
 const browser=await chromium.launch({headless:true,executablePath:process.env.NRN_BROWSER});
 try {
@@ -16,17 +16,23 @@ try {
  const card=await page.locator('[data-decoration-video-id]').first().evaluate(el=>{
   el.querySelectorAll('a[href*="/user/"]').forEach(e=>e.remove());return el.outerHTML.replace(/sm\d+/g,'sm12345678');
  });
- const install=async(hold=false,nameOnly=false)=>{
+ const install=async(hold=false,nameOnly=false,nativePlaceholder=false)=>{
   await page.setContent('<main aria-label="nicovideo-content"><section><div id="results">'+card+'</div></section></main>');
-  await page.evaluate(({hold,nameOnly})=>{
+  await page.evaluate(({hold,nameOnly,nativePlaceholder})=>{
    const meta=document.createElement('meta');meta.name='server-response';
    meta.content=JSON.stringify({data:{response:{$getSearchVideoV2:{data:{items:[{id:'sm12345678',owner:{ownerType:'hidden',type:'user',visibility:'hidden',id:'55',name:null}}]}}}}});document.head.append(meta);
+   if(nativePlaceholder){
+    meta.remove();
+    const root=document.querySelector('[data-decoration-video-id]'),watch=root.querySelector('a[href*="/watch/"]');
+    const owner=document.createElement('a');owner.href='https://www.nicovideo.jp/user/55';owner.dataset.groupIgnore='true';owner.dataset.anchorArea='main';
+    owner.innerHTML='<img alt="(投稿者非公開)"><p>(投稿者非公開)</p>';watch.parentElement.append(owner);
+   }
    window.detailCalls=0;window.ownerCalls=0;
    window.GM_getValue=(k,d)=>({autoFillEnabled:false,autoFillAdMode:'none',openNewWindow:false,sessionDetailCacheEnabled:true,
     ngTags:nameOnly?'[]':'["unmatched"]',ngUserNames:nameOnly?'[]':'["restored"]'}[k]??d);
    window.GM_setValue=()=>{};
    window.GM_xmlhttpRequest=o=>{
-    detailCalls++;window.deliverDetail=()=>o.onload({status:200,responseText:'<nicovideo_thumb_response status="ok"><thumb><video_id>sm12345678</video_id><title>synthetic</title><description>synthetic</description><tags><tag lock="1">synthetic</tag></tags></thumb></nicovideo_thumb_response>'});
+    detailCalls++;const id=o.url.split('/').pop();window.deliverDetail=()=>o.onload({status:200,responseText:'<nicovideo_thumb_response status="ok"><thumb><video_id>'+id+'</video_id><title>synthetic</title><description>synthetic</description><tags><tag lock="1">synthetic</tag></tags></thumb></nicovideo_thumb_response>'});
     const timer=hold?null:setTimeout(deliverDetail,1);
     return {abort(){clearTimeout(timer);o.onabort?.();}};
    };
@@ -35,7 +41,7 @@ try {
     const result={ok:true,status:200,url,text:async()=>JSON.stringify({data:{id:'sm12345678',ownerId:55,ownerName:'restored synthetic account',decoration:'none'}})};
     return hold?new Promise(resolve=>{window.deliverOwner=()=>resolve(result);}):result;
    };
-  },{hold,nameOnly});
+  },{hold,nameOnly,nativePlaceholder});
   await page.addScriptTag({content:source});
   if(hold){
    await page.waitForFunction(()=>__nrnDiagnostics.snapshot().current?.phase==='initial-ng');
@@ -77,6 +83,19 @@ try {
  assert.deepEqual(await page.evaluate(()=>[detailCalls,ownerCalls]),[0,0],'name-only cache survives reload without inventing full details');
  assert.equal(await page.evaluate(()=>testModel.movies.get('sm12345678').metadata.tags),'unknown');
  assert.equal(await page.evaluate(()=>testModel.movies.get('sm12345678').contributor.name),'restored synthetic account');
+ await page.reload();await page.evaluate(()=>sessionStorage.clear());await install(false,false,true);
+ assert.equal(await page.evaluate(()=>ownerCalls),1,'native placeholder must not suppress name recovery');
+ assert.equal(await page.evaluate(()=>testModel.movies.get('sm12345678').contributor.name),'restored synthetic account');
+ assert.equal(await page.evaluate(()=>testModel.movies.get('sm12345678').ng),true,'recovered name participates in NG');
+ // An injected card owns its compact owner row; recovery must update that row too.
+ await page.evaluate(()=>{
+  testModel.config.ngUserNames.clear();
+  window.fetch=async(url)=>({ok:true,status:200,url,text:async()=>JSON.stringify({data:{id:'sm23456789',ownerId:55,ownerName:'restored synthetic account'}})});
+  testAdd({id:'sm23456789',title:'synthetic',owner:{type:'user',id:55,name:null,visibility:'hidden'}});
+ });
+ await page.waitForFunction(()=>testModel.movies.get('sm23456789')?.contributor.name==='restored synthetic account');
+ assert.equal(await page.locator('[data-decoration-video-id="sm23456789"] .nrn-native-owner p').textContent(),'restored synthetic account','compact injected owner row reflects recovered name');
+ assert.equal(await page.locator('[data-decoration-video-id="sm23456789"] .nrn-native-owner img').getAttribute('alt'),'','icon must not repeat the obsolete hidden label');
  assert.deepEqual(errors,[]);assert.doesNotMatch(messages.join('\n'),/restored synthetic account|sm12345678/);
- console.log('Offline browser PASS: hidden initial owner identity; retained account name displayed and used by NG; cold detail1/owner1; reload detail0/owner0; cache age preserved; stale SPA meta rejected; anonymous logs.');
+ console.log('Offline browser PASS: hidden initial owner identity; native placeholder triggers recovery and name NG; compact injected row updated; cold detail1/owner1; reload detail0/owner0; cache age preserved; stale SPA meta rejected; anonymous logs.');
 } finally {await browser.close();}

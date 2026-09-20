@@ -6,7 +6,7 @@
 // @match        *://www.nicovideo.jp/ranking*
 // @match        *://www.nicovideo.jp/search/*
 // @match        *://www.nicovideo.jp/tag/*
-// @version      160.14
+// @version      160.15
 // @grant        unsafeWindow
 // @grant        GM_getValue
 // @grant        GM_setValue
@@ -202,7 +202,7 @@
 
   // This facade is scoped to this userscript; other scripts keep their console.
   var nrnConsoleConfig = null
-  var NRN_VERSION = '160.14'
+  var NRN_VERSION = '160.15'
   var nrnNativeConsole = globalThis.console
   var nrnConsoleCounts = {warnings:0,errors:0}
   var nrnSetConsoleConfig = function(config) { nrnConsoleConfig = config }
@@ -1824,6 +1824,11 @@
       return null
     }
     const same = (a,b) => a && b && a.type === b.type && a.id === b.id
+    function nativeName(value) {
+      const name = typeof value === 'string' ? value.trim() : null
+      // Only presentation text has placeholders. API account names stay literal.
+      return ['(投稿者非公開)','（投稿者非公開）'].includes(name) ? null : name
+    }
     function nicoadName(id,data,owner) {
       // This endpoint has no trustworthy user/channel discriminator. Require a
       // separately established user identity, even when the numeric IDs match.
@@ -1875,13 +1880,15 @@
         if (!owner) continue
         const tracked = link.getAttribute('data-anchor-href')
         if (tracked && !same(owner,fromUrl(tracked,root.ownerDocument.baseURI))) continue
-        owner.name = link.querySelector(':scope > p').textContent.trim()
+        const text = link.querySelector(':scope > p').textContent.trim()
+        owner.name = nativeName(text)
+        if (text && owner.name === null) owner.visibility = 'hidden'
         owners.push(owner)
       }
       if (!owners.length || owners.some(owner => !same(owner,owners[0]))) return null
       return owners[0]
     }
-    return {normalize,fromUrl,fromRow,register,same,nicoadName,initialDocument}
+    return {normalize,fromUrl,fromRow,register,same,nativeName,nicoadName,initialDocument}
   })()
   var ThumbInfoListener = (function() {
     var createTagBuilder = function(config) {
@@ -7100,13 +7107,19 @@ div:has(> div > a[data-anchor-page="ranking_genre"][href^="/watch/"] > div > p),
         const plan = {total:0,readyWithoutRequest:0,cacheOnly:0,requestedVideos:attempted.size,queued:queue?._pendingIds?.length || 0,terminalUnresolved:0,awaitingRequired:0}
         const states = Object.fromEntries(fields.map(field => [field,{unknown:0,known:0,failed:0}]))
         const missing = Object.fromEntries(fields.map(field => [field,0]))
-        const ownerNameRecovery = {known:0,nicoad:0,pending:0,accepted:0,rejected:0,failed:0,untyped:0,budget:0,cached:0}
+        const ownerNameRecovery = {known:0,nicoad:0,pending:0,accepted:0,rejected:0,failed:0,untyped:0,budget:0,cached:0,
+          hiddenUnknown:0,skippedNg:0,awaitingDetails:0}
         for (const movie of movies?._idToMovie?.values() || []) {
           if (movie.metadata.ownerName === 'known') ownerNameRecovery.known++
           if (movie._nrnOwnerNameSource === 'nicoad') ownerNameRecovery.nicoad++
           if (Object.hasOwn(ownerNameRecovery,movie._nrnOwnerNameStatus)) ownerNameRecovery[movie._nrnOwnerNameStatus]++
           plan.total++
           const required = MetadataReadiness.required(movie,config)
+          if (movie.metadata.ownerName !== 'known') {
+            if (movie.owner?.visibility === 'hidden') ownerNameRecovery.hiddenUnknown++
+            if (movie.ng && !movie._detailsRequested) ownerNameRecovery.skippedNg++
+            if (!movie.thumbInfoDone && [...required].some(field => movie.metadata[field] !== 'known')) ownerNameRecovery.awaitingDetails++
+          }
           let ready = true
           for (const field of fields) {
             const state = movie.metadata[field]
@@ -7898,7 +7911,7 @@ div:has(> div > a[data-anchor-page="ranking_genre"][href^="/watch/"] > div > p),
       const identity = OwnerEvidence.normalize(owner)
       if (identity && !OwnerEvidence.same(identity, OwnerEvidence.fromUrl(native?.href))) native = null
       const url = owner?.url || native?.href
-      const knownName = owner?.name || native?.querySelector('img')?.alt || native?.textContent?.trim()
+      const knownName = owner?.name || OwnerEvidence.nativeName(native?.querySelector('img')?.alt) || OwnerEvidence.nativeName(native?.textContent)
       const link = doc.createElement(url ? 'a' : 'span')
       link.className = 'nrn-contributor-link nrn-owner-row'
       if (url) { link.href = url; link.target = '_blank'; link.rel = 'noopener noreferrer' }
@@ -7942,6 +7955,17 @@ div:has(> div > a[data-anchor-page="ranking_genre"][href^="/watch/"] > div > p),
         nativeOwner?.classList.add('nrn-native-owner')
         const container = root.movieInfo.elem.querySelector('.nrn-contributor-container')
         const owner = movie.contributor
+        // Our injected row is not managed by React. Keep its collapsed label in
+        // sync too, without rewriting native page rows or mismatched identities.
+        if (root.elem.dataset.nrnAutofill === 'true' && owner?.name
+            && OwnerEvidence.same(OwnerEvidence.normalize(owner),OwnerEvidence.fromUrl(nativeOwner?.href))) {
+          const caption = nativeOwner.querySelector(':scope > p')
+          if (caption && caption.textContent !== owner.name) caption.textContent = owner.name
+          const icon = nativeOwner.querySelector(':scope > img')
+          if (icon?.alt) icon.alt = ''
+          nativeOwner.title = movie._nrnOwnerNameSource === 'nicoad'
+            ? '広告情報に残る投稿者名（現在の名前とは異なる場合があります）' : ''
+        }
         const signature = JSON.stringify([owner?.type, owner?.id, owner?.name, owner?.ngName,movie._nrnOwnerNamePending,movie._nrnOwnerNameSource])
         if (container && (movie.metadata.ownerId === 'known' || movie.thumbInfoDone) && (ownerSignature !== signature || !container.querySelector('.nrn-owner-row img'))) {
           const existing = container.querySelector('.nrn-contributor-link')

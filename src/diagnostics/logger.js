@@ -52,13 +52,19 @@
         const plan = {total:0,readyWithoutRequest:0,cacheOnly:0,requestedVideos:attempted.size,queued:queue?._pendingIds?.length || 0,terminalUnresolved:0,awaitingRequired:0}
         const states = Object.fromEntries(fields.map(field => [field,{unknown:0,known:0,failed:0}]))
         const missing = Object.fromEntries(fields.map(field => [field,0]))
-        const ownerNameRecovery = {known:0,nicoad:0,pending:0,accepted:0,rejected:0,failed:0,untyped:0,budget:0,cached:0}
+        const ownerNameRecovery = {known:0,nicoad:0,pending:0,accepted:0,rejected:0,failed:0,untyped:0,budget:0,cached:0,
+          hiddenUnknown:0,skippedNg:0,awaitingDetails:0}
         for (const movie of movies?._idToMovie?.values() || []) {
           if (movie.metadata.ownerName === 'known') ownerNameRecovery.known++
           if (movie._nrnOwnerNameSource === 'nicoad') ownerNameRecovery.nicoad++
           if (Object.hasOwn(ownerNameRecovery,movie._nrnOwnerNameStatus)) ownerNameRecovery[movie._nrnOwnerNameStatus]++
           plan.total++
           const required = MetadataReadiness.required(movie,config)
+          if (movie.metadata.ownerName !== 'known') {
+            if (movie.owner?.visibility === 'hidden') ownerNameRecovery.hiddenUnknown++
+            if (movie.ng && !movie._detailsRequested) ownerNameRecovery.skippedNg++
+            if (!movie.thumbInfoDone && [...required].some(field => movie.metadata[field] !== 'known')) ownerNameRecovery.awaitingDetails++
+          }
           let ready = true
           for (const field of fields) {
             const state = movie.metadata[field]

@@ -61,7 +61,7 @@
       const identity = OwnerEvidence.normalize(owner)
       if (identity && !OwnerEvidence.same(identity, OwnerEvidence.fromUrl(native?.href))) native = null
       const url = owner?.url || native?.href
-      const knownName = owner?.name || native?.querySelector('img')?.alt || native?.textContent?.trim()
+      const knownName = owner?.name || OwnerEvidence.nativeName(native?.querySelector('img')?.alt) || OwnerEvidence.nativeName(native?.textContent)
       const link = doc.createElement(url ? 'a' : 'span')
       link.className = 'nrn-contributor-link nrn-owner-row'
       if (url) { link.href = url; link.target = '_blank'; link.rel = 'noopener noreferrer' }
@@ -105,6 +105,17 @@
         nativeOwner?.classList.add('nrn-native-owner')
         const container = root.movieInfo.elem.querySelector('.nrn-contributor-container')
         const owner = movie.contributor
+        // Our injected row is not managed by React. Keep its collapsed label in
+        // sync too, without rewriting native page rows or mismatched identities.
+        if (root.elem.dataset.nrnAutofill === 'true' && owner?.name
+            && OwnerEvidence.same(OwnerEvidence.normalize(owner),OwnerEvidence.fromUrl(nativeOwner?.href))) {
+          const caption = nativeOwner.querySelector(':scope > p')
+          if (caption && caption.textContent !== owner.name) caption.textContent = owner.name
+          const icon = nativeOwner.querySelector(':scope > img')
+          if (icon?.alt) icon.alt = ''
+          nativeOwner.title = movie._nrnOwnerNameSource === 'nicoad'
+            ? '広告情報に残る投稿者名（現在の名前とは異なる場合があります）' : ''
+        }
         const signature = JSON.stringify([owner?.type, owner?.id, owner?.name, owner?.ngName,movie._nrnOwnerNamePending,movie._nrnOwnerNameSource])
         if (container && (movie.metadata.ownerId === 'known' || movie.thumbInfoDone) && (ownerSignature !== signature || !container.querySelector('.nrn-owner-row img'))) {
           const existing = container.querySelector('.nrn-contributor-link')

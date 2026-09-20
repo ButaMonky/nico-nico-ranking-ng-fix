@@ -9,7 +9,7 @@ function load(extra={}){
  const context=vm.createContext({URL,performance:{now:()=>now},console:{log:(...a)=>messages.push(a),warn:(...a)=>messages.push(a),error:(...a)=>messages.push(a)},window:{},...extra});
  const end=source.indexOf('  var MovieViewMode =');
  const lib=vm.runInContext(source.slice(0,end)+'return {Config,Movies,Movie,ThumbInfo,ThumbInfoListener,MetadataReadiness,console,nrnSetConsoleConfig,nrnNativeConsole,nrnConsoleCounts}; })()',context);
- Object.assign(context,lib,{NRN_VERSION:'160.14'});
+ Object.assign(context,lib,{NRN_VERSION:'160.15'});
  const begin=source.indexOf('  var Diagnostics ='),stop=source.indexOf('  var NewTabService =',begin);
  const Diagnostics=vm.runInContext(source.slice(begin,stop)+'; Diagnostics',context);
  return {...lib,Diagnostics,messages,advance:ms=>now+=ms};
@@ -30,9 +30,20 @@ test('diagnostic report omits personal strings, IDs, raw errors and URLs even in
  const text=h.Diagnostics.publish('SECRET_REASON');
  const all=JSON.stringify(h.messages)+text+JSON.stringify(h.Diagnostics.getHistory());
  assert.doesNotMatch(all,/SECRET|987654321|sm888881|private\.invalid/);
- assert.equal(JSON.parse(text).version,'160.14');
+ assert.equal(JSON.parse(text).version,'160.15');
  assert.equal(JSON.parse(text).current.detailPlan.readyWithoutRequest,1);
  assert.equal(JSON.parse(text).problemCounts.startup,1);
+});
+test('name recovery diagnostics explain unknown hidden names and independent NG skips without names',async()=>{
+ const h=await setup();h.ThumbInfoListener.forSearch(h.movies)(h.movie.id,{type:'user',id:55,name:null,visibility:'hidden'});
+ h.config.ngUserNames.add('PRIVATE_NAME');h.config.ngUserIds.add(55);
+ let report=h.Diagnostics.snapshot().current;
+ assert.equal(report.ownerNameRecovery.hiddenUnknown,1);
+ assert.equal(report.ownerNameRecovery.skippedNg,1);
+ assert.equal(report.ownerNameRecovery.awaitingDetails,1);
+ h.movie.requestDetails();
+ assert.equal(h.Diagnostics.snapshot().current.ownerNameRecovery.skippedNg,0,'expanded NG cards are eligible for recovery');
+ assert.doesNotMatch(JSON.stringify(report),/PRIVATE_NAME|sm888881/);
 });
 test('unique skipped cards are gauges, cache hits and completed requests are distinct',async()=>{
  const h=await setup();h.ThumbInfoListener.forSearch(h.movies)('sm888881',{type:'user',id:12,name:'fixture'});
