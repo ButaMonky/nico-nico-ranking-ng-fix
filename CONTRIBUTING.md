@@ -39,6 +39,7 @@ node scripts/test-preview-hls.mjs
 node scripts/test-preview-failure-ui.mjs
 node scripts/test-preview-official-contract.mjs
 node scripts/test-preview-card-integration.mjs
+node scripts/test-card-actions.mjs
 node scripts/test-pager-native-style.mjs
 ```
 

@@ -5,8 +5,8 @@ import {readFile} from 'node:fs/promises';
 import {output} from '../scripts/build.mjs';
 const source=await readFile(output,'utf8');
 const quiet={log(){},warn(){}};
-async function parsePage(items,maxPage=null,responseUrl='',missingMeta=false){
- const metadata={data:{response:{$getSearchVideoV2:{data:{items}},page:{pagination:{maxPage}}}}};
+async function parsePage(items,maxPage=null,responseUrl='',missingMeta=false,playlist=null){
+ const metadata={data:{response:{$getSearchVideoV2:{data:{items}},page:{pagination:{maxPage},playlist}}}};
  const doc={querySelector:s=>s==='meta[name="server-response"]'&&!missingMeta?{getAttribute:()=>JSON.stringify(metadata)}:null,querySelectorAll:()=>[]};
  const context={URL,URLSearchParams,AbortController,setTimeout,clearTimeout,location:new URL('https://www.nicovideo.jp/tag/test'),performance,console:quiet,
   DOMParser:class{parseFromString(){return doc;}},fetch:async()=>({ok:true,url:responseUrl,text:async()=>''})};
@@ -59,4 +59,11 @@ test('generated: per-request budget stops both HTML and API prefetch loops',asyn
   await h.run(100);await h.run(100);assert.equal(h.calls.length,1);
   assert.equal(h.ctx.candidatePool.length,1);
  }
+});
+
+test('generated: continuous playback retains fetched page context without guessing',async()=>{
+ const playlist=Buffer.from(JSON.stringify({type:'search',context:{page:4,tag:'fixture'}})).toString('base64');
+ const result=await parsePage([{id:'sm1'}],null,'',false,playlist);
+ assert.equal(result.items[0].__nrnPlaylist,playlist);
+ assert.equal((await parsePage([{id:'sm1'}])).items[0].__nrnPlaylist,null);
 });

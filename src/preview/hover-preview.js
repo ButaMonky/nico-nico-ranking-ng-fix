@@ -77,6 +77,7 @@
       function eligible(root, id) {
         if (disposed || page._disposed || !setting?.value || doc.hidden || !sameRoute() || !root?.isConnected) return false
         if (root.dataset.nrnAutofill !== 'true' || root.dataset.decorationVideoId !== id || !/^(?:sm|so|nm)\d+$/.test(id)) return false
+        if (root.dataset.nrnOfficialMuted === 'true') return false
         if (root.closest('[hidden],.nrn-hide,.nrn-is-ng,.nrn-autofill-pending,.nrn-autofill-overflow')) return false
         const r=root.getBoundingClientRect()
         return r.width>0&&r.height>0&&r.bottom>0&&r.right>0&&r.top<win.innerHeight&&r.left<win.innerWidth
@@ -162,7 +163,7 @@
         const check=()=>{if(!eligible(root,id)) {hovered=null;stop()}}
         s.observer=new MutationObserver(records=>{
           if(records.some(r=>!r.target.closest?.('.nrn-preview')))check()
-        });s.observer.observe(doc.body,{childList:true,subtree:true,attributes:true,attributeFilter:['class','style','hidden','data-decoration-video-id']})
+        });s.observer.observe(doc.body,{childList:true,subtree:true,attributes:true,attributeFilter:['class','style','hidden','data-decoration-video-id','data-nrn-official-muted']})
         s.intersection=typeof win.IntersectionObserver==='function'?new win.IntersectionObserver(entries=>{if(entries.some(e=>!e.isIntersecting)){hovered=null;stop()}}):null
         s.intersection?.observe(root);s.check=setInterval(check,200)
         s.deadline=setTimeout(()=>{if(session===s)terminal(s,'error')},12000)

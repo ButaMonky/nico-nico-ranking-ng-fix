@@ -320,7 +320,9 @@
               maxPage = Number(jsonMaxPage)
             }
             if (searchData && Array.isArray(searchData.items)) {
-              items = searchData.items
+              // Preserve this fetched page's official continuous-play context.
+              var playlist = parsed.data.response.page && parsed.data.response.page.playlist
+              items = searchData.items.map(item => ({...item, __nrnPlaylist:typeof playlist === 'string' ? playlist : null}))
               hasSearchItems = true
             }
           } catch (e) {
@@ -666,6 +668,7 @@
         titleA.after(description)
         this.resultLayout.add(root)
         this._appendInjectedTile(root)
+        this._cardActions?.attach(root, item)
         // 自動追加分では1本ごとのニコニコ広告API通信を省略して高速化する。
         // 元ページ側の広告表示には影響しない。
         return root
