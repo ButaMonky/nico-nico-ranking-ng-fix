@@ -64,7 +64,7 @@ Tampermonkeyなどのユーザースクリプト管理拡張で動作します�
 この改変版で新たに作成したコードには[MIT License](LICENSE)を適用しています。
 原スクリプトや同梱ライブラリなどは、それぞれの条件に従います。
 
-適用範囲と利用条件が未確認の部分は[LICENSING](LICENSING.md)、
+ライセンスの適用範囲や、利用条件を確認中の部分については[LICENSING](LICENSING.md)、
 第三者コードのライセンス・謝辞は[THIRD_PARTY_NOTICES](THIRD_PARTY_NOTICES.md)を参照してください。
 
 ## フィードバック
