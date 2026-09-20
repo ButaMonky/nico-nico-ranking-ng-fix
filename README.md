@@ -1,10 +1,10 @@
-最新ローカル160.20（プレビューは既定OFF）: [サムネイル保持と公式ページ番号の表示継承](docs/preview-pager-16020.md)。160.19で報告されたHTTP 400の解消・実サイト再生は未確認。GitHub送信は保留。
+最新版 **160.24**: [導入用スクリプト](dist/nico-nico-ranking-ng-v16-list-tile-fix.user.js) · [変更点と検証](docs/hover-parity-16024.md)。ホバープレビューは既定OFFです。
 
 # Nico Nico Ranking NG
 
 [変更履歴](CHANGELOG.md) · [開発・検証手順](CONTRIBUTING.md) · [タスク一覧](docs/TASKS.md) · [調査・残作業の背景](docs/BACKLOG.md)
 
-版別の実装・検証記録を以下に残しています。160.18以降の残作業は変更履歴とタスク一覧で管理します。ローカルの実装済み状態とGitHub公開は別です。公開前のプライバシー確認・履歴整理は最終工程として残っています。
+版別の実装・検証記録を以下に残しています。160.18以降の残作業は変更履歴とタスク一覧で管理します。過去の版別文書にある「GitHub未送信」「確認待ち」は、その文書の作成時点の記録です。現在の送信準備・履歴整理は[公開前の確認記録](docs/publication-16024.md)を参照してください。
 
 160.17: [投稿者欄をニコニコ本来の表示に統一](docs/native-owner-16017.md)。画像・名前の構造、余白、文字サイズをサイトの表示クラスに揃え、古いCSSによる縦並び等の競合を修正。GitHub反映は保留。
 
@@ -61,7 +61,7 @@ node scripts/check-privacy.mjs
 
 npmが利用できる環境では同じ処理を `npm run build`、`npm run check`、`npm test` で実行できます。この作業環境にはnpmがなく、上記Node.js直接実行を検証します。npm経由の実行は未検証です。
 
-生成物は `dist/nico-nico-ranking-ng-v16-list-tile-fix.user.js`（メタデータ版番号160.20）です。baselineのスクリプト原本は編集しないでください。原本のSHA-256検証は引き続き必須です。ビルドは分割ソースの順序どおりの連結と出力一致を検証します。
+生成物は `dist/nico-nico-ranking-ng-v16-list-tile-fix.user.js`（メタデータ版番号160.24）です。baselineのスクリプト原本は編集しないでください。原本のSHA-256検証は引き続き必須です。ビルドは分割ソースの順序どおりの連結と出力一致を検証します。
 
 Git保存後は別フォルダーへ `git clone --no-hardlinks <このリポジトリの絶対パス> <新しい作業フォルダー>` を実行し、上記手順を繰り返します。distやTempの元ファイルをコピーする必要はありません。
 

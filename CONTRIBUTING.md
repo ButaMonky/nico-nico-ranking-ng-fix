@@ -17,6 +17,7 @@ node scripts/build.mjs
 node scripts/check.mjs
 node scripts/test.mjs
 node scripts/check-privacy.mjs
+node scripts/check-privacy-history.mjs HEAD
 ```
 
 `build.mjs` は原本のSHA-256と連結した生成物の一致を、`check.mjs` は原本と生成物の構文を検査します。生成物は `dist/nico-nico-ranking-ng-v16-list-tile-fix.user.js` です。npmが利用できる場合は `npm run build`、`npm run check`、`npm test` も定義されていますが、既存の記録で検証している経路はNode直接実行です。
@@ -74,3 +75,5 @@ node scripts/test-pager-native-style.mjs
 - 公開前の履歴整理は [NRN-005](docs/TASKS.md#nrn-005) で管理します。現在の変更と共有履歴を保全しながら、承認済みの個人情報除去・再検証を完了させます。GitHubへの送信・公開設定変更はその後の最終工程です。
 
 履歴整理後は新しいフォルダーへクローンし、基本検証と必要なブラウザ試験をやり直します。ローカル確認の例は `git clone --no-hardlinks . ../nrn-clean-check` です。プライバシー検査を通すために検査条件だけを弱める変更はしないでください。
+
+送信前は `check-privacy-history.mjs` で送信する先端から到達する履歴・コミットのメールも検査します。対象を選ばず全ブランチやタグを送信しないでください。ローカルで判明した非公開語句は環境変数 `NRN_PRIVATE_TERMS` に改行区切りで渡して検査でき、語句そのものは出力しません。これも目視確認やGitHub側の旧参照・キャッシュ削除の代わりにはなりません。
