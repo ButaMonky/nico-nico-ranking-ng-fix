@@ -1,19 +1,18 @@
 # ニコニコランキングNG
 
-[kengo321氏のNico Nico Ranking NG](https://greasyfork.org/ja/scripts/880-nico-nico-ranking-ng)を基に、
+kengo321氏の[Nico Nico Ranking NG](https://greasyfork.org/ja/scripts/880-nico-nico-ranking-ng)を基に、
 複合NGや検索結果の自動補充などを加えた非公式改変版です。
 
 ニコニコ動画のランキング・検索結果で、見たくない動画を非表示にします。
 Tampermonkeyなどのユーザースクリプト管理拡張で動作します。
 
-現在のバージョンは **160.25** です。
 
 ## インストール
 
 [Tampermonkey](https://www.tampermonkey.net/)をインストールした状態で、
 以下のリンクを開いてください。
 
-- **[ニコニコランキングNGをインストール](https://raw.githubusercontent.com/ButaMonky/nico-nico-ranking-ng/master/dist/nico-nico-ranking-ng-v16-list-tile-fix.user.js)**
+- **[ニコニコランキングNGをインストール](https://github.com/ButaMonky/nico-nico-ranking-ng/raw/refs/heads/master/dist/nico-nico-ranking-ng-v16-list-tile-fix.user.js)**
 
 インストール後、ニコニコ動画の対象ページを開き直すと利用できます。
 すでにお使いの場合は、下の「更新」を確認してください。
@@ -23,7 +22,7 @@ Tampermonkeyなどのユーザースクリプト管理拡張で動作します�
 
 ## 主な機能
 
-- 動画ID・タイトル・タグ・投稿者などによるNG
+- 動画ID・タイトル・タグ・タグロック数・投稿者などによるNG
 - 複数の条件や例外を組み合わせる複合NG
 - NGで減った検索結果の自動補充
 - 閲覧済み動画の表示切替、タグ・投稿者情報の表示、リスト／タイル表示への対応
@@ -33,7 +32,7 @@ Tampermonkeyなどのユーザースクリプト管理拡張で動作します�
 
 ## 更新
 
-現在は**手動更新**です。新版は上のインストールリンクから更新できます。
+現在は自動更新に対応していません。新版は上のインストールリンクから更新できます。
 160.24以前をお使いの場合も、一度手動での更新が必要です。
 
 更新前に設定をバックアップし、**旧版を先に削除せず**上書きしてください。
