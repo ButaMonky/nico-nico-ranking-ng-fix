@@ -630,7 +630,7 @@
             '</div>' +
             '<a href="' + watchUrl + '" class="hover:c_action.primaryAzure fs_l mt_x0_5 mb_base fw_bold lc_2 visited:text-layer_visited groupHover:text-layer_accentAzure [@container_(max-width:_320px)]:fs_base h_[calc({lineHeights.base}_*_2em)] nrn-title-anchor"></a>' +
             '<div class="fs_s flex-wrap_wrap d_flex gap_base mb_base text-layer_lowEm [&_>_*]:d_flex [&_>_*]:ai_center [&_>_*]:gap_x0_5 [&_>_*]:lh_1 [&_>_*]:ff_metaNumber [&_>_*]:fs_s [&_>_*]:white-space_nowrap">' +
-              '<time>' + formatRelativeOrDate(item.registeredAt) + '</time>' +
+              '<time class="nrn-registered-at">' + formatRelativeOrDate(item.registeredAt) + '</time>' +
               '<p>' + VIEW_ICON_SVG + '<span class="white-space_nowrap">' + view.toLocaleString() + '</span></p>' +
               '<p>' + COMMENT_ICON_SVG + '<span class="white-space_nowrap">' + comment.toLocaleString() + '</span></p>' +
             '</div>' +
@@ -642,6 +642,15 @@
           '</div>'
         // XSS対策のためテキストはDOM APIで設定する（タイトル・投稿者名にHTMLを解釈させない）
         root.querySelector('img.mx_auto').alt = item.title || ''
+        var registeredTime = root.querySelector('.nrn-registered-at')
+        var registeredDate = new Date(item.registeredAt)
+        if (Number.isFinite(registeredDate.getTime())) {
+          registeredTime.dateTime = registeredDate.toISOString()
+          var padTime = value => String(value).padStart(2, '0')
+          registeredTime.title = registeredDate.getFullYear() + '/' + padTime(registeredDate.getMonth() + 1) + '/' + padTime(registeredDate.getDate()) + ' ' + padTime(registeredDate.getHours()) + ':' + padTime(registeredDate.getMinutes())
+          var age = Date.now() - registeredDate.getTime()
+          if (age >= 0 && age < 86400000) registeredTime.classList.add('nrn-recent-post')
+        }
         var titleA = root.querySelector('.nrn-title-anchor')
         titleA.textContent = item.title || ''
         titleA.classList.add('nrn-movie-title')
@@ -1083,6 +1092,18 @@
     top: -1.8em;
     white-space: nowrap;
   }
+}
+/* Injected cards do not carry the site's data-anchor attribute. Keep their NG
+   actions above the card at every width, clear of the preview's mute control. */
+[data-nrn-autofill="true"] > .nrn-action-pane {
+  top: auto;
+  bottom: 100%;
+  width: max-content;
+  max-width: 100%;
+  box-sizing: border-box;
+}
+.nrn-registered-at.nrn-recent-post {
+  color: var(--colors-text-on-layer-accent-lust, #ff3333);
 }
 /* 詳細情報はクリックで開閉する。マウスがカード外へ移動しても閉じない。 */
 .nrn-parsed {
