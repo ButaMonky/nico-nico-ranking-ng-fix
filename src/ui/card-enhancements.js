@@ -57,7 +57,7 @@
       }
       return {labels, fields, titleTerms, nameTerms, tagTerms}
     }
-    function ownerLink(doc, owner, native) {
+    function ownerLink(doc, owner, native, movie) {
       const identity = OwnerEvidence.normalize(owner)
       if (identity && !OwnerEvidence.same(identity, OwnerEvidence.fromUrl(native?.href))) native = null
       const url = owner?.url || native?.href
@@ -71,8 +71,9 @@
         ? 'https://secure-dcdn.cdn.nimg.jp/nicoaccount/usericon/' + Math.floor(owner.id / 10000) + '/' + owner.id + '.jpg' : blankIcon)
       image.addEventListener('error', () => { if (image.src !== blankIcon) image.src = blankIcon }, {once:true})
       const name = doc.createElement('span'); name.className = 'nrn-owner-name'
-      name.textContent = knownName || '投稿者情報なし'
-      if (!owner || !knownName || /投稿者非公開|削除済み|退会済み/.test(knownName)) link.classList.add('nrn-owner-unavailable')
+      name.textContent = knownName || (movie?._nrnOwnerNamePending ? '投稿者名を確認中' : '投稿者名不明')
+      if (!owner || !knownName) link.classList.add('nrn-owner-unavailable')
+      if (movie?._nrnOwnerNameSource === 'nicoad') link.title = '広告情報に残る投稿者名（現在の名前とは異なる場合があります）'
       link.append(image, name)
       return link
     }
@@ -104,10 +105,10 @@
         nativeOwner?.classList.add('nrn-native-owner')
         const container = root.movieInfo.elem.querySelector('.nrn-contributor-container')
         const owner = movie.contributor
-        const signature = JSON.stringify([owner?.type, owner?.id, owner?.name, owner?.ngName])
+        const signature = JSON.stringify([owner?.type, owner?.id, owner?.name, owner?.ngName,movie._nrnOwnerNamePending,movie._nrnOwnerNameSource])
         if (container && (movie.metadata.ownerId === 'known' || movie.thumbInfoDone) && (ownerSignature !== signature || !container.querySelector('.nrn-owner-row img'))) {
           const existing = container.querySelector('.nrn-contributor-link')
-          const link = ownerLink(doc, owner?.type === 'unknown' ? null : owner, nativeOwner)
+          const link = ownerLink(doc, owner?.type === 'unknown' ? null : owner, nativeOwner, movie)
           if (existing) {
             if (existing.classList.contains('nrn-ng-id-contributor-link')) link.classList.add('nrn-ng-id-contributor-link')
             existing.replaceWith(link)

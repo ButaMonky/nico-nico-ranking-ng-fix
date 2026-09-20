@@ -6,7 +6,7 @@
 // @match        *://www.nicovideo.jp/ranking*
 // @match        *://www.nicovideo.jp/search/*
 // @match        *://www.nicovideo.jp/tag/*
-// @version      160.13
+// @version      160.14
 // @grant        unsafeWindow
 // @grant        GM_getValue
 // @grant        GM_setValue
@@ -202,7 +202,7 @@
 
   // This facade is scoped to this userscript; other scripts keep their console.
   var nrnConsoleConfig = null
-  var NRN_VERSION = '160.13'
+  var NRN_VERSION = '160.14'
   var nrnNativeConsole = globalThis.console
   var nrnConsoleCounts = {warnings:0,errors:0}
   var nrnSetConsoleConfig = function(config) { nrnConsoleConfig = config }
@@ -740,7 +740,7 @@
         return {ok:res.ok, status:res.status, statusText:res.statusText, url:res.url,
           text:async () => body, json:async () => JSON.parse(body)};
       } catch (error) {
-        finish(timedOut ? 'timeout' : controller.signal.aborted ? 'aborted' : 'network');
+        finish(timedOut || externalSignal?.reason === 'owner-name-deadline' ? 'timeout' : controller.signal.aborted ? 'aborted' : 'network');
         throw error;
       } finally { clearTimeout(timer); externalSignal?.removeEventListener('abort', abort); }
     }
@@ -1691,7 +1691,7 @@
       },
       get thumbInfoDone() { return this._thumbInfoDone },
       get metadataSettled() {
-        return this.thumbInfoDone || MetadataReadiness.ready(this,this._metadataConfig)
+        return !this._nrnOwnerNamePending && (this.thumbInfoDone || MetadataReadiness.ready(this,this._metadataConfig))
       },
       requestDetails(descriptionOnly) {
         if (descriptionOnly ? this._descriptionRequested : this._detailsRequested) return
@@ -1824,6 +1824,36 @@
       return null
     }
     const same = (a,b) => a && b && a.type === b.type && a.id === b.id
+    function nicoadName(id,data,owner) {
+      // This endpoint has no trustworthy user/channel discriminator. Require a
+      // separately established user identity, even when the numeric IDs match.
+      if (!owner || owner.type !== 'user' || data?.id !== id || !/^(sm|so|nm)[0-9]+$/.test(id)) return null
+      if (typeof data.ownerName !== 'string' || !data.ownerName.trim()) return null
+      if (data.targetUrl != null) {
+        try {
+          const url = new URL(data.targetUrl)
+          if (url.origin !== 'https://www.nicovideo.jp' || url.pathname !== '/watch/' + id) return null
+        } catch (_) { return null }
+      }
+      const candidate = normalize({type:'user',id:data.ownerId,name:data.ownerName})
+      return same(owner,candidate) ? candidate : null
+    }
+    function initialDocument(doc) {
+      const owners = new Map(), conflicts = new Set()
+      try {
+        const value = JSON.parse(doc.querySelector('meta[name="server-response"]')?.getAttribute('content') || 'null')
+        const items = value?.data?.response?.$getSearchVideoV2?.data?.items
+        if (!Array.isArray(items)) return owners
+        for (const item of items) {
+          if (!item || typeof item.id !== 'string' || !/^(sm|so|nm)[0-9]+$/.test(item.id)) continue
+          const owner = normalize(item.owner), previous = owners.get(item.id)
+          if (!owner || conflicts.has(item.id)) continue
+          if (previous && !same(previous,owner)) { owners.delete(item.id);conflicts.add(item.id);continue }
+          owners.set(item.id,previous ? {...owner,name:previous.name ?? owner.name} : owner)
+        }
+      } catch (_) {}
+      return owners
+    }
     function register(root,item) {
       if (root.dataset.decorationVideoId === item.id) injected.set(root,{id:item.id,owner:normalize(item.owner)})
     }
@@ -1851,7 +1881,7 @@
       if (!owners.length || owners.some(owner => !same(owner,owners[0]))) return null
       return owners[0]
     }
-    return {normalize,fromUrl,fromRow,register,same}
+    return {normalize,fromUrl,fromRow,register,same,nicoadName,initialDocument}
   })()
   var ThumbInfoListener = (function() {
     var createTagBuilder = function(config) {
@@ -1907,14 +1937,37 @@
       return builders.get(movies)
     }
     function selectOwner(movie, getContributorBy) {
-      const owner = movie._nrnDetailContributor || movie._nrnSearchContributor
+      let owner = movie._nrnDetailContributor || movie._nrnSearchContributor
       movie._nrnContributorSource = movie._nrnDetailContributor ? 'detail' : owner ? 'search' : 'unknown'
+      movie._nrnOwnerNameSource = owner?.name != null ? movie._nrnContributorSource : 'unknown'
+      const search = movie._nrnSearchContributor
+      if (owner && OwnerEvidence.same(owner,search)) {
+        if (owner.name === null && search.name !== null) movie._nrnOwnerNameSource = 'search'
+        owner = {...owner,name:owner.name ?? search.name,visibility:owner.visibility ?? search.visibility}
+      }
+      const supplement = movie._nrnOwnerNameSupplement
+      if (owner?.name === null && OwnerEvidence.nicoadName(movie.id,supplement,owner)) {
+        owner = {...owner,name:supplement.ownerName.trim()}
+        movie._nrnOwnerNameSource = 'nicoad'
+      }
       movie.setOwnerKnowledge(owner || null)
       const selected = owner ? getContributorBy(owner,movie._nrnContributorSource) : Contributor.NULL
       if (movie.contributor !== selected) movie.contributor = selected
       movie.metadataChanged()
     }
     return {
+      forOwnerName(movies) {
+        const getContributorBy = builder(movies)
+        return function(id,data,fetchedAt = Date.now()) {
+          const movie = movies.get(id)
+          const owner = movie?._nrnDetailContributor || movie?._nrnSearchContributor
+          if (!movie || !OwnerEvidence.nicoadName(id,data,owner)
+              || !Number.isFinite(fetchedAt) || fetchedAt > Date.now() || Date.now()-fetchedAt > 600000) return false
+          movie._nrnOwnerNameSupplement = {id,ownerId:data.ownerId,ownerName:data.ownerName.trim(),fetchedAt}
+          selectOwner(movie,getContributorBy)
+          return true
+        }
+      },
       forSearch(movies) {
         const getContributorBy = builder(movies)
         return function(id, evidence) {
@@ -1938,6 +1991,7 @@
         var getContributorBy = builder(movies)
         return function(thumbInfo) {
           var m = movies.get(thumbInfo.id)
+          m._nrnDetailFetchedAt = Number.isFinite(thumbInfo.fetchedAt) && thumbInfo.fetchedAt <= Date.now() ? thumbInfo.fetchedAt : Date.now()
           if (m.error && m.error.type !== 'NO_ERROR') m.error = Movie.NO_ERROR
           if (typeof thumbInfo.description === 'string') m.description = thumbInfo.description
           if (Array.isArray(thumbInfo.tags)) m.tags = getTagsBy(thumbInfo.tags)
@@ -5560,7 +5614,7 @@ html[data-nrn-ui-theme="dark"] .nrn-contributor-ng-name-button:hover {
           if (this._disposed || root.dataset.nrnAdDecorated === 'true') return
           var diagnostics = this._diagnostics
           var ownerPage = this
-          var json = await Network.ads((diagnostics?.queueKey || '') + ':decoration:' + videoId, async function() {
+          var json = this._ownerNames ? await this._ownerNames.getData(videoId) : await Network.ads((diagnostics?.queueKey || '') + ':decoration:' + videoId, async function() {
             if (ownerPage._disposed) return null
             var res = await Network.fetchResponse('https://api.nicoad.nicovideo.jp/v1/contents/video/' + videoId, {credentials:'omit',signal:ownerPage._abortController?.signal}, 10000, {run:diagnostics,kind:'adsDecoration'})
             if (!res.ok) throw new Error('広告 HTTP ' + res.status)
@@ -6999,7 +7053,7 @@ div:has(> div > a[data-anchor-page="ranking_genre"][href^="/watch/"] > div > p),
     const clone = value => JSON.parse(JSON.stringify(value))
     const number = value => typeof value === 'number' && Number.isFinite(value) ? Math.max(0,Math.round(value)) : null
     const fields = ['ownerId','ownerType','ownerName','ownerVisibility','tags','lockedTags','description']
-    const kinds = ['detail','page','snapshot','adsThanks','adsDecoration','other']
+    const kinds = ['detail','page','snapshot','adsThanks','adsDecoration','ownerName','other']
     const outcomes = ['ok','http','network','timeout','aborted','invalid','apiFailure']
     const phases = ['starting','waiting-dom','initial-ng','validating-api','fetching','ng-check','adding','completed','stopped','error','disabled','disposed']
     const runtimeKeys = ['visibleTotal','visibleOriginal','visibleInjected','originalNg','injectedNg','pending',
@@ -7046,7 +7100,11 @@ div:has(> div > a[data-anchor-page="ranking_genre"][href^="/watch/"] > div > p),
         const plan = {total:0,readyWithoutRequest:0,cacheOnly:0,requestedVideos:attempted.size,queued:queue?._pendingIds?.length || 0,terminalUnresolved:0,awaitingRequired:0}
         const states = Object.fromEntries(fields.map(field => [field,{unknown:0,known:0,failed:0}]))
         const missing = Object.fromEntries(fields.map(field => [field,0]))
+        const ownerNameRecovery = {known:0,nicoad:0,pending:0,accepted:0,rejected:0,failed:0,untyped:0,budget:0,cached:0}
         for (const movie of movies?._idToMovie?.values() || []) {
+          if (movie.metadata.ownerName === 'known') ownerNameRecovery.known++
+          if (movie._nrnOwnerNameSource === 'nicoad') ownerNameRecovery.nicoad++
+          if (Object.hasOwn(ownerNameRecovery,movie._nrnOwnerNameStatus)) ownerNameRecovery[movie._nrnOwnerNameStatus]++
           plan.total++
           const required = MetadataReadiness.required(movie,config)
           let ready = true
@@ -7062,7 +7120,7 @@ div:has(> div > a[data-anchor-page="ranking_genre"][href^="/watch/"] > div > p),
             else if (ready) plan.readyWithoutRequest++
           }
         }
-        return {detailPlan:plan,fieldStates:states,missingRequired:missing}
+        return {detailPlan:plan,fieldStates:states,missingRequired:missing,ownerNameRecovery}
       }
       function snapshot() {
         if (closed) return clone(frozen)
@@ -7836,7 +7894,7 @@ div:has(> div > a[data-anchor-page="ranking_genre"][href^="/watch/"] > div > p),
       }
       return {labels, fields, titleTerms, nameTerms, tagTerms}
     }
-    function ownerLink(doc, owner, native) {
+    function ownerLink(doc, owner, native, movie) {
       const identity = OwnerEvidence.normalize(owner)
       if (identity && !OwnerEvidence.same(identity, OwnerEvidence.fromUrl(native?.href))) native = null
       const url = owner?.url || native?.href
@@ -7850,8 +7908,9 @@ div:has(> div > a[data-anchor-page="ranking_genre"][href^="/watch/"] > div > p),
         ? 'https://secure-dcdn.cdn.nimg.jp/nicoaccount/usericon/' + Math.floor(owner.id / 10000) + '/' + owner.id + '.jpg' : blankIcon)
       image.addEventListener('error', () => { if (image.src !== blankIcon) image.src = blankIcon }, {once:true})
       const name = doc.createElement('span'); name.className = 'nrn-owner-name'
-      name.textContent = knownName || '投稿者情報なし'
-      if (!owner || !knownName || /投稿者非公開|削除済み|退会済み/.test(knownName)) link.classList.add('nrn-owner-unavailable')
+      name.textContent = knownName || (movie?._nrnOwnerNamePending ? '投稿者名を確認中' : '投稿者名不明')
+      if (!owner || !knownName) link.classList.add('nrn-owner-unavailable')
+      if (movie?._nrnOwnerNameSource === 'nicoad') link.title = '広告情報に残る投稿者名（現在の名前とは異なる場合があります）'
       link.append(image, name)
       return link
     }
@@ -7883,10 +7942,10 @@ div:has(> div > a[data-anchor-page="ranking_genre"][href^="/watch/"] > div > p),
         nativeOwner?.classList.add('nrn-native-owner')
         const container = root.movieInfo.elem.querySelector('.nrn-contributor-container')
         const owner = movie.contributor
-        const signature = JSON.stringify([owner?.type, owner?.id, owner?.name, owner?.ngName])
+        const signature = JSON.stringify([owner?.type, owner?.id, owner?.name, owner?.ngName,movie._nrnOwnerNamePending,movie._nrnOwnerNameSource])
         if (container && (movie.metadata.ownerId === 'known' || movie.thumbInfoDone) && (ownerSignature !== signature || !container.querySelector('.nrn-owner-row img'))) {
           const existing = container.querySelector('.nrn-contributor-link')
-          const link = ownerLink(doc, owner?.type === 'unknown' ? null : owner, nativeOwner)
+          const link = ownerLink(doc, owner?.type === 'unknown' ? null : owner, nativeOwner, movie)
           if (existing) {
             if (existing.classList.contains('nrn-ng-id-contributor-link')) link.classList.add('nrn-ng-id-contributor-link')
             existing.replaceWith(link)
@@ -7951,7 +8010,87 @@ a.nrn-parsed[data-anchor-detail="nicoad"] > .nrn-movie-info-toggle { background:
 `
     return {attach, reasons, highlight, ownerLink, css}
   })()
+  // The nicoad content endpoint can retain an account name after other sources
+  // stop returning it. Its numeric ownerId alone does not establish owner type.
+  var OwnerNameSource = (function() {
+    let sequence = 0
+    function create(movies,diagnostics) {
+      const scope = 'owner-name-' + ++sequence, responses = new Map(), attempted = new Set()
+      const abort = new AbortController(), apply = ThumbInfoListener.forOwnerName(movies)
+      let disposed = false, extraRequests = 0
+      function getData(id,kind = 'adsDecoration') {
+        if (disposed || !/^(sm|so|nm)[0-9]+$/.test(id)) return Promise.resolve(null)
+        if (responses.has(id)) return responses.get(id)
+        const controller = new AbortController()
+        let expired = false, timer, cancel
+        const deadline = new Promise((resolve,reject) => {
+          cancel = () => { expired = true;controller.abort();reject(new Error('owner content cancelled')) }
+          abort.signal.addEventListener('abort',cancel,{once:true})
+          timer = setTimeout(() => {
+            expired = true;controller.abort('owner-name-deadline');reject(new Error('owner content deadline'))
+          },8000)
+        })
+        const transport = Network.ads(scope + ':' + id, async function() {
+          if (disposed || expired) return null
+          const url = 'https://api.nicoad.nicovideo.jp/v1/contents/video/' + id
+          const res = await Network.fetchResponse(url,{credentials:'omit',signal:controller.signal},8000,{run:diagnostics,kind})
+          if (disposed || expired) return null
+          if (!res.ok) throw new Error('owner content HTTP failure')
+          try {
+            if (res.url && res.url !== url) throw new Error('unexpected content URL')
+            const json = await res.json(), data = json?.data
+            if (json?.meta?.status != null && json.meta.status !== 200) throw new Error('content status failure')
+            if (!data || data.id !== id) throw new Error('content identity mismatch')
+            // Never keep raw response objects or unrelated fields in our cache.
+            return {data:{id:data.id,ownerId:data.ownerId,ownerName:data.ownerName,
+              targetUrl:data.targetUrl,decoration:data.decoration,totalPoint:data.totalPoint},fetchedAt:Date.now()}
+          } catch (error) { diagnostics?.validationFailure(kind,'run','invalid'); throw error }
+        })
+        const promise = Promise.race([transport,deadline]).finally(() => {
+          clearTimeout(timer);abort.signal.removeEventListener('abort',cancel)
+        }).then(result => {
+          if (disposed || !result) return null
+          if (apply(id,result.data,result.fetchedAt)) api.onRecovered?.(id)
+          return result
+        })
+        responses.set(id,promise)
+        return promise
+      }
+      function request(list) {
+        if (disposed) return
+        for (const movie of list) {
+          if (movie.metadata.ownerName === 'known' || movie._nrnOwnerNamePending) continue
+          if (movie.ng && !movie._detailsRequested) continue
+          const identity = movie._nrnDetailContributor || movie._nrnSearchContributor
+          if (!identity || identity.type !== 'user') { movie._nrnOwnerNameStatus = 'untyped'; continue }
+          if (!movie.thumbInfoDone && !MetadataReadiness.ready(movie,movies.config)) continue
+          if (attempted.has(movie.id)) continue
+          if (!responses.has(movie.id) && extraRequests >= 64) { movie._nrnOwnerNameStatus = 'budget'; continue }
+          if (!responses.has(movie.id)) extraRequests++
+          attempted.add(movie.id)
+          movie._nrnOwnerNamePending = true
+          movie._nrnOwnerNameStatus = 'pending'
+          movie.metadataChanged()
+          getData(movie.id,'ownerName').then(result => {
+            if (disposed) return
+            movie._nrnOwnerNameStatus = result && apply(movie.id,result.data,result.fetchedAt) ? 'accepted' : 'rejected'
+          },() => { if (!disposed) movie._nrnOwnerNameStatus = 'failed' }).finally(() => {
+            movie._nrnOwnerNamePending = false
+            if (!disposed) movie.metadataChanged()
+          })
+        }
+      }
+      const api = {getData,request,dispose() {
+        disposed = true;abort.abort();responses.clear();attempted.clear()
+        api.onRecovered = null
+        for (const movie of movies._idToMovie.values()) movie._nrnOwnerNamePending = false
+      }}
+      return api
+    }
+    return {create}
+  })()
   var Main = (function() {
+    var initialDocumentUrl = location.href
     var MAINTENANCE_MANIFEST = Object.freeze({
       version:NRN_VERSION,
       principles:[
@@ -8029,6 +8168,7 @@ a.nrn-parsed[data-anchor-detail="nicoad"] > .nrn-movie-info-toggle { background:
           gmXmlHttpRequest(),
           movies.config.thumbInfoConcurrency.value, diagnostics)
         .on('completed', function(info) {
+          info = {...info,fetchedAt:Date.now()}
           recentDetails.delete(info.id)
           recentDetails.set(info.id, {info:info, at:Date.now()})
           if (recentDetails.size > 512) recentDetails.delete(recentDetails.keys().next().value)
@@ -8067,15 +8207,18 @@ a.nrn-parsed[data-anchor-detail="nicoad"] > .nrn-movie-info-toggle { background:
             if (movie.thumbInfoDone) diagnostics?.cache(id,'recent')
           }
         }
+        request.restoreCachedDetails?.(allIds,'通信前')
         var pendingIds = allIds.filter(function(id) {
           var movie = movies.get(id)
           return movie && !movie.thumbInfoDone && !MetadataReadiness.ready(movie,movies.config)
         })
         thumbInfo.request(pendingIds, prefer)
+        request.ownerNames?.request(allIds.map(id => movies.get(id)))
       }
       request.dispose = function() {
         disposed = true
         thumbInfo.dispose()
+        request.ownerNames?.dispose()
         diagnostics?.close()
         movies.config.thumbInfoConcurrency.off('changed',updateConcurrency)
         for (var key of MetadataReadiness.settings) movies.config[key].off('changed',settingsChanged)
@@ -8098,7 +8241,9 @@ a.nrn-parsed[data-anchor-detail="nicoad"] > .nrn-movie-info-toggle { background:
       var applySearchOwner = ThumbInfoListener.forSearch(movies)
       var movieViewModes = new MovieViewModes(config)
       var requestThumbInfo = getThumbInfoRequester(movies, movieViewModes, diagnostics)
+      var ownerNames = requestThumbInfo.ownerNames = OwnerNameSource.create(movies,diagnostics)
       return {
+        ownerNames,
         diagnostics,
         config,
         movies,
@@ -8112,6 +8257,7 @@ a.nrn-parsed[data-anchor-detail="nicoad"] > .nrn-movie-info-toggle { background:
             return new Movie(r.movie.id, r.movie.title)
           }))
           for (var row of resultsOfParsing) {
+            if (row.rootElem.dataset.decorationVideoId === row.movie.id) applySearchOwner(row.movie.id,this.initialOwners?.get(row.movie.id))
             applySearchOwner(row.movie.id, OwnerEvidence.fromRow(row))
             var count = Number(row.rootElem.dataset.nrnPageContributorCount)
             if (Number.isFinite(count) && count > 0) movies.get(row.movie.id).setPageContributorCount(count)
@@ -9583,49 +9729,35 @@ a.nrn-parsed[data-anchor-detail="nicoad"] > .nrn-movie-info-toggle { background:
 
         return new Promise(function(resolve) {
           var done = false
-          var remaining = new Set(ids.filter(function(id) {
-            var movie = model.movies.get(id)
-            return movie && !movie.metadataSettled
-          }))
-          if (!remaining.size) {
-            resolve(true)
-            return
-          }
-
-          var listeners = new Map()
+          var listeners = new Map(), checking = false
           var cleanup = function() {
             clearTimeout(timer)
             for (var [movie,listener] of listeners) movie.off('metadataChanged',listener)
             listeners.clear()
           }
           var finish = function() {
-            if (!done && remaining.size === 0) {
-              done = true
-              cleanup()
-              resolve(true)
-            }
+            if (done || checking) return
+            checking = true
+            // Metadata changes also schedule dependent owner-name work. Let that
+            // scheduling run, then recheck every video instead of deleting it early.
+            Promise.resolve().then(function() {
+              checking = false
+              if (done || ids.some(id => model.movies.get(id) && !model.movies.get(id).metadataSettled)) return
+              done = true;cleanup();resolve(true)
+            })
           }
-
-          remaining.forEach(function(id) {
+          ids.forEach(function(id) {
             var movie = model.movies.get(id)
-            if (!movie) {
-              remaining.delete(id)
-              return
-            }
-            var listener = function() {
-              if (!movie.metadataSettled) return
-              remaining.delete(id)
-              finish()
-            }
-            listeners.set(movie,listener)
-            movie.on('metadataChanged',listener)
+            if (!movie) return
+            listeners.set(movie,finish)
+            movie.on('metadataChanged',finish)
           })
 
           var timer = setTimeout(function() {
             if (done) return
             done = true
             cleanup()
-            console.warn(LOG, '詳細情報待機タイムアウト:', [...remaining])
+            console.warn(LOG, '詳細情報待機タイムアウト:', ids.filter(id => !model.movies.get(id)?.metadataSettled))
             resolve(false)
           }, timeoutMs)
           finish()
@@ -10810,6 +10942,9 @@ a.nrn-parsed[data-anchor-detail="nicoad"] > .nrn-movie-info-toggle { background:
       }
 
       var applyThumbInfoFromCache = ThumbInfoListener.forCompleted(model.movies)
+      var applyOwnerNameFromCache = ThumbInfoListener.forOwnerName(model.movies)
+      var checkedDetailCacheIds = new Set()
+      var checkedOwnerNameCache = new Map()
 
       var restoreCachedMovieDetails = function(ids, reason) {
         if (!model.config.sessionDetailCacheEnabled.value) {
@@ -10822,6 +10957,20 @@ a.nrn-parsed[data-anchor-detail="nicoad"] > .nrn-movie-info-toggle { background:
         var misses = 0
 
         ;[...new Set(ids)].forEach(function(id) {
+          const existingMovie = model.movies.get(id)
+          if (existingMovie) {
+            const identity = existingMovie._nrnDetailContributor || existingMovie._nrnSearchContributor
+            const identityKey = identity ? identity.type + ':' + identity.id : 'unknown'
+            if (existingMovie.metadata.ownerName !== 'known' && checkedOwnerNameCache.get(id) !== identityKey) {
+              checkedOwnerNameCache.set(id,identityKey)
+              const cachedOwner = detailCache.get(cacheKeyForMovie(id))
+              const name = cachedOwner?.id === id ? cachedOwner.ownerNameSupplement : null
+              if (name && Number.isFinite(name.fetchedAt) && applyOwnerNameFromCache(id,name,name.fetchedAt)) existingMovie._nrnOwnerNameStatus = 'cached'
+            }
+          }
+          if (existingMovie?.thumbInfoDone) return
+          if (checkedDetailCacheIds.has(id)) return
+          checkedDetailCacheIds.add(id)
           var key = cacheKeyForMovie(id)
           var cached = detailCache.get(key)
           if (cached && (cached.id !== id || !cached.metadata
@@ -10844,6 +10993,7 @@ a.nrn-parsed[data-anchor-detail="nicoad"] > .nrn-movie-info-toggle { background:
           try {
             applyThumbInfoFromCache({
               id: id,
+              fetchedAt:cached.cachedAt,
               description: cached.description,
               tags: cached.tags,
               contributor: cached.contributor ? {...cached.contributor,
@@ -10851,6 +11001,8 @@ a.nrn-parsed[data-anchor-detail="nicoad"] > .nrn-movie-info-toggle { background:
               title: cached.title || movie.title,
               error: {type:'NO_ERROR', message:'cache'}
             })
+            if (cached.ownerNameSupplement && Number.isFinite(cached.ownerNameSupplement.fetchedAt)
+                && applyOwnerNameFromCache(id,cached.ownerNameSupplement,cached.ownerNameSupplement.fetchedAt)) movie._nrnOwnerNameStatus = 'cached'
             restored++
             model.diagnostics?.cache(id,'session')
             cacheRestores++
@@ -10884,12 +11036,22 @@ a.nrn-parsed[data-anchor-detail="nicoad"] > .nrn-movie-info-toggle { background:
         }
         return {hits:hits, misses:misses, restored:restored}
       }
+      model.requestThumbInfo.restoreCachedDetails = restoreCachedMovieDetails
 
       var cacheMovieAfterCheck = function(id) {
         if (!model.config.sessionDetailCacheEnabled.value) return
         var movie = model.movies.get(id)
-        if (!movie || !movie.thumbInfoDone) return
-        if (movie.metadata.tags !== 'known' || movie.metadata.description !== 'known') return
+        if (!movie) return
+        if (!movie.thumbInfoDone || movie.metadata.tags !== 'known' || movie.metadata.description !== 'known') {
+          if (movie._nrnOwnerNameSupplement) {
+            const previous = detailCache.get(cacheKeyForMovie(id))
+            detailCache.set(cacheKeyForMovie(id),{...(previous?.id === id ? previous : {}),id,
+              ownerNameSupplement:{...movie._nrnOwnerNameSupplement},
+              cachedAt:previous?.id === id ? previous.cachedAt : movie._nrnOwnerNameSupplement.fetchedAt})
+            cacheWrites++
+          }
+          return
+        }
         if (movie.error && movie.error.type && movie.error.type !== 'NO_ERROR') return
         var payload = {
           id: id,
@@ -10897,16 +11059,18 @@ a.nrn-parsed[data-anchor-detail="nicoad"] > .nrn-movie-info-toggle { background:
           title: movie.title || '',
           description: movie.description || '',
           contributor: movie._nrnDetailContributor ? {...movie._nrnDetailContributor} : null,
+          ownerNameSupplement: movie._nrnOwnerNameSupplement ? {...movie._nrnOwnerNameSupplement} : null,
           tags: (movie.tags || []).map(function(t) {
             return {name:t.name, lock:Boolean(t.lock)}
           }),
           ng: Boolean(movie.ng),
           ngReasons: getMovieNgReasons(movie),
-          cachedAt: Date.now()
+          cachedAt: movie._nrnDetailFetchedAt || Date.now()
         }
         detailCache.set(cacheKeyForMovie(id), payload)
         cacheWrites++
       }
+      if (model.ownerNames) model.ownerNames.onRecovered = cacheMovieAfterCheck
 
       var logCacheCandidateAudit = function(items) {
         if (!model.config.sessionDetailCacheEnabled.value) return
@@ -12077,6 +12241,7 @@ a.nrn-parsed[data-anchor-detail="nicoad"] > .nrn-movie-info-toggle { background:
         }
 
         var initialSelfAdStarted = performance.now()
+        originalMovieIds.forEach(cacheMovieAfterCheck)
         if (selfAdRuleRequired()) {
           await ensureSelfAdChecks([...originalMovieIds], '初期ページ / NG条件必須')
           if (page._disposed) return
@@ -12442,6 +12607,8 @@ a.nrn-parsed[data-anchor-detail="nicoad"] > .nrn-movie-info-toggle { background:
     }
     var domContentLoaded = async function() {
       try {
+        const initialSourceUrl = initialDocumentUrl
+        let initialOwners = OwnerEvidence.initialDocument(document)
         const config = new Config(gmGetValue(), gmSetValue())
         await config.sync()
         if (typeof nrnSetConsoleConfig === 'function') nrnSetConsoleConfig(config)
@@ -12485,16 +12652,20 @@ a.nrn-parsed[data-anchor-detail="nicoad"] > .nrn-movie-info-toggle { background:
           try {
             if (config.useGetThumbInfo.value) setPendingMoviesInvisible()
             model = createModel(config)
+            model.initialOwners = initialSourceUrl === location.href ? initialOwners : null
+            initialOwners = null
             page._diagnostics = model.diagnostics
+            page._ownerNames = model.ownerNames
             ctrl = new Controller(config, page)
             ctrl.addListenersTo(page.doc.body)
             const view = createView(page, ctrl)
             view.addConfigBar()
             view.bindToModel(model)
             view.bindToWindow()
-            view.setupAndRequestThumbInfo(model)
+            view.setup(model)
             view.observeMutation(model)
             setupAutoFill(model, page, ctrl)
+            model.requestThumbInfo()
             console.log('[NicoNicoRankingNG SPA]', 'Start NG checks', page._sourceUrl)
           } catch (e) { console.error(e); Diagnostics.problem('routeSetup'); stop() }
         }

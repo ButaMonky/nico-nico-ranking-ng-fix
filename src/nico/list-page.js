@@ -666,7 +666,7 @@
           if (this._disposed || root.dataset.nrnAdDecorated === 'true') return
           var diagnostics = this._diagnostics
           var ownerPage = this
-          var json = await Network.ads((diagnostics?.queueKey || '') + ':decoration:' + videoId, async function() {
+          var json = this._ownerNames ? await this._ownerNames.getData(videoId) : await Network.ads((diagnostics?.queueKey || '') + ':decoration:' + videoId, async function() {
             if (ownerPage._disposed) return null
             var res = await Network.fetchResponse('https://api.nicoad.nicovideo.jp/v1/contents/video/' + videoId, {credentials:'omit',signal:ownerPage._abortController?.signal}, 10000, {run:diagnostics,kind:'adsDecoration'})
             if (!res.ok) throw new Error('広告 HTTP ' + res.status)

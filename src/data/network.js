@@ -34,7 +34,7 @@
         return {ok:res.ok, status:res.status, statusText:res.statusText, url:res.url,
           text:async () => body, json:async () => JSON.parse(body)};
       } catch (error) {
-        finish(timedOut ? 'timeout' : controller.signal.aborted ? 'aborted' : 'network');
+        finish(timedOut || externalSignal?.reason === 'owner-name-deadline' ? 'timeout' : controller.signal.aborted ? 'aborted' : 'network');
         throw error;
       } finally { clearTimeout(timer); externalSignal?.removeEventListener('abort', abort); }
     }

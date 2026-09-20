@@ -1099,49 +1099,35 @@
 
         return new Promise(function(resolve) {
           var done = false
-          var remaining = new Set(ids.filter(function(id) {
-            var movie = model.movies.get(id)
-            return movie && !movie.metadataSettled
-          }))
-          if (!remaining.size) {
-            resolve(true)
-            return
-          }
-
-          var listeners = new Map()
+          var listeners = new Map(), checking = false
           var cleanup = function() {
             clearTimeout(timer)
             for (var [movie,listener] of listeners) movie.off('metadataChanged',listener)
             listeners.clear()
           }
           var finish = function() {
-            if (!done && remaining.size === 0) {
-              done = true
-              cleanup()
-              resolve(true)
-            }
+            if (done || checking) return
+            checking = true
+            // Metadata changes also schedule dependent owner-name work. Let that
+            // scheduling run, then recheck every video instead of deleting it early.
+            Promise.resolve().then(function() {
+              checking = false
+              if (done || ids.some(id => model.movies.get(id) && !model.movies.get(id).metadataSettled)) return
+              done = true;cleanup();resolve(true)
+            })
           }
-
-          remaining.forEach(function(id) {
+          ids.forEach(function(id) {
             var movie = model.movies.get(id)
-            if (!movie) {
-              remaining.delete(id)
-              return
-            }
-            var listener = function() {
-              if (!movie.metadataSettled) return
-              remaining.delete(id)
-              finish()
-            }
-            listeners.set(movie,listener)
-            movie.on('metadataChanged',listener)
+            if (!movie) return
+            listeners.set(movie,finish)
+            movie.on('metadataChanged',finish)
           })
 
           var timer = setTimeout(function() {
             if (done) return
             done = true
             cleanup()
-            console.warn(LOG, '詳細情報待機タイムアウト:', [...remaining])
+            console.warn(LOG, '詳細情報待機タイムアウト:', ids.filter(id => !model.movies.get(id)?.metadataSettled))
             resolve(false)
           }, timeoutMs)
           finish()
@@ -2326,6 +2312,9 @@
       }
 
       var applyThumbInfoFromCache = ThumbInfoListener.forCompleted(model.movies)
+      var applyOwnerNameFromCache = ThumbInfoListener.forOwnerName(model.movies)
+      var checkedDetailCacheIds = new Set()
+      var checkedOwnerNameCache = new Map()
 
       var restoreCachedMovieDetails = function(ids, reason) {
         if (!model.config.sessionDetailCacheEnabled.value) {
@@ -2338,6 +2327,20 @@
         var misses = 0
 
         ;[...new Set(ids)].forEach(function(id) {
+          const existingMovie = model.movies.get(id)
+          if (existingMovie) {
+            const identity = existingMovie._nrnDetailContributor || existingMovie._nrnSearchContributor
+            const identityKey = identity ? identity.type + ':' + identity.id : 'unknown'
+            if (existingMovie.metadata.ownerName !== 'known' && checkedOwnerNameCache.get(id) !== identityKey) {
+              checkedOwnerNameCache.set(id,identityKey)
+              const cachedOwner = detailCache.get(cacheKeyForMovie(id))
+              const name = cachedOwner?.id === id ? cachedOwner.ownerNameSupplement : null
+              if (name && Number.isFinite(name.fetchedAt) && applyOwnerNameFromCache(id,name,name.fetchedAt)) existingMovie._nrnOwnerNameStatus = 'cached'
+            }
+          }
+          if (existingMovie?.thumbInfoDone) return
+          if (checkedDetailCacheIds.has(id)) return
+          checkedDetailCacheIds.add(id)
           var key = cacheKeyForMovie(id)
           var cached = detailCache.get(key)
           if (cached && (cached.id !== id || !cached.metadata
@@ -2360,6 +2363,7 @@
           try {
             applyThumbInfoFromCache({
               id: id,
+              fetchedAt:cached.cachedAt,
               description: cached.description,
               tags: cached.tags,
               contributor: cached.contributor ? {...cached.contributor,
@@ -2367,6 +2371,8 @@
               title: cached.title || movie.title,
               error: {type:'NO_ERROR', message:'cache'}
             })
+            if (cached.ownerNameSupplement && Number.isFinite(cached.ownerNameSupplement.fetchedAt)
+                && applyOwnerNameFromCache(id,cached.ownerNameSupplement,cached.ownerNameSupplement.fetchedAt)) movie._nrnOwnerNameStatus = 'cached'
             restored++
             model.diagnostics?.cache(id,'session')
             cacheRestores++
@@ -2400,12 +2406,22 @@
         }
         return {hits:hits, misses:misses, restored:restored}
       }
+      model.requestThumbInfo.restoreCachedDetails = restoreCachedMovieDetails
 
       var cacheMovieAfterCheck = function(id) {
         if (!model.config.sessionDetailCacheEnabled.value) return
         var movie = model.movies.get(id)
-        if (!movie || !movie.thumbInfoDone) return
-        if (movie.metadata.tags !== 'known' || movie.metadata.description !== 'known') return
+        if (!movie) return
+        if (!movie.thumbInfoDone || movie.metadata.tags !== 'known' || movie.metadata.description !== 'known') {
+          if (movie._nrnOwnerNameSupplement) {
+            const previous = detailCache.get(cacheKeyForMovie(id))
+            detailCache.set(cacheKeyForMovie(id),{...(previous?.id === id ? previous : {}),id,
+              ownerNameSupplement:{...movie._nrnOwnerNameSupplement},
+              cachedAt:previous?.id === id ? previous.cachedAt : movie._nrnOwnerNameSupplement.fetchedAt})
+            cacheWrites++
+          }
+          return
+        }
         if (movie.error && movie.error.type && movie.error.type !== 'NO_ERROR') return
         var payload = {
           id: id,
@@ -2413,16 +2429,18 @@
           title: movie.title || '',
           description: movie.description || '',
           contributor: movie._nrnDetailContributor ? {...movie._nrnDetailContributor} : null,
+          ownerNameSupplement: movie._nrnOwnerNameSupplement ? {...movie._nrnOwnerNameSupplement} : null,
           tags: (movie.tags || []).map(function(t) {
             return {name:t.name, lock:Boolean(t.lock)}
           }),
           ng: Boolean(movie.ng),
           ngReasons: getMovieNgReasons(movie),
-          cachedAt: Date.now()
+          cachedAt: movie._nrnDetailFetchedAt || Date.now()
         }
         detailCache.set(cacheKeyForMovie(id), payload)
         cacheWrites++
       }
+      if (model.ownerNames) model.ownerNames.onRecovered = cacheMovieAfterCheck
 
       var logCacheCandidateAudit = function(items) {
         if (!model.config.sessionDetailCacheEnabled.value) return
@@ -3593,6 +3611,7 @@
         }
 
         var initialSelfAdStarted = performance.now()
+        originalMovieIds.forEach(cacheMovieAfterCheck)
         if (selfAdRuleRequired()) {
           await ensureSelfAdChecks([...originalMovieIds], '初期ページ / NG条件必須')
           if (page._disposed) return

@@ -5,7 +5,7 @@
     const clone = value => JSON.parse(JSON.stringify(value))
     const number = value => typeof value === 'number' && Number.isFinite(value) ? Math.max(0,Math.round(value)) : null
     const fields = ['ownerId','ownerType','ownerName','ownerVisibility','tags','lockedTags','description']
-    const kinds = ['detail','page','snapshot','adsThanks','adsDecoration','other']
+    const kinds = ['detail','page','snapshot','adsThanks','adsDecoration','ownerName','other']
     const outcomes = ['ok','http','network','timeout','aborted','invalid','apiFailure']
     const phases = ['starting','waiting-dom','initial-ng','validating-api','fetching','ng-check','adding','completed','stopped','error','disabled','disposed']
     const runtimeKeys = ['visibleTotal','visibleOriginal','visibleInjected','originalNg','injectedNg','pending',
@@ -52,7 +52,11 @@
         const plan = {total:0,readyWithoutRequest:0,cacheOnly:0,requestedVideos:attempted.size,queued:queue?._pendingIds?.length || 0,terminalUnresolved:0,awaitingRequired:0}
         const states = Object.fromEntries(fields.map(field => [field,{unknown:0,known:0,failed:0}]))
         const missing = Object.fromEntries(fields.map(field => [field,0]))
+        const ownerNameRecovery = {known:0,nicoad:0,pending:0,accepted:0,rejected:0,failed:0,untyped:0,budget:0,cached:0}
         for (const movie of movies?._idToMovie?.values() || []) {
+          if (movie.metadata.ownerName === 'known') ownerNameRecovery.known++
+          if (movie._nrnOwnerNameSource === 'nicoad') ownerNameRecovery.nicoad++
+          if (Object.hasOwn(ownerNameRecovery,movie._nrnOwnerNameStatus)) ownerNameRecovery[movie._nrnOwnerNameStatus]++
           plan.total++
           const required = MetadataReadiness.required(movie,config)
           let ready = true
@@ -68,7 +72,7 @@
             else if (ready) plan.readyWithoutRequest++
           }
         }
-        return {detailPlan:plan,fieldStates:states,missingRequired:missing}
+        return {detailPlan:plan,fieldStates:states,missingRequired:missing,ownerNameRecovery}
       }
       function snapshot() {
         if (closed) return clone(frozen)

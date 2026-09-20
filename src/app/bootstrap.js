@@ -1,5 +1,7 @@
     var domContentLoaded = async function() {
       try {
+        const initialSourceUrl = initialDocumentUrl
+        let initialOwners = OwnerEvidence.initialDocument(document)
         const config = new Config(gmGetValue(), gmSetValue())
         await config.sync()
         if (typeof nrnSetConsoleConfig === 'function') nrnSetConsoleConfig(config)
@@ -43,16 +45,20 @@
           try {
             if (config.useGetThumbInfo.value) setPendingMoviesInvisible()
             model = createModel(config)
+            model.initialOwners = initialSourceUrl === location.href ? initialOwners : null
+            initialOwners = null
             page._diagnostics = model.diagnostics
+            page._ownerNames = model.ownerNames
             ctrl = new Controller(config, page)
             ctrl.addListenersTo(page.doc.body)
             const view = createView(page, ctrl)
             view.addConfigBar()
             view.bindToModel(model)
             view.bindToWindow()
-            view.setupAndRequestThumbInfo(model)
+            view.setup(model)
             view.observeMutation(model)
             setupAutoFill(model, page, ctrl)
+            model.requestThumbInfo()
             console.log('[NicoNicoRankingNG SPA]', 'Start NG checks', page._sourceUrl)
           } catch (e) { console.error(e); Diagnostics.problem('routeSetup'); stop() }
         }

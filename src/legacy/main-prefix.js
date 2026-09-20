@@ -1,4 +1,5 @@
   var Main = (function() {
+    var initialDocumentUrl = location.href
     var MAINTENANCE_MANIFEST = Object.freeze({
       version:NRN_VERSION,
       principles:[
@@ -76,6 +77,7 @@
           gmXmlHttpRequest(),
           movies.config.thumbInfoConcurrency.value, diagnostics)
         .on('completed', function(info) {
+          info = {...info,fetchedAt:Date.now()}
           recentDetails.delete(info.id)
           recentDetails.set(info.id, {info:info, at:Date.now()})
           if (recentDetails.size > 512) recentDetails.delete(recentDetails.keys().next().value)
@@ -114,15 +116,18 @@
             if (movie.thumbInfoDone) diagnostics?.cache(id,'recent')
           }
         }
+        request.restoreCachedDetails?.(allIds,'通信前')
         var pendingIds = allIds.filter(function(id) {
           var movie = movies.get(id)
           return movie && !movie.thumbInfoDone && !MetadataReadiness.ready(movie,movies.config)
         })
         thumbInfo.request(pendingIds, prefer)
+        request.ownerNames?.request(allIds.map(id => movies.get(id)))
       }
       request.dispose = function() {
         disposed = true
         thumbInfo.dispose()
+        request.ownerNames?.dispose()
         diagnostics?.close()
         movies.config.thumbInfoConcurrency.off('changed',updateConcurrency)
         for (var key of MetadataReadiness.settings) movies.config[key].off('changed',settingsChanged)
@@ -145,7 +150,9 @@
       var applySearchOwner = ThumbInfoListener.forSearch(movies)
       var movieViewModes = new MovieViewModes(config)
       var requestThumbInfo = getThumbInfoRequester(movies, movieViewModes, diagnostics)
+      var ownerNames = requestThumbInfo.ownerNames = OwnerNameSource.create(movies,diagnostics)
       return {
+        ownerNames,
         diagnostics,
         config,
         movies,
@@ -159,6 +166,7 @@
             return new Movie(r.movie.id, r.movie.title)
           }))
           for (var row of resultsOfParsing) {
+            if (row.rootElem.dataset.decorationVideoId === row.movie.id) applySearchOwner(row.movie.id,this.initialOwners?.get(row.movie.id))
             applySearchOwner(row.movie.id, OwnerEvidence.fromRow(row))
             var count = Number(row.rootElem.dataset.nrnPageContributorCount)
             if (Number.isFinite(count) && count > 0) movies.get(row.movie.id).setPageContributorCount(count)

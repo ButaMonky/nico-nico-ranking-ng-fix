@@ -70,3 +70,45 @@ test('repeated search evidence is idempotent and a late name can fill an empty o
  assert.equal(movie.contributor.name,'late name');assert.equal(changes,afterFirst+1);
  search('sm1',{type:'user',id:55,name:'late name'});assert.equal(changes,afterFirst+1);
 });
+
+test('a null detail name cannot erase a matching search name; identity conflicts never mix names',async()=>{
+ const h=await setup();h.config.ngUserNames.add('preserved');
+ h.search('sm1',{type:'user',id:55,name:'preserved account'});
+ h.detail(info('sm1',{type:'user',id:55,name:null}));
+ assert.equal(h.movies.get('sm1').contributor.name,'preserved account');assert.equal(h.movies.get('sm1').ng,true);
+ assert.equal(h.movies.get('sm1')._nrnDetailContributor.name,null,'raw detail provenance unchanged');
+ h.detail(info('sm1',{type:'user',id:66,name:null}));
+ assert.equal(h.movies.get('sm1').contributor.name,'');assert.equal(h.movies.get('sm1').metadata.ownerName,'unknown');
+});
+
+test('nicoad name is adopted only for a matching video and independently typed user identity',async()=>{
+ const h=await setup(),apply=ThumbInfoListener.forOwnerName(h.movies);
+ const response={id:'sm1',ownerId:'55',ownerName:'restored account'};
+ h.search('sm1',{ownerType:'hidden',type:'user',id:55,name:null});
+ assert.equal(apply('sm1',response),true);
+ const m=h.movies.get('sm1');assert.equal(m.contributor.name,'restored account');assert.equal(m.owner.visibility,'hidden');
+ assert.equal(m.metadata.ownerName,'known');assert.equal(m.metadata.tags,'unknown');assert.equal(m.thumbInfoDone,false);
+ h.config.ngUserNames.add('restored');assert.equal(m.ng,true);h.config.ngUserNames.clear();assert.equal(m.ng,false);
+ assert.equal(apply('sm2',{...response,id:'sm2'}),false,'unknown namespace cannot be inferred');
+ h.search('sm2',{type:'channel',id:55,name:null});assert.equal(apply('sm2',{...response,id:'sm2'}),false);
+ assert.equal(apply('sm1',{...response,id:'sm2'}),false);
+ assert.equal(apply('sm1',{...response,ownerId:'56'}),false);
+ h.detail(info('sm1',{type:'user',id:55,name:'authoritative'}));
+ assert.equal(m.contributor.name,'authoritative');
+});
+
+test('initial document owner rows reject duplicate identity conflicts and invalid records',()=>{
+ const items=[{id:'sm1',owner:{type:'user',id:55,name:null}},{id:'sm1',owner:{type:'user',id:66,name:'other'}},
+  {id:'sm2',owner:{ownerType:'hidden',type:'user',id:77,name:null}},{id:'bad',owner:{type:'user',id:55}},
+  {id:'sm3',owner:{type:'channel',ownerType:'user',id:55}}];
+ const doc={querySelector:()=>({getAttribute:()=>JSON.stringify({data:{response:{$getSearchVideoV2:{data:{items}}}}})})};
+ const result=OwnerEvidence.initialDocument(doc);assert.equal(result.has('sm1'),false);assert.equal(result.size,1);
+ assert.equal(result.get('sm2').visibility,'hidden');assert.equal(result.get('sm2').name,null);
+});
+
+test('expired supplemental names are not adopted and cache reads preserve original detail timestamps',async()=>{
+ const h=await setup();h.search('sm1',{type:'user',id:55,name:null});
+ assert.equal(ThumbInfoListener.forOwnerName(h.movies)('sm1',{id:'sm1',ownerId:55,ownerName:'old'},Date.now()-600001),false);
+ const fetchedAt=Date.now()-60000;h.detail({...info('sm1'),fetchedAt});
+ assert.equal(h.movies.get('sm1')._nrnDetailFetchedAt,fetchedAt);assert.equal(h.movies.get('sm1').metadata.ownerName,'unknown');
+});

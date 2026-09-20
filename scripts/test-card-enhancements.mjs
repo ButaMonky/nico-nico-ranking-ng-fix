@@ -83,7 +83,7 @@ try {
     const owner = fixtureEnhancements.ownerLink(document, null, null);
     document.body.append(owner); owner.id = 'missing-owner';
   });
-  assert.equal(await page.locator('#missing-owner').textContent(), '投稿者情報なし');
+  assert.equal(await page.locator('#missing-owner').textContent(), '投稿者名不明');
   assert.equal(await page.locator('#missing-owner').getAttribute('href'), null);
   assert.equal(await page.locator('#missing-owner.nrn-owner-unavailable img').count(), 1);
   await page.evaluate(async () => {
@@ -122,7 +122,7 @@ try {
   // Decoration API ownerName must never be presented as sponsorName.
   await page.evaluate(async () => {
     const fetchBefore=window.fetch;
-    window.fetch=async()=>({ok:true,text:async()=>JSON.stringify({data:{decoration:'gold',ownerName:'UPLOADER_NOT_ADVERTISER',totalPoint:17800}})});
+    window.fetch=async()=>({ok:true,text:async()=>JSON.stringify({data:{id:'sm999888777',decoration:'gold',ownerName:'UPLOADER_NOT_ADVERTISER',totalPoint:17800}})});
     try {
       const root=document.createElement('div'); root.innerHTML='<div><div class="nrn-thumb-anchor-wrap"></div></div>'; document.body.append(root);root.id='decoration-fixture';
       await fixturePage._applyAdDecoration(root,'sm999888777');

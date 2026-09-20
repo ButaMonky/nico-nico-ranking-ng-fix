@@ -9,7 +9,7 @@ function load(extra={}){
  const context=vm.createContext({URL,performance:{now:()=>now},console:{log:(...a)=>messages.push(a),warn:(...a)=>messages.push(a),error:(...a)=>messages.push(a)},window:{},...extra});
  const end=source.indexOf('  var MovieViewMode =');
  const lib=vm.runInContext(source.slice(0,end)+'return {Config,Movies,Movie,ThumbInfo,ThumbInfoListener,MetadataReadiness,console,nrnSetConsoleConfig,nrnNativeConsole,nrnConsoleCounts}; })()',context);
- Object.assign(context,lib,{NRN_VERSION:'160.13'});
+ Object.assign(context,lib,{NRN_VERSION:'160.14'});
  const begin=source.indexOf('  var Diagnostics ='),stop=source.indexOf('  var NewTabService =',begin);
  const Diagnostics=vm.runInContext(source.slice(begin,stop)+'; Diagnostics',context);
  return {...lib,Diagnostics,messages,advance:ms=>now+=ms};
@@ -30,7 +30,7 @@ test('diagnostic report omits personal strings, IDs, raw errors and URLs even in
  const text=h.Diagnostics.publish('SECRET_REASON');
  const all=JSON.stringify(h.messages)+text+JSON.stringify(h.Diagnostics.getHistory());
  assert.doesNotMatch(all,/SECRET|987654321|sm888881|private\.invalid/);
- assert.equal(JSON.parse(text).version,'160.13');
+ assert.equal(JSON.parse(text).version,'160.14');
  assert.equal(JSON.parse(text).current.detailPlan.readyWithoutRequest,1);
  assert.equal(JSON.parse(text).problemCounts.startup,1);
 });

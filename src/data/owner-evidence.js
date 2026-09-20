@@ -29,6 +29,36 @@
       return null
     }
     const same = (a,b) => a && b && a.type === b.type && a.id === b.id
+    function nicoadName(id,data,owner) {
+      // This endpoint has no trustworthy user/channel discriminator. Require a
+      // separately established user identity, even when the numeric IDs match.
+      if (!owner || owner.type !== 'user' || data?.id !== id || !/^(sm|so|nm)[0-9]+$/.test(id)) return null
+      if (typeof data.ownerName !== 'string' || !data.ownerName.trim()) return null
+      if (data.targetUrl != null) {
+        try {
+          const url = new URL(data.targetUrl)
+          if (url.origin !== 'https://www.nicovideo.jp' || url.pathname !== '/watch/' + id) return null
+        } catch (_) { return null }
+      }
+      const candidate = normalize({type:'user',id:data.ownerId,name:data.ownerName})
+      return same(owner,candidate) ? candidate : null
+    }
+    function initialDocument(doc) {
+      const owners = new Map(), conflicts = new Set()
+      try {
+        const value = JSON.parse(doc.querySelector('meta[name="server-response"]')?.getAttribute('content') || 'null')
+        const items = value?.data?.response?.$getSearchVideoV2?.data?.items
+        if (!Array.isArray(items)) return owners
+        for (const item of items) {
+          if (!item || typeof item.id !== 'string' || !/^(sm|so|nm)[0-9]+$/.test(item.id)) continue
+          const owner = normalize(item.owner), previous = owners.get(item.id)
+          if (!owner || conflicts.has(item.id)) continue
+          if (previous && !same(previous,owner)) { owners.delete(item.id);conflicts.add(item.id);continue }
+          owners.set(item.id,previous ? {...owner,name:previous.name ?? owner.name} : owner)
+        }
+      } catch (_) {}
+      return owners
+    }
     function register(root,item) {
       if (root.dataset.decorationVideoId === item.id) injected.set(root,{id:item.id,owner:normalize(item.owner)})
     }
@@ -56,5 +86,5 @@
       if (!owners.length || owners.some(owner => !same(owner,owners[0]))) return null
       return owners[0]
     }
-    return {normalize,fromUrl,fromRow,register,same}
+    return {normalize,fromUrl,fromRow,register,same,nicoadName,initialDocument}
   })()

@@ -126,7 +126,7 @@ test('self-ad name stays unknown until named owner arrives, then reuses sponsors
 async function restoreCache(h,cached) {
  h.config.sessionDetailCacheEnabled.value=true;
  const counters={cacheHits:0,cacheMisses:0,cacheRestores:0,cacheRestoreFailures:0};
- const context=vm.createContext({...counters,ThumbInfoListener:h.ThumbInfoListener,model:{config:h.config,movies:h.movies},
+ const context=vm.createContext({...counters,ThumbInfoListener:h.ThumbInfoListener,model:{config:h.config,movies:h.movies,requestThumbInfo(){}},
   page:{_disposed:false},LOG:'fixture',detailCache:{get:()=>cached,configure(){},diagnostics(){return{};}},
   console:{log(){},table(){},groupCollapsed(){},groupEnd(){},warn(){}}});
  const begin=source.indexOf('      var cacheKeyForMovie = function(id)'),end=source.indexOf('      var cacheMovieAfterCheck = function(id)',begin);
@@ -147,4 +147,13 @@ test('persistent cache preserves missing owner name and confirmed empty tags',as
  assert.equal(h.movie.metadata.ownerId,'known');assert.equal(h.movie.metadata.ownerName,'unknown');
  assert.equal(h.AdvancedNgRules.evaluateNode(h.movie,condition('contributorName','notExists')),false);
  assert.equal(h.AdvancedNgRules.evaluateNode(h.movie,condition('tag','notExists')),true);
+});
+
+test('recent raw details cannot block separately cached name evidence; cache timestamp and video must match',async()=>{
+ const h=await setup();h.search('sm1',{type:'user',id:12,name:null});h.detail(payload('sm1',{type:'unknown',id:-1,name:null}));
+ const supplement={id:'sm1',ownerId:12,ownerName:'restored',fetchedAt:Date.now()-1000};
+ await restoreCache(h,{id:'sm2',ownerNameSupplement:supplement});assert.equal(h.movie.metadata.ownerName,'unknown');
+ await restoreCache(h,{id:'sm1',ownerNameSupplement:{...supplement,fetchedAt:undefined}});assert.equal(h.movie.metadata.ownerName,'unknown');
+ await restoreCache(h,{id:'sm1',ownerNameSupplement:supplement});assert.equal(h.movie.contributor.name,'restored');
+ assert.equal(h.movie._nrnOwnerNameStatus,'cached');assert.equal(h.calls.length,0);
 });

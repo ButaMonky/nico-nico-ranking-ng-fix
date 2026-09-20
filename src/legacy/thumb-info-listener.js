@@ -52,14 +52,37 @@
       return builders.get(movies)
     }
     function selectOwner(movie, getContributorBy) {
-      const owner = movie._nrnDetailContributor || movie._nrnSearchContributor
+      let owner = movie._nrnDetailContributor || movie._nrnSearchContributor
       movie._nrnContributorSource = movie._nrnDetailContributor ? 'detail' : owner ? 'search' : 'unknown'
+      movie._nrnOwnerNameSource = owner?.name != null ? movie._nrnContributorSource : 'unknown'
+      const search = movie._nrnSearchContributor
+      if (owner && OwnerEvidence.same(owner,search)) {
+        if (owner.name === null && search.name !== null) movie._nrnOwnerNameSource = 'search'
+        owner = {...owner,name:owner.name ?? search.name,visibility:owner.visibility ?? search.visibility}
+      }
+      const supplement = movie._nrnOwnerNameSupplement
+      if (owner?.name === null && OwnerEvidence.nicoadName(movie.id,supplement,owner)) {
+        owner = {...owner,name:supplement.ownerName.trim()}
+        movie._nrnOwnerNameSource = 'nicoad'
+      }
       movie.setOwnerKnowledge(owner || null)
       const selected = owner ? getContributorBy(owner,movie._nrnContributorSource) : Contributor.NULL
       if (movie.contributor !== selected) movie.contributor = selected
       movie.metadataChanged()
     }
     return {
+      forOwnerName(movies) {
+        const getContributorBy = builder(movies)
+        return function(id,data,fetchedAt = Date.now()) {
+          const movie = movies.get(id)
+          const owner = movie?._nrnDetailContributor || movie?._nrnSearchContributor
+          if (!movie || !OwnerEvidence.nicoadName(id,data,owner)
+              || !Number.isFinite(fetchedAt) || fetchedAt > Date.now() || Date.now()-fetchedAt > 600000) return false
+          movie._nrnOwnerNameSupplement = {id,ownerId:data.ownerId,ownerName:data.ownerName.trim(),fetchedAt}
+          selectOwner(movie,getContributorBy)
+          return true
+        }
+      },
       forSearch(movies) {
         const getContributorBy = builder(movies)
         return function(id, evidence) {
@@ -83,6 +106,7 @@
         var getContributorBy = builder(movies)
         return function(thumbInfo) {
           var m = movies.get(thumbInfo.id)
+          m._nrnDetailFetchedAt = Number.isFinite(thumbInfo.fetchedAt) && thumbInfo.fetchedAt <= Date.now() ? thumbInfo.fetchedAt : Date.now()
           if (m.error && m.error.type !== 'NO_ERROR') m.error = Movie.NO_ERROR
           if (typeof thumbInfo.description === 'string') m.description = thumbInfo.description
           if (Array.isArray(thumbInfo.tags)) m.tags = getTagsBy(thumbInfo.tags)

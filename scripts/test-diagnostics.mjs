@@ -31,7 +31,7 @@ try {
  await page.addScriptTag({content:source});
  await page.waitForFunction(()=>window.__nrnDiagnostics?.snapshot().current?.initialProcessing);
  let s=await page.evaluate(()=>__nrnDiagnostics.snapshot());
- assert.equal(s.version,'160.13');assert.equal(s.current.network.run.detail.attempts,0);
+ assert.equal(s.version,'160.14');assert.equal(s.current.network.run.detail.attempts,0);
  assert.equal(s.current.detailPlan.readyWithoutRequest,1);assert.equal(s.current.fieldStates.tags.unknown,1);
  for(let i=0;i<10;i++)assert.equal(await page.evaluate(()=>__nrnDiagnostics.snapshot().current.detailPlan.readyWithoutRequest),1);
  await page.locator('.nrn-movie-info-toggle').first().click();
@@ -57,7 +57,7 @@ try {
  await frame.locator('#copyAnonymousDiagnostics').click();
  await frame.locator('#anonymousDiagnosticStatus').filter({hasText:'Ctrl+C'}).waitFor();
  const report=await frame.locator('#anonymousDiagnosticText').inputValue();
- assert.equal(JSON.parse(report).version,'160.13');assert.doesNotMatch(report,/PRIVATE|sm\d+|https?:|blob:|user_id/);
+ assert.equal(JSON.parse(report).version,'160.14');assert.doesNotMatch(report,/PRIVATE|sm\d+|https?:|blob:|user_id/);
  assert.deepEqual(await page.evaluate(()=>({requests:requests.length,fetches:fetchCalls,writes})),before);
  await page.evaluate(()=>{
   const nav=document.getElementById('test-settings').contentDocument.defaultView.navigator;
