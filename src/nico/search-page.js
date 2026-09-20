@@ -642,9 +642,13 @@
   font-size: 13px !important;
   font-weight: 400 !important;
 }
-.nrn-contributor-link {
+.nrn-contributor-link:not(.nrn-owner-row) {
   display: inline !important;
 }
+/* Legacy search does not provide the current site's visual utility classes. */
+.nrn-owner-row { display:inline-flex; align-items:center; gap:4px; min-width:0; font-weight:bold; }
+.nrn-owner-row img { width:24px; height:24px; min-width:24px; border-radius:50%; object-fit:cover; }
+.nrn-owner-row .nrn-owner-name { margin:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .nrn-user-ng-button {
   display: inline !important;
   margin-left: 4px !important;

@@ -6,7 +6,7 @@
 // @match        *://www.nicovideo.jp/ranking*
 // @match        *://www.nicovideo.jp/search/*
 // @match        *://www.nicovideo.jp/tag/*
-// @version      160.16
+// @version      160.17
 // @grant        unsafeWindow
 // @grant        GM_getValue
 // @grant        GM_setValue
@@ -202,7 +202,7 @@
 
   // This facade is scoped to this userscript; other scripts keep their console.
   var nrnConsoleConfig = null
-  var NRN_VERSION = '160.16'
+  var NRN_VERSION = '160.17'
   var nrnNativeConsole = globalThis.console
   var nrnConsoleCounts = {warnings:0,errors:0}
   var nrnSetConsoleConfig = function(config) { nrnConsoleConfig = config }
@@ -3477,7 +3477,7 @@ html[data-nrn-ui-theme="dark"] .nrn-movie-tag.nrn-locked-tag {
   background: transparent !important;
 }
 html[data-nrn-ui-theme="dark"] .nrn-movie-tag-link,
-html[data-nrn-ui-theme="dark"] .nrn-contributor-link {
+html[data-nrn-ui-theme="dark"] .nrn-contributor-link:not(.nrn-compact-owner) {
   color: var(--nrn-link) !important;
 }
 html[data-nrn-ui-theme="dark"] .nrn-contributor {
@@ -3559,7 +3559,6 @@ html[data-nrn-ui-theme="dark"] .nrn-contributor-ng-name-button:hover {
 `
     return {detect:detect, resolve:resolve, apply:apply, watch:watch, CSS:CSS}
   })()
-
   var NicoPage = (function() {
     var TOGGLE_OPEN_TEXT = '▼'
     var TOGGLE_CLOSE_TEXT = '▲'
@@ -5873,12 +5872,12 @@ html[data-nrn-ui-theme="dark"] .nrn-contributor-ng-name-button:hover {
   word-break: break-word;
 }
 .nrn-movie-tag-link,
-.nrn-contributor-link {
+.nrn-contributor-link:not(.nrn-owner-row) {
   color: #272a2f;
   text-decoration: none;
 }
 .nrn-movie-tag-link:hover,
-.nrn-contributor-link:hover {
+.nrn-contributor-link:not(.nrn-owner-row):hover {
   text-decoration: underline;
 }
 .nrn-tag-ng-button,
@@ -6225,7 +6224,7 @@ html[data-nrn-ui-theme="dark"] .nrn-contributor-ng-name-button:hover {
   font-size: 13px !important;
   font-weight: 400 !important;
 }
-.nrn-contributor-link {
+.nrn-contributor-link:not(.nrn-owner-row) {
   display: inline !important;
 }
 .nrn-user-ng-button {
@@ -6944,9 +6943,13 @@ div:has(> div > a[data-anchor-page="ranking_genre"][href^="/watch/"] > div > p),
   font-size: 13px !important;
   font-weight: 400 !important;
 }
-.nrn-contributor-link {
+.nrn-contributor-link:not(.nrn-owner-row) {
   display: inline !important;
 }
+/* Legacy search does not provide the current site's visual utility classes. */
+.nrn-owner-row { display:inline-flex; align-items:center; gap:4px; min-width:0; font-weight:bold; }
+.nrn-owner-row img { width:24px; height:24px; min-width:24px; border-radius:50%; object-fit:cover; }
+.nrn-owner-row .nrn-owner-name { margin:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .nrn-user-ng-button {
   display: inline !important;
   margin-left: 4px !important;
@@ -7850,7 +7853,7 @@ div:has(> div > a[data-anchor-page="ranking_genre"][href^="/watch/"] > div > p),
   // Composition root / application startup
   // ========================================================================
   var CardEnhancements = (function() {
-    const blankIcon = 'https://secure-dcdn.cdn.nimg.jp/nicoaccount/usericon/defaults/blank.jpg'
+    const blankIcon = 'https://img.nicoprofile.nimg.jp/usericon/defaults/blank.jpg'
     function highlight(node, terms) {
       if (!node) return
       const text = node.textContent, upper = text.toUpperCase()
@@ -7914,14 +7917,15 @@ div:has(> div > a[data-anchor-page="ranking_genre"][href^="/watch/"] > div > p),
       const url = owner?.url || native?.href
       const knownName = owner?.name || OwnerEvidence.nativeName(native?.querySelector('img')?.alt) || OwnerEvidence.nativeName(native?.textContent)
       const link = doc.createElement(url ? 'a' : 'span')
-      link.className = 'nrn-contributor-link nrn-owner-row'
+      link.className = 'hover:c_action.primaryAzure d_flex gap_x0_5 ai_center text-layer_mediumEm w_fit-content fs_base [@container_(max-width:_320px)]:fs_s nrn-contributor-link nrn-owner-row'
       if (url) { link.href = url; link.target = '_blank'; link.rel = 'noopener noreferrer' }
       const image = doc.createElement('img')
-      image.alt = ''; image.loading = 'lazy'; image.decoding = 'async'; image.width = image.height = 24
+      image.alt = ''; image.loading = 'lazy'; image.decoding = 'async'; image.fetchPriority = 'low'
+      image.className = 'bdr_full ov_hidden contain_content_size w_x3 min-w_x3 h_x3'
       image.src = native?.querySelector('img')?.src || (owner?.type === 'user' && Number(owner.id) > 0
         ? 'https://secure-dcdn.cdn.nimg.jp/nicoaccount/usericon/' + Math.floor(owner.id / 10000) + '/' + owner.id + '.jpg' : blankIcon)
       image.addEventListener('error', () => { if (image.src !== blankIcon) image.src = blankIcon }, {once:true})
-      const name = doc.createElement('span'); name.className = 'nrn-owner-name'
+      const name = doc.createElement('p'); name.className = 'fw_bold lc_1 nrn-owner-name'
       name.textContent = knownName || (movie?._nrnOwnerNamePending ? '投稿者名を確認中' : '投稿者名不明')
       if (!owner || !knownName) link.classList.add('nrn-owner-unavailable')
       if (movie?._nrnOwnerNameSource === 'nicoad') link.title = '広告情報に残る投稿者名（現在の名前とは異なる場合があります）'
@@ -7973,22 +7977,23 @@ div:has(> div > a[data-anchor-page="ranking_genre"][href^="/watch/"] > div > p),
           && (!nativeOwner || (OwnerEvidence.same(OwnerEvidence.normalize(owner),OwnerEvidence.fromUrl(nativeOwner.href)) && nativeName !== owner.name))
         nativeOwner?.classList.toggle('nrn-owner-replaced',Boolean(needsCompact))
         if (needsCompact) {
-          if (!compact || !root.elem.contains(compact)) {
-            compact?.remove();compact = doc.createElement('div');compact.className = 'nrn-compact-owner';compactSignature = ''
+          if (!compact || !root.elem.contains(compact) || compactSignature !== signature) {
+            const previous = compact
+            compact = ownerLink(doc,owner,nativeOwner,movie);compact.classList.add('nrn-compact-owner')
             compact.addEventListener('click',event => {
               const link = event.target.closest('a.nrn-contributor-link')
               if (link) { event.preventDefault();event.stopPropagation();NewTabService.open(link.href) }
             })
-            if (nativeOwner) nativeOwner.after(compact)
+            if (previous && root.elem.contains(previous)) previous.replaceWith(compact)
+            else if (nativeOwner) { previous?.remove();nativeOwner.after(compact) }
             else {
+              previous?.remove()
               const titleAnchor = root.movieTitle?.elem?.closest('a')
               const host = root.elem.querySelector('.nrn-card-body') || (titleAnchor === root.elem
                 ? root.movieTitle.elem.closest('div') : titleAnchor?.parentElement)
               ;(host && root.elem.contains(host) ? host : root.elem).append(compact)
             }
-          }
-          if (compactSignature !== signature) {
-            compact.replaceChildren(ownerLink(doc,owner,nativeOwner,movie));compactSignature = signature
+            compactSignature = signature
           }
         } else { compact?.remove();compact = null;compactSignature = '' }
         if (container && (movie.metadata.ownerId === 'known' || movie.thumbInfoDone) && (ownerSignature !== signature || !container.querySelector('.nrn-owner-row img'))) {
@@ -8042,10 +8047,7 @@ div:has(> div > a[data-anchor-page="ranking_genre"][href^="/watch/"] > div > p),
 .nrn-reason-mark, .nrn-movie-info-container .nrn-movie-tag-link.nrn-reason-tag, .nrn-info-section-title mark { background:#ffe29a; color:#612e00; text-decoration:none; }
 .nrn-info-expanded.nrn-owner-detail-ready .nrn-native-owner { display:none !important; }
 .nrn-owner-replaced, .nrn-info-expanded .nrn-compact-owner { display:none !important; }
-.nrn-compact-owner { min-width:0; margin-top:4px; font-size:14px; }
-.nrn-compact-owner .nrn-owner-name { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.nrn-owner-row { display:inline-flex; align-items:center; gap:4px; min-width:0; font-weight:bold; }
-.nrn-owner-row img { width:24px; height:24px; min-width:24px; border-radius:50%; object-fit:cover; }
+.nrn-owner-row { min-width:0; }
 .nrn-owner-unavailable { color:#828892 !important; }
 .nrn-page-consumed { background:repeating-linear-gradient(135deg,transparent,transparent 5px,#8c929755 5px,#8c929755 6px); text-decoration:line-through; }
 .nrn-native-pager-replaced { display:none !important; }

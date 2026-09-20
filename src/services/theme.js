@@ -152,7 +152,7 @@ html[data-nrn-ui-theme="dark"] .nrn-movie-tag.nrn-locked-tag {
   background: transparent !important;
 }
 html[data-nrn-ui-theme="dark"] .nrn-movie-tag-link,
-html[data-nrn-ui-theme="dark"] .nrn-contributor-link {
+html[data-nrn-ui-theme="dark"] .nrn-contributor-link:not(.nrn-compact-owner) {
   color: var(--nrn-link) !important;
 }
 html[data-nrn-ui-theme="dark"] .nrn-contributor {
@@ -234,4 +234,3 @@ html[data-nrn-ui-theme="dark"] .nrn-contributor-ng-name-button:hover {
 `
     return {detect:detect, resolve:resolve, apply:apply, watch:watch, CSS:CSS}
   })()
-

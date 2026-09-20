@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import {build,output} from './build.mjs';
 const require=createRequire(import.meta.url),{chromium}=require(process.env.NRN_PLAYWRIGHT || 'playwright');
 await build();
-const source=(await readFile(output,'utf8')).replace('model = createModel(config)','model = createModel(config); window.testModel = model; window.testPage = page; window.testAdd = item => { const root = page._createInjectedTile(item); setup([{type:"main",movie:{id:item.id,title:item.title},rootElem:root}],model,page,ctrl); model.requestThumbInfo(); }');
+const source=(await readFile(output,'utf8')).replace('model = createModel(config)','model = createModel(config); window.testModel = model; window.testPage = page; window.testLegacyCss = SearchPage.prototype.css + CardEnhancements.css; window.testAdd = item => { const root = page._createInjectedTile(item); setup([{type:"main",movie:{id:item.id,title:item.title},rootElem:root}],model,page,ctrl); model.requestThumbInfo(); }');
 const fixture=await readFile(new URL('../tests/fixtures/layout-list.html',import.meta.url),'utf8');
 const browser=await chromium.launch({headless:true,executablePath:process.env.NRN_BROWSER});
 try {
@@ -64,6 +64,45 @@ try {
  await page.evaluate(()=>testModel.config.ngUserNames.clear());
  await page.locator('.nrn-compact-owner .nrn-owner-name').filter({hasText:'restored synthetic account'}).waitFor();
  assert.equal(await page.locator('.nrn-compact-owner').isVisible(),true,'missing native owner is visible before expanding details');
+ // Use the supplied native visual contract with synthetic names and local CSS.
+ // Both rows must inherit the same site utilities, including container sizing.
+ const styleComparison=await page.evaluate(()=>{
+  const style=document.createElement('style');style.textContent=`
+   .d_flex{display:flex}.gap_x0_5{gap:4px}.ai_center{align-items:center}
+   .text-layer_mediumEm{color:rgb(80,80,80)}.w_fit-content{width:fit-content}.fs_base{font-size:16px}
+   .w_x3{width:32px}.min-w_x3{min-width:32px}.h_x3{height:32px}.bdr_full{border-radius:9999px}
+   .fw_bold{font-weight:700}.lc_1{display:-webkit-box;-webkit-line-clamp:1;-webkit-box-orient:vertical;overflow:hidden}
+   p{margin:0}.style-comparison{container-type:inline-size;width:400px}
+   @container (max-width:320px){.${CSS.escape('[@container_(max-width:_320px)]:fs_s')}{font-size:14px}}
+  `;document.head.append(style);
+  const host=document.createElement('div');host.className='style-comparison';document.body.append(host);
+  const native=document.createElement('a');native.href='https://www.nicovideo.jp/user/55';
+  native.className='hover:c_action.primaryAzure d_flex gap_x0_5 ai_center text-layer_mediumEm w_fit-content fs_base [@container_(max-width:_320px)]:fs_s';
+  native.innerHTML='<img alt="synthetic" class="bdr_full ov_hidden contain_content_size w_x3 min-w_x3 h_x3"><p class="fw_bold lc_1">synthetic</p>';
+  const compact=document.querySelector('.nrn-compact-owner');
+  const generated=compact.cloneNode(true);host.append(native,generated);
+  const read=row=>{const s=getComputedStyle(row),i=getComputedStyle(row.querySelector('img')),n=getComputedStyle(row.querySelector('p,span'));
+   return {display:s.display,gap:s.gap,align:s.alignItems,font:s.fontSize,color:s.color,margin:s.marginTop,width:i.width,height:i.height,weight:n.fontWeight,clamp:n.webkitLineClamp};};
+   const wide=[read(native),read(generated)];host.style.width='300px';const narrow=[read(native),read(generated)];
+   const theme=document.documentElement.dataset.nrnUiTheme;
+   document.documentElement.dataset.nrnUiTheme='dark';const dark=[read(native),read(generated)];
+   if(theme===undefined)delete document.documentElement.dataset.nrnUiTheme;else document.documentElement.dataset.nrnUiTheme=theme;
+  const structure={tag:compact.tagName,children:[...compact.children].map(e=>e.tagName),tracking:compact.hasAttribute('data-anchor-href')};
+  host.remove();return {wide,narrow,dark,structure};
+ });
+ assert.deepEqual(styleComparison.structure,{tag:'A',children:['IMG','P'],tracking:false},'compact row follows native anchor/image/paragraph without fake site tracking');
+ assert.deepEqual(styleComparison.wide[1],styleComparison.wide[0],'wide native and recovered row styles match');
+ assert.deepEqual(styleComparison.narrow[1],styleComparison.narrow[0],'narrow container styles match');
+ assert.deepEqual(styleComparison.dark[1],styleComparison.dark[0],'detail dark setting does not recolor the native-style compact row');
+ const legacyStyle=await page.evaluate(()=>{
+  const frame=document.createElement('iframe');document.body.append(frame);
+  const doc=frame.contentDocument,style=doc.createElement('style');style.textContent=testLegacyCss;doc.head.append(style);
+  const row=doc.importNode(document.querySelector('.nrn-compact-owner'),true);doc.body.append(row);
+  const read=e=>frame.contentWindow.getComputedStyle(e);
+  const result={display:read(row).display,align:read(row).alignItems,width:read(row.querySelector('img')).width,height:read(row.querySelector('img')).height,margin:read(row.querySelector('p')).margin};
+  frame.remove();return result;
+ });
+ assert.deepEqual(legacyStyle,{display:'inline-flex',align:'center',width:'24px',height:'24px',margin:'0px'},'legacy search retains bounded icons and horizontal row without modern utilities');
  await page.locator('.nrn-movie-info-toggle').first().click();
  assert.equal(await page.locator('.nrn-compact-owner').isVisible(),false,'expanded details show one owner row');
  await page.locator('.nrn-movie-info-container .nrn-owner-name').filter({hasText:'restored synthetic account'}).waitFor();

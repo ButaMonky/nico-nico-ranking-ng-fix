@@ -917,12 +917,12 @@
   word-break: break-word;
 }
 .nrn-movie-tag-link,
-.nrn-contributor-link {
+.nrn-contributor-link:not(.nrn-owner-row) {
   color: #272a2f;
   text-decoration: none;
 }
 .nrn-movie-tag-link:hover,
-.nrn-contributor-link:hover {
+.nrn-contributor-link:not(.nrn-owner-row):hover {
   text-decoration: underline;
 }
 .nrn-tag-ng-button,
@@ -1269,7 +1269,7 @@
   font-size: 13px !important;
   font-weight: 400 !important;
 }
-.nrn-contributor-link {
+.nrn-contributor-link:not(.nrn-owner-row) {
   display: inline !important;
 }
 .nrn-user-ng-button {
