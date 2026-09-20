@@ -28,7 +28,7 @@ try{
    if(status===200&&url.includes('mute-api')&&opts.method!=='GET')muted=opts.method==='POST';
    return {status,ok:status===200,url,json:async()=>({meta:{status},code:status===401?'noUserSession':undefined})};
   };
-  if(typeof CardActions!=='undefined')p._cardActions=CardActions.create(p,{},{open:url=>{opened.push(url);return true},copy:async text=>{if(copyFails)throw Error('clipboard denied');copied.push(text)}});
+  if(typeof CardActions!=='undefined')p._cardActions=CardActions.create(p,{},{popup:url=>{opened.push(url);return {}},copy:async text=>{if(copyFails)throw Error('clipboard denied');copied.push(text)}});
   const playlist=btoa(JSON.stringify({type:'search',context:{page:3,pageSize:32,sortKey:'registeredAt',sortOrder:'desc',tag:'fixture'}}));
   window.extra=p._createInjectedTile({id:'sm123',title:'<img src=x> synthetic title',owner:{type:'user',id:42,name:'fixture owner'},duration:90,__nrnPlaylist:playlist});
   extra.classList.remove('nrn-autofill-pending');
@@ -38,6 +38,7 @@ try{
   p._hoverPreview=HoverPreview.create(p,{hoverPreviewEnabled:{value:true,on(){},off(){}}},{load:async()=>({duration:90,expiresAt:Date.now()+60000}),media:()=>({destroy(){}}),comments:async()=>[]});
  });
  await page.locator('[data-nrn-autofill="true"] .nrn-thumb-anchor-wrap').hover();
+ await page.getByRole('button',{name:'あとで見る',exact:true}).waitFor();
  assert.equal(await page.getByRole('button',{name:'あとで見る',exact:true}).count(),1,'injected card has functional watch-later control');
  await page.waitForFunction(()=>document.querySelector('.nrn-preview[data-phase="playing"]'));
  assert.deepEqual(await page.evaluate(()=>['.nrn-card-actions button:first-child','.nrn-card-actions button:last-child','.nrn-preview-mute'].map(s=>{const r=document.querySelector(s).getBoundingClientRect(),h=extra.querySelector('.nrn-thumb-anchor-wrap').getBoundingClientRect();return [r.width,r.height,h.right-r.right,r.top-h.top]})),[[28,28,4,4],[28,28,4,36],[28,28,4,68]],'three controls match the official vertical positions');
@@ -47,6 +48,8 @@ try{
  assert.equal(await page.locator('#native').count(),1);
  await page.evaluate(()=>fetchMode='pending');
  const later=page.locator('[data-decoration-video-id="sm123"]').getByRole('button',{name:'あとで見る',exact:true});
+ await later.hover();await page.getByRole('tooltip',{name:'あとで見る',exact:true}).waitFor();
+ assert.equal(await later.getAttribute('title'),null,'watch-later must use official styled tooltip rather than browser title');
  await later.click();await page.waitForFunction(()=>calls.length===1);
  assert.equal(await later.isDisabled(),true);
  await page.evaluate(()=>resolveWrite());
@@ -68,9 +71,9 @@ try{
  assert.deepEqual(await page.evaluate(()=>copied),['https://www.nicovideo.jp/watch/sm123']);
  await page.getByRole('button',{name:'X で共有',exact:true}).click();
  assert.equal(new URL(await page.evaluate(()=>opened.at(-1))).origin,'https://x.com');
- await page.keyboard.press('Escape');assert.equal(await dialog.count(),0);
+ await page.keyboard.press('Escape');assert.equal(await dialog.count(),0);await page.keyboard.press('Escape');
  await menu.click();await page.getByRole('menuitem',{name:'ニコニ広告する',exact:true}).click();
- assert.equal(new URL(await page.evaluate(()=>opened.at(-1))).pathname,'/video/publish/sm123');
+ assert.equal(new URL(await page.evaluate(()=>opened.at(-1))).pathname,'/video/publish/sm123');await page.keyboard.press('Escape');
  await page.evaluate(()=>{window.detail=cardRoot.movieInfo.elem;detail.style.cssText='display:block;position:absolute;top:calc(100% + 4px);visibility:visible';extra.append(detail);window.badge=document.createElement('span');badge.textContent='fixture badge';badge.style.cssText='position:absolute;z-index:80;visibility:visible';extra.append(badge)});
  await menu.click();await page.getByRole('menuitem',{name:'このユーザーの動画を非表示',exact:true}).click();
  await page.waitForFunction(()=>extra.dataset.nrnOfficialMuted==='true');
@@ -79,7 +82,9 @@ try{
  assert.equal(await page.locator('[data-decoration-video-id="sm123"] .nrn-movie-title').evaluate(el=>{el.focus();return document.activeElement===el}),false,'muted content cannot be activated through keyboard focus');
  await page.evaluate(()=>{window.late=p._createInjectedTile({id:'sm124',title:'buffered before mute',owner:{type:'user',id:42},isMuted:false});late.classList.remove('nrn-autofill-pending')});
  assert.equal(await page.locator('[data-decoration-video-id="sm124"]').getAttribute('data-nrn-official-muted'),'true','confirmed owner mute overrides older buffered data');
+ await page.locator('[data-decoration-video-id="sm123"] .nrn-official-mute-mask').hover();
  await page.locator('[data-decoration-video-id="sm123"] .nrn-official-mute-mask button').click();
+ await page.getByRole('menuitem',{name:'このユーザーの動画を表示',exact:true}).click();
  await page.waitForFunction(()=>!extra.hasAttribute('data-nrn-official-muted'));
  assert.deepEqual(await page.evaluate(()=>[detail,badge].map(e=>getComputedStyle(e).visibility)),['visible','visible'],'unmute restores existing content visibility');
  await page.evaluate(()=>{detail.remove();badge.remove()});
@@ -103,7 +108,7 @@ try{
  await menu.click();await page.getByRole('menuitem',{name:'共有',exact:true}).click();
  await page.evaluate(()=>copyFails=true);await page.getByRole('button',{name:'リンクをコピー',exact:true}).click();
  assert.equal(await page.getByRole('textbox',{name:'リンク URL'}).evaluate(e=>e.selectionEnd-e.selectionStart),36,'failed clipboard leaves a selectable URL');
- await page.keyboard.press('Escape');await page.evaluate(()=>fetchMode='unauthorized');await later.click();
+ await page.keyboard.press('Escape');await page.keyboard.press('Escape');await page.evaluate(()=>fetchMode='unauthorized');await later.click();
  await page.getByRole('dialog',{name:'ログインが必要です'}).waitFor();
  assert.equal(new URL(await page.getByRole('link',{name:'ログイン',exact:true}).getAttribute('href')).pathname,'/login');
  await page.keyboard.press('Escape');await page.evaluate(()=>fetchMode='success');
@@ -118,7 +123,9 @@ try{
  await page.waitForFunction(()=>late.dataset.nrnOfficialMuted==='true');
  assert.equal(await page.locator('[data-decoration-video-id="sm999"]').getAttribute('data-nrn-official-muted'),null,'late owner write must not cover a card reused for another video');
  await page.evaluate(()=>{extra.dataset.decorationVideoId='sm123';p._cardActions.attach(extra,{id:'sm123',owner:{type:'user',id:42}})});
+ await page.locator('[data-decoration-video-id="sm123"] .nrn-official-mute-mask').hover();
  await page.locator('[data-decoration-video-id="sm123"] .nrn-official-mute-mask button').click();
+ await page.getByRole('menuitem',{name:'このユーザーの動画を表示',exact:true}).click();
  await page.waitForFunction(()=>!extra.hasAttribute('data-nrn-official-muted'));
  await page.locator('[data-decoration-video-id="sm123"]').hover();await page.evaluate(()=>fetchMode='pending');await later.click();
  await page.evaluate(()=>{p._disposed=true;p._cardActions.dispose();p._hoverPreview.dispose();resolveWrite()});

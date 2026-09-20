@@ -11,6 +11,7 @@ try {
  await page.setContent('<style>.card{width:320px;height:220px;display:inline-block}.nrn-thumb-anchor-wrap{width:320px;height:180px;position:relative}.nrn-hide{display:none}</style>'+['native','a','b'].map((id,i)=>`<div id="${id}" class="card" ${i?'data-nrn-autofill="true"':''} data-decoration-video-id="sm${i+1}"><div class="nrn-thumb-anchor-wrap"><a href="/watch/sm${i+1}">synthetic</a></div></div>`).join(''));
  await page.addScriptTag({content:source});
  await page.evaluate(()=>{
+  const style=document.createElement('style');style.textContent=HoverPreview.css;document.head.append(style);
   window.requests=[];window.destroyed=0;window.plays=0;window.commentsCalls=0;window.hold=false;window.pending=[];
   HTMLMediaElement.prototype.play=function(){plays++;for(const [key,value] of Object.entries({readyState:2,videoWidth:320,videoHeight:180}))Object.defineProperty(this,key,{configurable:true,get:()=>value});return window.rejectPlay?Promise.reject(new DOMException('blocked','NotAllowedError')):Promise.resolve()};
   HTMLMediaElement.prototype.pause=function(){};HTMLMediaElement.prototype.load=function(){};
@@ -44,15 +45,16 @@ try {
  assert.equal(await page.locator('#a video').evaluate(v=>v.muted),false,'explicit button unmutes');
  assert.equal(new URL(page.url()).pathname,'/tag/fixture','button does not navigate');
  await page.locator('#b').hover();await page.waitForFunction(()=>requests.length===2&&plays>=3);
- assert.equal(await page.locator('.nrn-preview video').count(),1,'one active video');
+ await page.waitForFunction(()=>!document.querySelector('#a .nrn-preview video'));
+ assert.equal(await page.locator('.nrn-preview video').count(),1,'only the current video remains once the previous official exit fade ends');
  assert.equal(await page.evaluate(()=>requests[0].signal.aborted),true);
  await page.evaluate(()=>document.querySelector('#b').classList.add('nrn-hide'));
  await page.waitForFunction(()=>!document.querySelector('.nrn-preview video'));
  assert.equal(await page.evaluate(()=>requests[1].signal.aborted),true,'NG hide aborts');
  await page.evaluate(()=>{document.querySelector('#b').classList.remove('nrn-hide');hold=true});
  await page.locator('#native').hover();await page.locator('#a').hover();await page.waitForFunction(()=>requests.length===3);
- await page.locator('#native').hover();await page.evaluate(()=>pending.shift()());await page.waitForTimeout(40);
- assert.equal(await page.locator('.nrn-preview video').count(),0,'late fetch cannot mount after leave');
+ await page.locator('#native').hover();await page.waitForFunction(()=>requests[2].signal.aborted);await page.evaluate(()=>pending.shift()());await page.waitForTimeout(40);
+ assert.equal(await page.locator('.nrn-preview video').count(),0,'late fetch cannot mount after leave debounce and exit unmount');
  assert.equal(await page.evaluate(()=>commentsCalls),2,'stale result does not fetch comments');
  await page.locator('#a').hover();await page.waitForFunction(()=>requests.length===4);
  await page.evaluate(()=>{document.querySelector('#a').dataset.decorationVideoId='sm99';pending.shift()()});await page.waitForTimeout(40);
@@ -77,5 +79,5 @@ try {
  await page.locator('#b').hover();await page.waitForTimeout(250);
  assert.equal(await page.evaluate(()=>requests.length),count,'no listeners after dispose');
  assert.deepEqual(errors,[]);
- console.log('Preview fixture PASS: OFF/native/transient hover zero requests; one media; mute; NG hide; stale result; ID reuse; play refusal; hidden; setting OFF; route disposal.');
+ console.log('Preview fixture PASS: OFF/native/transient hover zero requests; outgoing fade cleanup; mute; NG hide; stale result; ID reuse; play refusal; hidden; setting OFF; route disposal.');
 } finally {await browser.close()}

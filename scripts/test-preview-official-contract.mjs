@@ -15,13 +15,13 @@ try {
  await page.evaluate(()=>{
   const style=document.createElement('style');style.textContent=HoverPreview.css;document.head.append(style);
   localStorage.setItem('@nvweb-packages/video-renderer',JSON.stringify({data:{volume:{data:.72,meta:{}},commentAlpha:{data:'low',meta:{}}}}));
-  window.calls=0;window.commentsCalls=0;window.paint=[];
+  window.calls=0;window.commentsCalls=0;window.paint=[];window.pendingLoad=null;window.loadSignal=null;
   const fill=CanvasRenderingContext2D.prototype.fillText;
   CanvasRenderingContext2D.prototype.fillText=function(text,x,y){paint.push({text,x,y,color:this.fillStyle,font:this.font});return fill.call(this,text,x,y)};
   HTMLMediaElement.prototype.play=function(){for(const [k,v] of Object.entries({readyState:2,videoWidth:320,videoHeight:180,currentTime:1}))Object.defineProperty(this,k,{configurable:true,get:()=>v});return Promise.resolve()};
   HTMLMediaElement.prototype.pause=function(){};HTMLMediaElement.prototype.load=function(){};
   window.preview=HoverPreview.create({doc:document,_sourceUrl:location.href},{hoverPreviewEnabled:{value:true,on(){},off(){}}},{
-   load:async()=>{calls++;return {duration:60,expiresAt:Date.now()+60000}},media:()=>({destroy(){}}),
+   load:async(_id,{signal})=>{calls++;loadSignal=signal;if(calls===1)await new Promise(resolve=>pendingLoad=resolve);return {duration:60,expiresAt:Date.now()+60000}},media:()=>({destroy(){}}),
    comments:async()=>{commentsCalls++;return [{vposMs:0,text:'top',commands:['ue','red','big']},{vposMs:0,text:'bottom',commands:['shita','blue','small']},{vposMs:0,text:'default',commands:[]}]}
   });
  });
@@ -30,7 +30,13 @@ try {
  // Keep moving for longer than the old unconditional 200ms timer.
  for(let i=0;i<14;i++){await page.mouse.move(20+i*4,30);await page.waitForTimeout(20)}
  assert.equal(await page.evaluate(()=>calls),0,'continuous pointer movement must not start fetching');
+ await page.waitForFunction(()=>calls===1);
+ await page.mouse.move(100,40);await page.mouse.move(130,60);
+ await page.evaluate(()=>document.dispatchEvent(new Event('scroll')));
+ assert.equal(await page.evaluate(()=>loadSignal.aborted),false,'moving within the thumbnail or in-view scrolling preserves the active loading request');
+ await page.evaluate(()=>pendingLoad());
  await page.waitForFunction(()=>preview.snapshot().playing===1);
+ assert.equal(await page.evaluate(()=>calls),1,'loading movement must reuse the same request');
  assert.equal(await page.locator('video').evaluate(v=>v.volume),.72,'saved official volume is used');
  assert.equal(await page.locator('canvas').evaluate(v=>getComputedStyle(v).opacity),'0.6');
  assert.equal(await page.locator('.nrn-preview-progress').evaluate(v=>v.getBoundingClientRect().height),4,'saved noncompact seekbar is four pixels high');

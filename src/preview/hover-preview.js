@@ -1,9 +1,15 @@
   var HoverPreview = (function() {
     const css = `
 .nrn-preview-host { position:relative; border-radius:var(--radii-m,8px); }
-.nrn-preview { position:absolute; inset:0; z-index:2; overflow:hidden; border-radius:inherit; pointer-events:none; background:var(--colors-monotone--l0,#000); color:#fff; opacity:0; transition:opacity var(--durations-medium,.3s); }
+.nrn-preview { position:absolute; inset:0; z-index:2; overflow:hidden; border-radius:inherit; pointer-events:none; color:#fff; }
+.nrn-preview-surface { position:absolute; inset:0; border-radius:inherit; background:var(--colors-monotone--l0,#000); opacity:0; transition:opacity var(--durations-medium,.3s); }
 .nrn-preview[data-phase="loading"] { visibility:hidden; }
-.nrn-preview[data-phase="playing"] { opacity:1; }
+.nrn-preview[data-phase="playing"] .nrn-preview-surface { opacity:1; }
+.nrn-preview[data-closing="true"] { animation:nrn-preview-fade-out var(--durations-medium,.3s) both; }
+.nrn-preview-controls { position:absolute; inset:0; z-index:3; pointer-events:none; }
+.nrn-preview-controls[data-closing="true"] { animation:nrn-preview-fade-out var(--durations-slow,.5s) both; }
+.nrn-preview-controls[data-closing="true"] .nrn-preview-mute { pointer-events:none; }
+@keyframes nrn-preview-fade-out { from {opacity:1} to {opacity:0} }
 .nrn-preview video,.nrn-preview canvas { position:absolute; inset:0; width:100%; height:100%; object-fit:contain; pointer-events:none; }
 .nrn-preview-mute,.nrn-preview-loading { position:absolute; right:4px; top:4px; width:28px; height:28px; box-sizing:border-box; z-index:3; padding:4px; border:0; border-radius:var(--radii-s,4px); }
 .nrn-preview-mute { display:flex; align-items:center; justify-content:center; pointer-events:auto; color:#fff; background:var(--colors-layer-surface-overlay-black,rgba(0,0,0,.8)); cursor:pointer; }
@@ -64,7 +70,14 @@
       const fetchComments = options.comments || ((data,opts) => PreviewData.comments(data,opts))
       const mountMedia = options.media || media
       const source = new URL(page._sourceUrl || doc.location.href)
-      let disposed = false, hovered = null, blockedRoot = null, session = null, timer = null, muted = true, attempt = 0
+      let disposed = false, hovered = null, blockedRoot = null, timer = null, muted = true, attempt = 0, allowStart = false
+      const sessions=new Set(),retiredControls=new Map()
+      const audio=typeof PreviewAudio!=='undefined'?PreviewAudio.forDocument(doc):null
+      if(audio)muted=audio.muted
+      const unsubscribeAudio=audio?.subscribe(value=>{
+        muted=value
+        for(const s of sessions)if(s.video){s.video.muted=value;updateButton(s)}
+      })
       let hoverUntil=0,pointerUntil=0,scrollUntil=0
       const counts = {started:0,playing:0,stopped:0,blocked:0,error:0,unavailable:0,commentsUnavailable:0,
         preview:0,rights:0,comments:0,http:0,invalid:0,aborted:0,network:0}
@@ -82,30 +95,65 @@
         const r=root.getBoundingClientRect()
         return r.width>0&&r.height>0&&r.bottom>0&&r.right>0&&r.top<win.innerHeight&&r.left<win.innerWidth
       }
-      function live(s) { return session===s&&!s.abort.signal.aborted&&eligible(s.root,s.id) }
-      function release(s) {
+      function live(s) { return sessions.has(s)&&!s.abort.signal.aborted&&eligible(s.root,s.id) }
+      function release(s,keepControls=false) {
         s.cancelFrameWait?.();s.cancelFrameWait=null
-        s.abort.abort();s.commentAbort?.abort();clearTimeout(s.deadline);clearTimeout(s.commentDeadline);clearInterval(s.check);win.cancelAnimationFrame(s.frame)
+        s.abort.abort();s.commentAbort?.abort();clearTimeout(s.deadline);clearTimeout(s.commentDeadline);clearTimeout(s.leaveTimer);clearTimeout(s.exitTimer);clearInterval(s.check);win.cancelAnimationFrame(s.frame)
         s.observer?.disconnect();s.intersection?.disconnect()
         if (s.video) {
           s.video.onended=s.video.onerror=s.video.ontimeupdate=null
           s.video.pause();s.adapter?.destroy();s.adapter=null
           s.video.removeAttribute('src');s.video.load();s.video.remove();s.video=null
         } else {s.adapter?.destroy();s.adapter=null}
-        s.spinner?.remove();s.canvas?.remove();s.canvas=null;s.rows=[];s.comments=[]
+        if(!keepControls)s.controls?.remove()
+        s.canvas?.remove();s.canvas=null;s.rows=[];s.comments=[]
+      }
+      function clearRetired(root) {
+        const old=retiredControls.get(root);if(!old)return
+        clearTimeout(old.timer);old.controls.remove();retiredControls.delete(root)
+        if(![...sessions].some(s=>s.root===root))old.host.classList.remove('nrn-preview-host')
+      }
+      function stopSession(s,finishControls=false) {
+        if(!sessions.delete(s))return
+        const keep=finishControls&&s.controlsUntil>Date.now()
+        release(s,keep);s.layer.remove();counts.stopped++
+        if(keep) {
+          clearRetired(s.root)
+          retiredControls.set(s.root,{controls:s.controls,host:s.host,timer:setTimeout(()=>clearRetired(s.root),s.controlsUntil-Date.now())})
+        } else if(!retiredControls.has(s.root))s.host.classList.remove('nrn-preview-host')
       }
       function stop() {
         clearTimeout(timer);timer=null
-        if (session) {
-          const s=session;session=null;release(s);s.layer.remove();s.host.classList.remove('nrn-preview-host');counts.stopped++
+        for(const s of [...sessions])stopSession(s)
+        for(const root of [...retiredControls.keys()])clearRetired(root)
+      }
+      function animationMs(element,fallback) {
+        const value=win.getComputedStyle(element).animationDuration.split(',')[0].trim(),number=parseFloat(value)
+        return Number.isFinite(number)?number*(value.endsWith('ms')?1:1000):fallback
+      }
+      function close(s) {
+        if(!live(s)){stopSession(s);return}
+        s.closing=true;s.layer.dataset.closing=s.controls.dataset.closing='true'
+        s.controlsUntil=Date.now()+animationMs(s.controls,500)
+        s.exitTimer=setTimeout(()=>stopSession(s,true),animationMs(s.layer,300))
+      }
+      function departures(root) {
+        for(const s of sessions) {
+          clearTimeout(s.leaveTimer);s.leaveTimer=null
+          if(s.root!==root&&!s.closing)s.leaveTimer=setTimeout(()=>close(s),200)
         }
       }
+      function reopen(s) {
+        clearTimeout(s.leaveTimer);clearTimeout(s.exitTimer);s.closing=false
+        delete s.layer.dataset.closing;delete s.controls.dataset.closing
+      }
       function terminal(s, state) {
-        if (session!==s) return
+        if (!sessions.has(s)) return
         if (Object.hasOwn(counts,state)) counts[state]++
         // Keep the original thumbnail/link usable, and require a genuine leave
         // before retrying this card. A failed hover must not loop by itself.
-        blockedRoot=s.root;hovered=null;stop()
+        if(hovered===s.root){blockedRoot=s.root;hovered=null;clearTimeout(timer);timer=null}
+        stopSession(s)
       }
       function waitForFrame(s) {
         const video=s.video
@@ -119,7 +167,7 @@
         })
       }
       function draw(s) {
-        if (!live(s) || !s.video) {stop();return}
+        if (!live(s) || !s.video) {stopSession(s);return}
         const t=s.video.currentTime,limit=Math.min(30,s.data.duration)
         if (t>=limit || Date.now()>=s.data.expiresAt) {terminal(s,'ended');return}
         s.progress.style.width=Math.min(100,t/limit*100)+'%'
@@ -141,46 +189,54 @@
       async function start(root,id) {
         timer=null
         if(!eligible(root,id)||hovered!==root)return
-        stop()
+        const existing=[...sessions].find(s=>s.root===root&&s.id===id)
+        if(existing){reopen(existing);return}
+        if(!allowStart)return
+        clearRetired(root)
         const host=root.querySelector('.nrn-thumb-anchor-wrap');if(!host)return
         let prefs={volume:1,commentVisible:true,commentOpacity:1,scoreThreshold:-4800,userNgEnabled:true}
         try {if(typeof PreviewData!=='undefined')prefs=PreviewData.preferences(win.localStorage)}catch(_){}
         const s={root,id,host,attempt:++attempt,abort:new AbortController(),rows:[],comments:[],prefs}
-        session=s;counts.started++
+        sessions.add(s);counts.started++
         s.layer=doc.createElement('div');s.layer.className='nrn-preview';s.layer.dataset.phase='loading'
+        s.surface=doc.createElement('div');s.surface.className='nrn-preview-surface';s.layer.append(s.surface)
         s.status=doc.createElement('span');s.status.className='nrn-preview-status';s.status.hidden=true
         s.spinner=doc.createElement('span');s.spinner.className='nrn-preview-loading';s.spinner.setAttribute('role','status');s.spinner.setAttribute('aria-label','プレビュー再生の読み込み中')
         s.button=doc.createElement('button');s.button.type='button';s.button.className='nrn-preview-mute';s.button.hidden=true
+        s.controls=doc.createElement('div');s.controls.className='nrn-preview-controls';s.controls.append(s.button,s.spinner)
         s.progress=doc.createElement('div');s.progress.className='nrn-preview-progress'
         s.track=doc.createElement('div');s.track.className='nrn-preview-track';s.track.append(s.progress)
-        s.layer.append(s.status,s.button,s.track);host.classList.add('nrn-preview-host');host.append(s.layer,s.spinner)
+        s.surface.append(s.status,s.track);host.classList.add('nrn-preview-host');host.append(s.layer,s.controls)
         s.button.addEventListener('click',event=>{
           event.preventDefault();event.stopPropagation()
           if(!live(s)||!s.video)return
-          muted=!muted;s.video.muted=muted;updateButton(s)
-          s.video.play().catch(()=>{if(session===s)terminal(s,'blocked')})
+          if(s.pressUntil>Date.now())return
+          s.pressUntil=Date.now()+200
+          if(audio)audio.setMuted(!muted)
+          else {muted=!muted;s.video.muted=muted;updateButton(s)}
+          s.video.play().catch(()=>{if(sessions.has(s))terminal(s,'blocked')})
         })
-        const check=()=>{if(!eligible(root,id)) {hovered=null;stop()}}
+        const check=()=>{if(!eligible(root,id)) {if(hovered===root)hovered=null;stopSession(s)}}
         s.observer=new MutationObserver(records=>{
           if(records.some(r=>!r.target.closest?.('.nrn-preview')))check()
         });s.observer.observe(doc.body,{childList:true,subtree:true,attributes:true,attributeFilter:['class','style','hidden','data-decoration-video-id','data-nrn-official-muted']})
-        s.intersection=typeof win.IntersectionObserver==='function'?new win.IntersectionObserver(entries=>{if(entries.some(e=>!e.isIntersecting)){hovered=null;stop()}}):null
+        s.intersection=typeof win.IntersectionObserver==='function'?new win.IntersectionObserver(entries=>{if(entries.some(e=>!e.isIntersecting)){if(hovered===root)hovered=null;stopSession(s)}}):null
         s.intersection?.observe(root);s.check=setInterval(check,200)
-        s.deadline=setTimeout(()=>{if(session===s)terminal(s,'error')},12000)
+        s.deadline=setTimeout(()=>{if(sessions.has(s))terminal(s,'error')},12000)
         try {
           s.data=await load(id,{signal:s.abort.signal,report})
           if(!live(s))return
           if(!s.data||!Number.isFinite(s.data.duration)||s.data.duration<=0||!Number.isFinite(s.data.expiresAt)||s.data.expiresAt<=Date.now()){terminal(s,'unavailable');return}
           const video=doc.createElement('video');s.video=video;video.muted=muted;video.defaultMuted=true;video.playsInline=true;video.preload='none';video.volume=prefs.volume
           video.onended=()=>terminal(s,'ended');video.onerror=()=>terminal(s,'error')
-          s.layer.prepend(video);s.adapter=mountMedia(video,s.data,{onError:()=>terminal(s,'error'),signal:s.abort.signal})
+          s.surface.prepend(video);s.adapter=mountMedia(video,s.data,{onError:()=>terminal(s,'error'),signal:s.abort.signal})
           if(!live(s)){s.adapter?.destroy();s.adapter=null;return}
           try {await video.play()}catch(_){if(live(s))terminal(s,'blocked');return}
           if(!live(s))return
           if(!await waitForFrame(s)||!live(s))return
-          clearTimeout(s.deadline);s.deadline=setTimeout(()=>{if(session===s)terminal(s,'ended')},45000)
+          clearTimeout(s.deadline);s.deadline=setTimeout(()=>{if(sessions.has(s))terminal(s,'ended')},45000)
           s.layer.dataset.phase='playing';counts.playing++;s.spinner.remove();s.button.hidden=false;updateButton(s)
-          if(prefs.commentVisible){s.canvas=doc.createElement('canvas');s.canvas.setAttribute('aria-hidden','true');s.canvas.style.opacity=String(prefs.commentOpacity);s.layer.insertBefore(s.canvas,s.status)}
+          if(prefs.commentVisible){s.canvas=doc.createElement('canvas');s.canvas.setAttribute('aria-hidden','true');s.canvas.style.opacity=String(prefs.commentOpacity);s.surface.insertBefore(s.canvas,s.status)}
           draw(s)
           if(!prefs.commentVisible)return
           s.commentAbort=new AbortController();s.commentDeadline=setTimeout(()=>s.commentAbort.abort(),8000)
@@ -200,40 +256,50 @@
       }
       function schedule() {
         clearTimeout(timer);timer=null
-        if(!hovered||hovered===blockedRoot||!eligible(hovered,hovered.dataset.decorationVideoId)||session?.layer.dataset.phase==='playing')return
+        if(!hovered||hovered===blockedRoot||!eligible(hovered,hovered.dataset.decorationVideoId)||[...sessions].some(s=>s.root===hovered&&!s.closing))return
         const root=hovered,id=root.dataset.decorationVideoId,delay=Math.max(0,hoverUntil-Date.now(),pointerUntil-Date.now(),scrollUntil-Date.now())
         timer=setTimeout(()=>start(root,id),delay)
       }
       function motion(event) {
         if(event.type==='scroll')scrollUntil=Date.now()+400
         else pointerUntil=Date.now()+50
-        if(!hovered||session?.layer.dataset.phase==='playing')return
-        if(session)stop()
+        if(!hovered||[...sessions].some(s=>s.root===hovered&&!s.closing))return
         schedule()
+      }
+      function scope(target) {
+        const direct=target?.closest?.('[data-nrn-autofill="true"]')
+        if(direct)return {root:direct,direct:true}
+        const reference=target?.closest?.('[data-nrn-preview-card-ref]')?.dataset.nrnPreviewCardRef
+        const root=reference?doc.getElementById(reference):null
+        return {root:root&&[...sessions].some(s=>s.root===root&&s.id===root.dataset.decorationVideoId)?root:null,direct:false}
       }
       function over(event) {
         if(!setting?.value||disposed)return
-        const root=event.target.closest?.('[data-nrn-autofill="true"]')
-        if(root&&root===blockedRoot)return
+        const target=scope(event.target),root=target.root
+        departures(root)
+        clearTimeout(timer);timer=null
+        if(root&&root===blockedRoot){hovered=null;return}
         if(root!==blockedRoot)blockedRoot=null
-        if(root===hovered)return
-        hovered=null;stop()
+        hovered=null
         if(!root||!eligible(root,root.dataset.decorationVideoId))return
-        hovered=root;const id=root.dataset.decorationVideoId
+        hovered=root;allowStart=target.direct
         hoverUntil=Date.now()+200;pointerUntil=Date.now()+50;schedule()
       }
       function out(event) {
-        if(blockedRoot&&!blockedRoot.contains(event.relatedTarget))blockedRoot=null
-        if(hovered&&!hovered.contains(event.relatedTarget)){hovered=null;stop()}
+        const root=scope(event.relatedTarget).root
+        if(blockedRoot&&root!==blockedRoot)blockedRoot=null
+        if(hovered&&root!==hovered){hovered=null;clearTimeout(timer);timer=null}
+        departures(root)
       }
-      function suspend(){blockedRoot=hovered||session?.root||blockedRoot;hovered=null;stop()}
+      function suspend(){blockedRoot=hovered||[...sessions][0]?.root||blockedRoot;hovered=null;stop()}
       const changed=()=>{if(!setting.value)suspend()}
       doc.addEventListener('mouseover',over);doc.addEventListener('mouseout',out)
+      doc.documentElement.addEventListener('mouseleave',out)
       doc.addEventListener('mousemove',motion,{passive:true});doc.addEventListener('scroll',motion,{passive:true,capture:true})
       doc.addEventListener('visibilitychange',suspend);win.addEventListener('pagehide',suspend)
       setting?.on('changed',changed)
-      return {snapshot(){return {...counts,active:Boolean(session?.video),enabled:Boolean(setting?.value),controlRequestsOnly:true}},
-        dispose(){if(disposed)return;disposed=true;suspend();doc.removeEventListener('mouseover',over);doc.removeEventListener('mouseout',out);doc.removeEventListener('mousemove',motion);doc.removeEventListener('scroll',motion,true);doc.removeEventListener('visibilitychange',suspend);win.removeEventListener('pagehide',suspend);setting?.off('changed',changed)}}
+      return {snapshot(){return {...counts,active:[...sessions].some(s=>!!s.video),enabled:Boolean(setting?.value),controlRequestsOnly:true}},
+        dispose(){if(disposed)return;disposed=true;unsubscribeAudio?.();suspend();doc.removeEventListener('mouseover',over);doc.removeEventListener('mouseout',out);doc.documentElement.removeEventListener('mouseleave',out);doc.removeEventListener('mousemove',motion);doc.removeEventListener('scroll',motion,true);doc.removeEventListener('visibilitychange',suspend);win.removeEventListener('pagehide',suspend);setting?.off('changed',changed)}}
     }
     return {create,css,media}
   })()

@@ -40,6 +40,10 @@ node scripts/test-preview-failure-ui.mjs
 node scripts/test-preview-official-contract.mjs
 node scripts/test-preview-card-integration.mjs
 node scripts/test-card-actions.mjs
+node scripts/test-card-interactions.mjs
+node scripts/test-preview-audio.mjs
+node scripts/test-preview-hover-exit.mjs
+node scripts/test-card-tooltip.mjs
 node scripts/test-pager-native-style.mjs
 ```
 
