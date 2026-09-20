@@ -10,6 +10,10 @@ try {
  const errors=[];page.on('pageerror',e=>errors.push(e.message));
  await page.route('**/*',r=>r.fulfill({body:'<html></html>',contentType:'text/html'}));
  await page.goto('http://nrn.test/tag/fixture');
+ // Control the sub-50ms movement gaps: host/browser round trips can exceed
+ // that boundary under load and would represent a real pointer stop.
+ await page.clock.install({time:new Date('2026-01-01T00:00:00Z')});
+ await page.clock.pauseAt(new Date('2026-01-01T00:00:10Z'));
  await page.setContent('<style>.card{width:320px;height:240px}.nrn-thumb-anchor-wrap{width:320px;height:180px;position:relative;background:#579}a{display:block;width:100%;height:100%}</style><div id="card" class="card" data-nrn-autofill="true" data-decoration-video-id="sm123"><div class="nrn-thumb-anchor-wrap"><a href="/watch/sm123">synthetic thumbnail</a></div><div>synthetic title</div></div>');
  for(const source of sources)await page.addScriptTag({content:source});
  await page.evaluate(()=>{
@@ -25,11 +29,12 @@ try {
    comments:async()=>{commentsCalls++;return [{vposMs:0,text:'top',commands:['ue','red','big']},{vposMs:0,text:'bottom',commands:['shita','blue','small']},{vposMs:0,text:'default',commands:[]}]}
   });
  });
- await page.mouse.move(20,20);await page.waitForTimeout(80);
+ await page.mouse.move(20,20);await page.clock.runFor(80);
  assert.equal(await page.evaluate(()=>calls),0,'card entry still requires the separate 200ms hover delay');
  // Keep moving for longer than the old unconditional 200ms timer.
- for(let i=0;i<14;i++){await page.mouse.move(20+i*4,30);await page.waitForTimeout(20)}
+ for(let i=0;i<14;i++){await page.mouse.move(20+i*4,30);await page.clock.runFor(20)}
  assert.equal(await page.evaluate(()=>calls),0,'continuous pointer movement must not start fetching');
+ await page.clock.runFor(60);await page.clock.resume();
  await page.waitForFunction(()=>calls===1);
  await page.mouse.move(100,40);await page.mouse.move(130,60);
  await page.evaluate(()=>document.dispatchEvent(new Event('scroll')));
