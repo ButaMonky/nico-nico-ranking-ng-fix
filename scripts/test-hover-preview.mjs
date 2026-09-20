@@ -12,7 +12,7 @@ try {
  await page.addScriptTag({content:source});
  await page.evaluate(()=>{
   window.requests=[];window.destroyed=0;window.plays=0;window.commentsCalls=0;window.hold=false;window.pending=[];
-  HTMLMediaElement.prototype.play=function(){plays++;return window.rejectPlay?Promise.reject(new DOMException('blocked','NotAllowedError')):Promise.resolve()};
+  HTMLMediaElement.prototype.play=function(){plays++;for(const [key,value] of Object.entries({readyState:2,videoWidth:320,videoHeight:180}))Object.defineProperty(this,key,{configurable:true,get:()=>value});return window.rejectPlay?Promise.reject(new DOMException('blocked','NotAllowedError')):Promise.resolve()};
   HTMLMediaElement.prototype.pause=function(){};HTMLMediaElement.prototype.load=function(){};
   window.store={value:false,listeners:new Set(),on(n,f){this.listeners.add(f)},off(n,f){this.listeners.delete(f)}};
   window.route={doc:document,_disposed:false,_sourceUrl:location.href};
@@ -51,7 +51,7 @@ try {
  await page.evaluate(()=>{document.querySelector('#a').dataset.decorationVideoId='sm99';pending.shift()()});await page.waitForTimeout(40);
  assert.equal(await page.locator('.nrn-preview video').count(),0,'reused card ID invalidates session');
  await page.evaluate(()=>{hold=false;rejectPlay=true});
- await page.locator('#native').hover();await page.locator('#a').hover();await page.waitForFunction(()=>document.querySelector('.nrn-preview')?.dataset.phase==='blocked');
+ await page.locator('#native').hover();await page.locator('#a').hover();await page.waitForFunction(()=>preview.snapshot().blocked===1);
  assert.equal(await page.locator('.nrn-preview video').count(),0,'play rejection releases media');
  await page.locator('#native').hover();await page.evaluate(()=>{rejectPlay=false});
  await page.locator('#a').hover();await page.waitForFunction(()=>document.querySelector('.nrn-preview video'));

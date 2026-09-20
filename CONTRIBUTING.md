@@ -36,6 +36,8 @@ node scripts/test-spa.mjs
 node scripts/test-hover-preview.mjs
 node scripts/test-preview-boundaries.mjs
 node scripts/test-preview-hls.mjs
+node scripts/test-preview-failure-ui.mjs
+node scripts/test-pager-native-style.mjs
 ```
 
 投稿者表示・情報取得・診断の変更では `scripts/test-owner-names.mjs`、`scripts/test-owner-evidence.mjs`、`scripts/test-metadata-readiness.mjs`、`scripts/test-card-enhancements.mjs`、`scripts/test-diagnostics.mjs` を対象に応じて実行します。論理回路NGエディターのブラウザ試験は `scripts/test-rule-editor.mjs` です。環境が用意できず未実行の場合は、未実行とその理由を記録してください。

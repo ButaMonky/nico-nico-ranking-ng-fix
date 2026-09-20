@@ -2,6 +2,7 @@
     const css = `
 .nrn-preview-host { position:relative; }
 .nrn-preview { position:absolute; inset:0; z-index:2; overflow:hidden; border-radius:inherit; pointer-events:none; background:#111; color:#fff; }
+.nrn-preview[data-phase="loading"] { visibility:hidden; }
 .nrn-preview video,.nrn-preview canvas { position:absolute; inset:0; width:100%; height:100%; object-fit:contain; pointer-events:none; }
 .nrn-preview-mute { position:absolute; right:6px; bottom:6px; z-index:3; pointer-events:auto; border:1px solid #ddd; border-radius:4px; color:#fff; background:#222c; padding:4px 8px; cursor:pointer; }
 .nrn-preview-mute:focus-visible { outline:3px solid #58b4ff; }
@@ -53,6 +54,7 @@
       }
       function live(s) { return session===s&&!s.abort.signal.aborted&&eligible(s.root,s.id) }
       function release(s) {
+        s.cancelFrameWait?.();s.cancelFrameWait=null
         s.abort.abort();s.commentAbort?.abort();clearTimeout(s.deadline);clearTimeout(s.commentDeadline);clearInterval(s.check);win.cancelAnimationFrame(s.frame)
         s.observer?.disconnect();s.intersection?.disconnect()
         if (s.video) {
@@ -70,9 +72,21 @@
       }
       function terminal(s, state) {
         if (session!==s) return
-        release(s);s.layer.dataset.phase=state;s.button.hidden=true;s.progress.hidden=true
-        s.status.textContent={blocked:'再生が許可されませんでした',error:'プレビューを再生できません',unavailable:'プレビューは利用できません',ended:'プレビュー終了'}[state] || ''
         if (Object.hasOwn(counts,state)) counts[state]++
+        // Keep the original thumbnail/link usable, and require a genuine leave
+        // before retrying this card. A failed hover must not loop by itself.
+        blockedRoot=s.root;hovered=null;stop()
+      }
+      function waitForFrame(s) {
+        const video=s.video
+        return new Promise(resolve=>{
+          const events=['loadeddata','playing','resize']
+          const finish=ready=>{for(const event of events)video.removeEventListener(event,check);s.cancelFrameWait=null;resolve(ready)}
+          const check=()=>{if(live(s)&&video.readyState>=2&&video.videoWidth>0&&video.videoHeight>0)finish(true)}
+          s.cancelFrameWait=()=>finish(false)
+          for(const event of events)video.addEventListener(event,check)
+          check()
+        })
       }
       function draw(s) {
         if (!live(s) || !s.video) {stop();return}
@@ -127,6 +141,7 @@
           if(!live(s)){s.adapter?.destroy();s.adapter=null;return}
           try {await video.play()}catch(_){if(live(s))terminal(s,'blocked');return}
           if(!live(s))return
+          if(!await waitForFrame(s)||!live(s))return
           clearTimeout(s.deadline);s.deadline=setTimeout(()=>{if(session===s)terminal(s,'ended')},45000)
           s.layer.dataset.phase='playing';counts.playing++;s.status.textContent='';s.button.hidden=false;updateButton(s)
           s.canvas=doc.createElement('canvas');s.canvas.setAttribute('aria-hidden','true');s.layer.insertBefore(s.canvas,s.status)

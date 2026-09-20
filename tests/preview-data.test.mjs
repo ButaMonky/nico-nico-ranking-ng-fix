@@ -30,6 +30,18 @@ test('preview selects one available low-bandwidth pair and uses ordinary bounded
  assert.deepEqual(reports,[['preview','started'],['preview','ok'],['rights','started'],['rights','ok']]);
 });
 
+test('preview tracking ID follows saved official format and is shared only within an attempt', async()=>{
+ const client=api(),attempts=[],start=Date.now();
+ for(let i=0;i<2;i++) {
+  const calls=[];
+  await client.load('sm123',{now:()=>0,fetch:async url=>{calls.push(new URL(url).searchParams.get('actionTrackId'));return response(calls.length===1?preview():rights());}});
+  assert.match(calls[0],/^[a-zA-Z0-9]{10}_\d+$/);
+  const timestamp=Number(calls[0].split('_')[1]);assert.ok(timestamp>=start&&timestamp<=Date.now());
+  assert.equal(calls[0],calls[1]);attempts.push(calls[0]);
+ }
+ assert.notEqual(attempts[0],attempts[1]);
+});
+
 test('preview invalid identifiers cause zero fetches', async()=>{
  for(const id of ['','sm1/path','https://example.org','SM123','sm123?x','123']){
   let count=0; await assert.rejects(api().load(id,{fetch:async()=>{count++;return response(preview());}}));assert.equal(count,0);

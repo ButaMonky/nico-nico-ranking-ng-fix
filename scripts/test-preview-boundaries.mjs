@@ -21,7 +21,7 @@ async function fixture(mode={}) {
   window.requests=[];window.pending=[];window.destroyed=0;window.mounted=0;window.plays=0;window.pauses=0;window.playbackSeconds=0;window.mode=mode;
   const realTimeout=window.setTimeout;
   if(mode.shortDeadline)window.setTimeout=(callback,delay,...args)=>realTimeout(callback,delay===12000?40:delay,...args);
-  HTMLMediaElement.prototype.play=function(){plays++;return Promise.resolve()};
+  HTMLMediaElement.prototype.play=function(){plays++;for(const [key,value] of Object.entries({readyState:2,videoWidth:320,videoHeight:180}))Object.defineProperty(this,key,{get:()=>value});return Promise.resolve()};
   HTMLMediaElement.prototype.pause=function(){pauses++};HTMLMediaElement.prototype.load=function(){};
   const emptyNg=()=>({ngScore:{isDisabled:false},owner:[],channel:[],viewer:{revision:0,count:0,items:[]}});
   const fetchSynthetic=async(url,options)=>{
@@ -47,7 +47,7 @@ try {
  // Some adapters report setup errors synchronously, before the return assignment.
  {
   const page=await fixture({syncMediaError:true});await page.locator('#a').hover();
-  await page.waitForFunction(()=>document.querySelector('.nrn-preview')?.dataset.phase==='error');
+  await page.waitForFunction(()=>preview.snapshot().error===1);
   assert.deepEqual(await page.evaluate(()=>({destroyed,plays,active:preview.snapshot().active})),{destroyed:1,plays:0,active:false});await close(page);
  }
  // Pending removal must abort even when a non-cooperative fetch later resolves.
@@ -74,7 +74,7 @@ try {
  // Accelerate just the production's loading deadline, keeping its real callback.
  {
   const page=await fixture({pending:true,shortDeadline:true});await page.locator('#a').hover();
-  await page.waitForFunction(()=>document.querySelector('.nrn-preview')?.dataset.phase==='error');
+  await page.waitForFunction(()=>preview.snapshot().error===1);
   assert.equal(await page.evaluate(()=>requests[0].signal.aborted),true);
   await page.evaluate(()=>pending.shift()());await page.waitForTimeout(30);
   assert.deepEqual(await page.evaluate(()=>({requests:requests.length,mounted,active:preview.snapshot().active})),{requests:1,mounted:0,active:false});await close(page);
@@ -83,7 +83,7 @@ try {
  for(const boundary of [{duration:60,time:30},{duration:7,time:7},{duration:60,ended:true}]){
   const page=await fixture(boundary);await play(page);
   await page.evaluate(boundary=>{if(boundary.ended)document.querySelector('video').dispatchEvent(new Event('ended'));else playbackSeconds=boundary.time},boundary);
-  await page.waitForFunction(()=>document.querySelector('.nrn-preview')?.dataset.phase==='ended');
+  await page.waitForFunction(()=>!document.querySelector('.nrn-preview')&&preview.snapshot().stopped===1);
   assert.equal(await page.locator('video,canvas').count(),0);assert.equal(await page.evaluate(()=>destroyed),1);await close(page);
  }
  // Same video ID never aliases card-instance lifetime or reuses a stopped session.

@@ -12,7 +12,7 @@ try {
  const errors=[]; page.on('pageerror',e=>errors.push(e.message));
  await page.route('**/*',r=>r.fulfill({body:'<html></html>',contentType:'text/html'}));
  await page.goto('http://nrn.test/tag/fixture?page=3');
- await page.setContent('<style>'+css+'</style><nav data-scope="pagination"><a href="?page=2">←</a><a href="?page=3" aria-current="page">3</a><a href="?page=4">→</a></nav>');
+ await page.setContent('<style>'+css+'</style><nav data-scope="pagination"><a data-part="prev-trigger" href="?page=2"><svg><path d="M14 5L7 12L14 19"/></svg></a><a data-part="item" href="?page=3" data-selected="" aria-current="page">3</a><a data-part="next-trigger" href="?page=4"><svg><path d="M10 5L17 12L10 19"/></svg></a></nav>');
  await page.addScriptTag({content:source});
  await page.evaluate(()=>{
   window.config={autoFillPagerMode:{value:'compactSkip'},pagerPreviewCount:{value:2},ngTitles:{set:new Set()}};
@@ -30,9 +30,9 @@ try {
  });
  assert.equal(await page.locator('.nrn-journey-pager .nrn-page-consumed').textContent(),'4–8');
  assert.equal(await page.locator('.nrn-journey-pager .nrn-page-consumed').getAttribute('href'),null);
- assert.equal(await page.locator('nav[data-scope=pagination]').isVisible(),false);
+ assert.equal(await page.locator('nav[data-scope=pagination]:not(.nrn-journey-pager)').isVisible(),false);
  const docMarker=await page.evaluate(()=>window.marker=Math.random());
- await page.locator('.nrn-journey-pager a').filter({hasText:'→'}).click();
+ await page.locator('.nrn-journey-pager [data-part=next-trigger]').click();
  await page.waitForFunction(()=>calls.length===1);
  assert.equal(new URL(await page.url()).searchParams.get('page'),'9');
  assert.equal(await page.evaluate(()=>marker),docMarker,'same document, no reload');
@@ -45,11 +45,11 @@ try {
   journey.update(20,id=>id!=='sm14');
  });
  assert.deepEqual(await page.locator('.nrn-journey-pager .nrn-page-consumed').allTextContents(),['4–8','10–13']);
- assert.equal(await page.locator('.nrn-journey-pager a').filter({hasText:'→'}).getAttribute('href'),'http://nrn.test/tag/fixture?page=14');
- assert.equal(await page.locator('.nrn-journey-pager a').filter({hasText:'←'}).getAttribute('href'),'http://nrn.test/tag/fixture?page=3');
+ assert.equal(await page.locator('.nrn-journey-pager [data-part=next-trigger]').getAttribute('href'),'http://nrn.test/tag/fixture?page=14');
+ assert.equal(await page.locator('.nrn-journey-pager [data-part=prev-trigger]').getAttribute('href'),'http://nrn.test/tag/fixture?page=3');
  if(process.env.NRN_ARTIFACT_DIR){await mkdir(process.env.NRN_ARTIFACT_DIR,{recursive:true});await page.screenshot({path:process.env.NRN_ARTIFACT_DIR+'/pager-1609.png'});}
  await page.evaluate(()=>{config.ngTitles.set.add('new NG')});
- await page.locator('.nrn-journey-pager a').filter({hasText:'→'}).click();
+ await page.locator('.nrn-journey-pager [data-part=next-trigger]').click();
  assert.equal(await page.evaluate(()=>calls.length),1,'first click after settings change refreshes stale routing without navigating');
  await page.evaluate(()=>{journey.update(20,()=>false)});
  assert.equal(await page.locator('.nrn-page-consumed').count(),0,'changed rules invalidate all previous skipped ranges');
@@ -59,9 +59,9 @@ try {
  assert.equal(await page.locator('.nrn-journey-pager > [aria-label="前の未処理ページ"]').getAttribute('href'),null);
  assert.equal(await page.locator('.nrn-journey-pager > [aria-label="前の未処理ページ"]').getAttribute('aria-disabled'),'true');
  await page.evaluate(()=>{journey.restore();journey=PagerJourney.create(routePage,config,location.href);journey.update(20,()=>false);__reactRouterDataRouter.navigate=async()=>{throw Error('router failure')}});
- await page.locator('.nrn-journey-pager a').filter({hasText:'→'}).click();
+ await page.locator('.nrn-journey-pager [data-part=next-trigger]').click();
  await page.waitForFunction(()=>!document.querySelector('.nrn-journey-pager'));
- assert.equal(await page.locator('nav[data-scope=pagination]').isVisible(),true,'failed routing restores native controls');
+ assert.equal(await page.locator('nav[data-scope=pagination]:not(.nrn-journey-pager)').isVisible(),true,'failed routing restores native controls');
  await page.evaluate(()=>{
   config.ngTitles.set.add('revisit regression');
   __reactRouterDataRouter.navigate=async href=>{calls.push(href);history.pushState({},'',href)};

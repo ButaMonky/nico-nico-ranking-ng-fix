@@ -82,18 +82,42 @@
         const model = layout(current, consumed, last, Number(config.pagerPreviewCount.value))
         for (const native of nativePagers) {
           let view = views.get(native)
-          if (!view) { view = page.doc.createElement('nav'); view.id = 'nrn-pager-' + views.size; view.className = 'nrn-journey-pager'; view.setAttribute('aria-label','検索結果のページ'); views.set(native,view); native.after(view) }
+          // Reuse presentation only. React handlers are not cloned; navigation
+          // below explicitly uses the site's router and preserves modified links.
+          const item = native.querySelector('a[data-part="item"]:not([data-selected])') || native.querySelector('a[data-part="item"]')
+          const selectedItem = native.querySelector('a[data-part="item"][data-selected]') || item
+          const prev = native.querySelector('a[data-part="prev-trigger"]')
+          const next = native.querySelector('a[data-part="next-trigger"]')
+          const ellipsis = native.querySelector('[data-part="ellipsis"]')
+          if (!item || !prev?.querySelector('svg') || !next?.querySelector('svg')) {
+            native.classList.remove('nrn-native-pager-replaced');view?.remove();views.delete(native);continue
+          }
+          const copy = (node, deep = true) => {
+            const clone = node.cloneNode(deep)
+            for (const el of [clone,...clone.querySelectorAll('*')]) {
+              el.classList.remove('nrn-page-consumed')
+              // IDs and inline handlers belong to the original tree, not this view.
+              for (const attr of [...el.attributes]) if (attr.name === 'id' || /^on/i.test(attr.name) || ['aria-controls','aria-labelledby','aria-describedby'].includes(attr.name)) el.removeAttribute(attr.name)
+            }
+            return clone
+          }
+          if (!view) { view = copy(native,false);view.id = 'nrn-pager-' + views.size;views.set(native,view);native.after(view) }
+          const nativeClass = [...native.classList].filter(name=>name!=='nrn-native-pager-replaced').join(' ')
+          view.className = nativeClass;view.classList.add('nrn-journey-pager')
+          if (view.style.cssText !== native.style.cssText) view.style.cssText = native.style.cssText
           native.classList.add('nrn-native-pager-replaced')
           const renderedSettings = state.signature
-          const signature = JSON.stringify([model, renderedSettings])
+          const signature = JSON.stringify([model, renderedSettings,nativeClass,item.outerHTML,selectedItem.outerHTML,prev.outerHTML,next.outerHTML,ellipsis?.outerHTML])
           if (view.dataset.signature === signature) continue
           view.dataset.signature = signature; view.replaceChildren()
-          const add = (text, number, label, disabled, selected, consumedRange) => {
-            const el = page.doc.createElement(number != null && !disabled ? 'a' : 'span')
-            el.textContent = text; el.setAttribute('aria-label',label)
-            if (selected) el.setAttribute('aria-current','page')
-            if (disabled) el.setAttribute('aria-disabled','true')
-            if (consumedRange) el.className = 'nrn-page-consumed'
+          const add = (text, number, label, disabled, selected, consumedRange, template) => {
+            const el = copy(template || (selected ? selectedItem : item))
+            for (const name of ['href','aria-current','aria-disabled','data-selected','data-disabled','data-index','tabindex']) el.removeAttribute(name)
+            if (!template) {el.textContent = text;el.setAttribute('data-index',String(number))}
+            el.setAttribute('aria-label',label)
+            if (selected) {el.setAttribute('aria-current','page');el.setAttribute('data-selected','')}
+            if (disabled) {el.setAttribute('aria-disabled','true');if(!selected)el.setAttribute('data-disabled','')}
+            if (consumedRange) el.classList.add('nrn-page-consumed')
             if (number != null && !disabled) {
               const target = new URL(href); target.searchParams.set('page',String(number)); el.href = target.href
               el.addEventListener('click', event => {
@@ -112,19 +136,25 @@
             }
             view.append(el)
           }
-          add('←',model.prev,'前の未処理ページ',model.prev == null)
+          const gap = () => {
+            const el=copy(ellipsis || item)
+            for(const name of ['href','aria-current','aria-disabled','data-selected','data-disabled','data-index','tabindex'])el.removeAttribute(name)
+            if(!ellipsis){el.textContent='…';el.setAttribute('data-part','ellipsis')}
+            view.append(el)
+          }
+          add('',model.prev,'前の未処理ページ',model.prev == null,false,false,prev)
           let previous = 0
           for (const token of model.tokens) {
-            if (token.start > previous+1) { const gap=page.doc.createElement('span'); gap.textContent='…'; view.append(gap) }
+            if (token.start > previous+1) gap()
             const text = token.start === token.end ? String(token.start) : token.start + '–' + token.end
             add(text,token.start,token.consumed ? text + 'ページは表示・NG判定済み' : text + 'ページ',token.consumed || token.current,token.current,token.consumed)
             previous = token.end
           }
           if (last != null && previous < last) {
-            if (previous+1 < last) { const gap=page.doc.createElement('span'); gap.textContent='…'; view.append(gap) }
+            if (previous+1 < last) gap()
             add(String(last),last,'最終ページ ' + last,consumed.includes(last),false,consumed.includes(last))
           }
-          add('→',model.next,'次の未処理ページ',model.next == null)
+          add('',model.next,'次の未処理ページ',model.next == null,false,false,next)
         }
         return consumed
       }

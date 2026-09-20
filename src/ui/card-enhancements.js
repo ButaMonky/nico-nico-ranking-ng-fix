@@ -197,12 +197,6 @@
 .nrn-owner-unavailable { color:#828892 !important; }
 .nrn-page-consumed { background:repeating-linear-gradient(135deg,transparent,transparent 5px,#8c929755 5px,#8c929755 6px); text-decoration:line-through; }
 .nrn-native-pager-replaced { display:none !important; }
-.nrn-journey-pager { display:flex; align-items:center; justify-content:center; flex-wrap:wrap; gap:4px; margin:12px 0; }
-.nrn-journey-pager > * { display:inline-flex; align-items:center; justify-content:center; min-width:32px; min-height:32px; padding:2px 6px; border-radius:4px; }
-.nrn-journey-pager a { color:inherit; border:1px solid #8893a044; text-decoration:none; }
-.nrn-journey-pager a:hover { background:#71829c22; }
-.nrn-journey-pager [aria-disabled=true] { color:#828892; cursor:default; }
-.nrn-journey-pager [aria-current=page] { color:inherit; font-weight:bold; border:2px solid currentColor; }
 .nrn-pager-summary { display:block; font-size:12px; color:#626a75; margin:4px 0; }
 a.nrn-parsed[data-anchor-detail="nicoad"] { padding-bottom:28px; }
 a.nrn-parsed[data-anchor-detail="nicoad"] > .nrn-movie-info-toggle { background:#fff; box-shadow:0 0 0 1px #aeb5be; }

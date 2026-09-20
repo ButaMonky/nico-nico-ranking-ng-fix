@@ -92,11 +92,12 @@ var PreviewData = (function () {
   async function load(videoId, {signal,fetch:fetchFn=fetch,now=()=>Date.now(),report=()=>{}} = {}) {
     checkAbort(signal);
     if (!string(videoId,32) || !/^(?:sm|so|nm)[1-9]\d*$/.test(videoId)) throw failure('invalid');
-    // Fresh per-attempt random ID, shared only by this attempt's two API calls.
-    // Exact current actionTrackId acceptance has not been verified live.
-    const random = new Uint32Array(4);
+    // Saved official generator: ten alphanumeric characters + '_' + epoch ms.
+    // Fresh per attempt, shared by preview/rights; never persisted or logged.
+    const alphabet = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+    const random = new Uint32Array(10);
     crypto.getRandomValues(random);
-    const actionTrackId = 'ngpreview_' + Array.from(random,x=>x.toString(16).padStart(8,'0')).join('');
+    const actionTrackId = Array.from(random,x=>alphabet[x % alphabet.length]).join('') + '_' + Date.now();
     const base = NVAPI + '/v1/watch/' + videoId;
     const query = '?actionTrackId=' + actionTrackId;
     const context = {signal,fetch:fetchFn,report};
