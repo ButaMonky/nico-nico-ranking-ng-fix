@@ -1,6 +1,6 @@
   var Main = (function() {
     var MAINTENANCE_MANIFEST = Object.freeze({
-      version:'14.0',
+      version:NRN_VERSION,
       principles:[
         '既存NGデータ形式を壊さない',
         '動画カードDOMと横断的ポリシーを分離する',
@@ -68,13 +68,13 @@
     }
     // Short-lived successful metadata only; NG decisions always use current settings.
     var recentDetails = new Map()
-    var createThumbInfoRequester = function(movies, movieViewModes) {
+    var createThumbInfoRequester = function(movies, movieViewModes, diagnostics) {
       var disposed = false, scheduled = false
       var watched = new Set()
       var applyDetails = ThumbInfoListener.forCompleted(movies)
       var thumbInfo = new ThumbInfo(
           gmXmlHttpRequest(),
-          movies.config.thumbInfoConcurrency.value)
+          movies.config.thumbInfoConcurrency.value, diagnostics)
         .on('completed', function(info) {
           recentDetails.delete(info.id)
           recentDetails.set(info.id, {info:info, at:Date.now()})
@@ -109,25 +109,21 @@
           }
           var cached = recentDetails.get(id)
           if (cached && Date.now() - cached.at > 120000) { recentDetails.delete(id); cached = null }
-          if (cached && !movies.get(id).thumbInfoDone) applyDetails(cached.info)
+          if (cached && !movies.get(id).thumbInfoDone) {
+            applyDetails(cached.info)
+            if (movie.thumbInfoDone) diagnostics?.cache(id,'recent')
+          }
         }
         var pendingIds = allIds.filter(function(id) {
           var movie = movies.get(id)
           return movie && !movie.thumbInfoDone && !MetadataReadiness.ready(movie,movies.config)
         })
-        var skippedDone = allIds.length - pendingIds.length
-        if (skippedDone > 0) {
-          console.log('[NicoNicoRankingNG ThumbInfo] 必要項目が既知または取得終了のため通信を省略:', {
-            totalIds: allIds.length,
-            requestIds: pendingIds.length,
-            skippedDone: skippedDone
-          })
-        }
         thumbInfo.request(pendingIds, prefer)
       }
       request.dispose = function() {
         disposed = true
         thumbInfo.dispose()
+        diagnostics?.close()
         movies.config.thumbInfoConcurrency.off('changed',updateConcurrency)
         for (var key of MetadataReadiness.settings) movies.config[key].off('changed',settingsChanged)
         for (var movie of watched) {
@@ -136,18 +132,21 @@
         }
         watched.clear()
       }
+      diagnostics?.bind(movies,thumbInfo)
       return request
     }
-    var getThumbInfoRequester = function(movies, movieViewModes) {
-      return createThumbInfoRequester(movies, movieViewModes)
+    var getThumbInfoRequester = function(movies, movieViewModes, diagnostics) {
+      return createThumbInfoRequester(movies, movieViewModes, diagnostics)
     }
     var createModel = function(config) {
       var movies = new Movies(config)
+      var diagnostics = Diagnostics.start(config,location.pathname)
       config._nrnRulePreviewMovies = () => Array.from(movies._idToMovie.values()).slice(0,100)
       var applySearchOwner = ThumbInfoListener.forSearch(movies)
       var movieViewModes = new MovieViewModes(config)
-      var requestThumbInfo = getThumbInfoRequester(movies, movieViewModes)
+      var requestThumbInfo = getThumbInfoRequester(movies, movieViewModes, diagnostics)
       return {
+        diagnostics,
         config,
         movies,
         movieViewModes,

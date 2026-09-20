@@ -268,7 +268,7 @@
           credentials: 'same-origin',
           cache: 'no-store',
           signal: this._abortController?.signal
-        })
+        }, 15000, {run:this._diagnostics,kind:'page',lane:fetchScope === 'DEV' ? 'diagnostic' : 'run'})
         if (!res.ok) {
           var httpError = new Error('HTTP ' + res.status)
           httpError.status = res.status
@@ -664,10 +664,17 @@
       async _applyAdDecoration(root, videoId) {
         try {
           if (this._disposed || root.dataset.nrnAdDecorated === 'true') return
-          var json = await Network.ads('decoration:' + videoId, async function() {
-            var res = await Network.fetchResponse('https://api.nicoad.nicovideo.jp/v1/contents/video/' + videoId, {credentials: 'omit'}, 10000)
+          var diagnostics = this._diagnostics
+          var ownerPage = this
+          var json = await Network.ads((diagnostics?.queueKey || '') + ':decoration:' + videoId, async function() {
+            if (ownerPage._disposed) return null
+            var res = await Network.fetchResponse('https://api.nicoad.nicovideo.jp/v1/contents/video/' + videoId, {credentials:'omit',signal:ownerPage._abortController?.signal}, 10000, {run:diagnostics,kind:'adsDecoration'})
             if (!res.ok) throw new Error('広告 HTTP ' + res.status)
-            return res.json()
+            try {
+              var value = await res.json()
+              if (!value?.data || typeof value.data !== 'object') throw new Error('invalid decoration')
+              return value
+            } catch (error) { diagnostics?.validationFailure('adsDecoration','run','invalid'); throw error }
           })
           if (this._disposed || root.dataset.nrnAdDecorated === 'true') return
           root.dataset.nrnAdDecorated = 'true'

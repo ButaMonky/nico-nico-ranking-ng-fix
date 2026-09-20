@@ -6,6 +6,39 @@ const network=await readFile(new URL('../src/data/network.js',import.meta.url),'
 const auto=await readFile(new URL('../src/autofill/legacy-controller.js',import.meta.url),'utf8');
 const quiet=new Proxy({}, {get:()=>()=>{}});
 function loadNetwork(extra={}){return vm.runInNewContext(network+';Network',{AbortController,setTimeout,clearTimeout,...extra});}
+test('network diagnostics record actual fetch outcomes including body timeout and caller cancellation',async()=>{
+ const events=[];const diagnostics={kind:'page',lane:'diagnostic',run:{begin:(...args)=>{events.push(args);return result=>events.push(result);}}};
+ let mode='ok';const n=loadNetwork({fetch:async(_url,{signal})=>{
+  if(mode==='network')throw Error('PRIVATE_URL');
+  return {ok:mode==='ok',status:mode==='ok'?200:503,text:()=>mode==='held'?new Promise((resolve,reject)=>signal.addEventListener('abort',()=>reject(Error('aborted')))):Promise.resolve('body')};
+ }});
+ await n.fetchResponse('PRIVATE',{},100,diagnostics);assert.equal(events.at(-1),'ok');
+ mode='http';await n.fetchResponse('PRIVATE',{},100,diagnostics);assert.equal(events.at(-1),'http');
+ mode='network';await assert.rejects(n.fetchResponse('PRIVATE',{},100,diagnostics));assert.equal(events.at(-1),'network');
+ mode='held';await assert.rejects(n.fetchResponse('PRIVATE',{},5,diagnostics));assert.equal(events.at(-1),'timeout');
+ const controller=new AbortController();const pending=n.fetchResponse('PRIVATE',{signal:controller.signal},100,diagnostics);
+ await new Promise(r=>setImmediate(r));controller.abort();await assert.rejects(pending);assert.equal(events.at(-1),'aborted');
+ assert.equal(events.filter(Array.isArray).length,5);assert.doesNotMatch(JSON.stringify(events),/PRIVATE/);
+});
+
+test('queued ad decoration never starts after SPA disposal and next route has its own request key',async()=>{
+ const list=await readFile(new URL('../src/nico/list-page.js',import.meta.url),'utf8');
+ const begin=list.indexOf('      async _applyAdDecoration('),end=list.indexOf('      unbindUnconnectedMovieRoots',begin);
+ const calls=[],counts={old:0,next:0};
+ const n=loadNetwork({fetch:(_url,{signal})=>new Promise((resolve,reject)=>{
+  calls.push(()=>resolve({ok:true,status:200,text:async()=>'{"data":{"decoration":"none"}}'}));
+  signal.addEventListener('abort',()=>reject(Error('aborted')));
+ })});
+ const apply=vm.runInNewContext('({'+list.slice(begin,end)+'})._applyAdDecoration',{Network:n});
+ const make=key=>({_abortController:new AbortController(),_diagnostics:{queueKey:key,begin:()=>{counts[key]++;return ()=>{};}}});
+ const old=make('old'),next=make('next'),root=()=>({dataset:{}});
+ const pending=Array.from({length:8},(_,i)=>apply.call(old,root(),'sm'+i));
+ await new Promise(r=>setImmediate(r));assert.equal(calls.length,4);
+ old._disposed=true;old._abortController.abort();
+ const newest=apply.call(next,root(),'sm7');await new Promise(r=>setImmediate(r));
+ assert.equal(calls.length,5,'queued old-route requests are discarded; new route gets one fresh request');
+ calls[4]();await Promise.all([...pending,newest]);assert.deepEqual(counts,{old:4,next:1});
+});
 test('network: shared requests respect global cap and errors release queue slots',async()=>{
  const queue=loadNetwork().createQueue(2),releases=[];let active=0,peak=0,count=0;
  const work=()=>new Promise((resolve,reject)=>{count++;active++;peak=Math.max(peak,active);releases.push(fail=>{active--;fail?reject(Error('test')):resolve(count);});});
@@ -38,8 +71,8 @@ test('ads: parallel callers share one request; malformed response is not a negat
 });
 test('Snapshot: bad response triggers fallback path; empty data cannot claim a next page',async()=>{
  let body={data:[],meta:{totalCount:10000}};
- const ctx=vm.createContext({page:{},URLSearchParams,performance,console:quiet,LOG:'test',SNAPSHOT_ENDPOINT:'https://example.invalid',snapshotDescriptor:{q:'test',isTag:true,order:'desc',sortField:'startTime'},gmRequest:async()=>({status:200,responseText:JSON.stringify(body)})});
- const a=auto.indexOf('      var snapshotFetchOffset = async function(offset)'),b=auto.indexOf('      var requestedMode',a);
+ const ctx=vm.createContext({page:{},model:{},URLSearchParams,performance,console:quiet,LOG:'test',SNAPSHOT_ENDPOINT:'https://example.invalid',snapshotDescriptor:{q:'test',isTag:true,order:'desc',sortField:'startTime'},gmRequest:async()=>({status:200,responseText:JSON.stringify(body)})});
+ const a=auto.indexOf('      var snapshotFetchOffset = async function(offset,'),b=auto.indexOf('      var requestedMode',a);
  const run=vm.runInContext(auto.slice(a,b)+';snapshotFetchOffset',ctx);
  assert.equal((await run(100)).hasNextPage,false);
  body={data:[{contentId:'sm1'}],meta:{totalCount:null}};assert.equal((await run(0)).totalCount,null);

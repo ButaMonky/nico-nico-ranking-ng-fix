@@ -43,6 +43,7 @@
           try {
             if (config.useGetThumbInfo.value) setPendingMoviesInvisible()
             model = createModel(config)
+            page._diagnostics = model.diagnostics
             ctrl = new Controller(config, page)
             ctrl.addListenersTo(page.doc.body)
             const view = createView(page, ctrl)
@@ -53,7 +54,7 @@
             view.observeMutation(model)
             setupAutoFill(model, page, ctrl)
             console.log('[NicoNicoRankingNG SPA]', 'Start NG checks', page._sourceUrl)
-          } catch (e) { stop(); console.error(e) }
+          } catch (e) { console.error(e); Diagnostics.problem('routeSetup'); stop() }
         }
         const configure = function() {
           window.__nrnConfigureSpaNavigationGuard?.({enabled:config.spaNavigationFix.value, start, stop})
@@ -63,6 +64,7 @@
         configure()
       } catch (e) {
         console.error(e)
+        Diagnostics.problem('startup')
         removePendingMovieInvisibleStyle()
       }
     }

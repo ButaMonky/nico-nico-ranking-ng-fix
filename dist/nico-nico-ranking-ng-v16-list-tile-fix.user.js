@@ -6,7 +6,7 @@
 // @match        *://www.nicovideo.jp/ranking*
 // @match        *://www.nicovideo.jp/search/*
 // @match        *://www.nicovideo.jp/tag/*
-// @version      160.12
+// @version      160.13
 // @grant        unsafeWindow
 // @grant        GM_getValue
 // @grant        GM_setValue
@@ -202,13 +202,18 @@
 
   // This facade is scoped to this userscript; other scripts keep their console.
   var nrnConsoleConfig = null
+  var NRN_VERSION = '160.13'
+  var nrnNativeConsole = globalThis.console
+  var nrnConsoleCounts = {warnings:0,errors:0}
   var nrnSetConsoleConfig = function(config) { nrnConsoleConfig = config }
   var console = (function(nativeConsole) {
     var local = {}
     ;['log', 'info', 'warn', 'error', 'table', 'group', 'groupCollapsed', 'groupEnd'].forEach(function(method) {
       local[method] = function() {
-        if (method !== 'error' && !(nrnConsoleConfig && nrnConsoleConfig.developerMode.value)) return
-        if (typeof nativeConsole[method] === 'function') nativeConsole[method].apply(nativeConsole, arguments)
+        // Legacy messages contain titles, URLs, identifiers and raw errors.
+        // Only the allowlisted Diagnostics report reaches the host console.
+        if (method === 'warn') nrnConsoleCounts.warnings++
+        if (method === 'error') nrnConsoleCounts.errors++
       }
     })
     return local
@@ -719,23 +724,28 @@
         return promise;
       };
     }
-    async function fetchResponse(url, options, timeout = 15000) {
+    async function fetchResponse(url, options, timeout = 15000, diagnostics) {
+      const finish = diagnostics?.run?.begin(diagnostics.kind,diagnostics.lane) || function() {};
+      let timedOut = false;
       const controller = new AbortController();
       const externalSignal = options?.signal;
       const abort = () => controller.abort();
       if (externalSignal?.aborted) abort();
       else externalSignal?.addEventListener('abort', abort, {once:true});
-      const timer = setTimeout(() => controller.abort(), timeout);
+      const timer = setTimeout(() => { timedOut = true; controller.abort(); }, timeout);
       try {
         const res = await fetch(url, Object.assign({}, options, {signal:controller.signal}));
         const body = await res.text(); // Keep timeout active through body download.
+        finish(res.ok ? 'ok' : 'http');
         return {ok:res.ok, status:res.status, statusText:res.statusText, url:res.url,
           text:async () => body, json:async () => JSON.parse(body)};
+      } catch (error) {
+        finish(timedOut ? 'timeout' : controller.signal.aborted ? 'aborted' : 'network');
+        throw error;
       } finally { clearTimeout(timer); externalSignal?.removeEventListener('abort', abort); }
     }
     return {createQueue, fetchResponse, ads:createQueue(4)};
   })();
-
   var ThumbInfo = (function(_super) {
     const parseTags = tags => {
       return Array.from(tags, tag => {
@@ -817,9 +827,10 @@
       return res.status + ' ' + res.statusText
     }
 
-    var ThumbInfo = function(httpRequest, concurrent) {
+    var ThumbInfo = function(httpRequest, concurrent, diagnostics) {
       _super.call(this)
       this.httpRequest = httpRequest
+      this.diagnostics = diagnostics
       this.concurrent = Math.max(1, Math.min(20, Math.trunc(Number(concurrent)) || 5))
       this._requestCount = 0
       this._pendingIds = []
@@ -842,45 +853,54 @@
           this._requestMovie(id, true)
         }
       },
-      _onload(id, res) {
+      _onload(id, res, measured) {
+        var thumbInfo = res.status === 200 ? parseResText(res.responseText) : null
+        var outcome = !thumbInfo ? 'http'
+          : thumbInfo.videoId != null && thumbInfo.videoId !== id ? 'invalid'
+          : thumbInfo.error.type === 'NO_ERROR' ? 'ok'
+          : thumbInfo.error.type === 'PARSING' ? 'invalid' : 'apiFailure'
+        measured?.(outcome)
         this._requestCount--
         this._requestAsPossible()
         if (res.status === 200) {
-          var thumbInfo = parseResText(res.responseText)
           if (thumbInfo.videoId != null && thumbInfo.videoId !== id) {
             this.emit('errorOccurred',error('VIDEO_ID_MISMATCH','動画IDが一致しません',id))
-            return
+            return 'invalid'
           }
           thumbInfo.id = id
           if (thumbInfo.error.type === 'NO_ERROR') {
             this.emit('completed', thumbInfo)
+            return 'ok'
           } else {
             this.emit('errorOccurred', thumbInfo)
+            return thumbInfo.error.type === 'PARSING' ? 'invalid' : 'apiFailure'
           }
         } else {
           this.emit('errorOccurred'
                   , error('HTTP_STATUS', statusMessage(res), id))
+          return 'http'
         }
       },
       _requestMovie(id, retry) {
         if (this._disposed) return
         var settled = false
+        var measured = this.diagnostics?.begin('detail','run',id,retry) || function() {}
         var once = callback => value => {
           if (settled || this._disposed) return
           settled = true
           this._handles.delete(request)
           callback(value)
         }
-        var fail = once(this._onerror.bind(this, id))
+        var fail = once(value => { measured('network'); this._onerror(id,value) })
         try {
         var request = this.httpRequest({
           method: 'GET',
           url: 'https://ext.nicovideo.jp/api/getthumbinfo/' + id,
           timeout: 5000,
-          onload: once(this._onload.bind(this, id)),
+          onload: once(value => this._onload(id,value,measured)),
           onerror: fail,
-          onabort: fail,
-          ontimeout: once(this._ontimeout.bind(this, id, retry)),
+          onabort: once(() => { measured('aborted'); this._onerror(id) }),
+          ontimeout: once(() => { measured('timeout'); this._ontimeout(id,retry) }),
         })
         if (!settled && request) this._handles.add(request)
         if (request && typeof request.catch === 'function') request.catch(fail)
@@ -2222,6 +2242,7 @@
         if (e.key === 'Escape') this._close()
       }.bind(this))
       this._on('runDeveloperDiagnostics', 'click', this._runDeveloperDiagnostics.bind(this))
+      this._on('copyAnonymousDiagnostics', 'click', this._copyAnonymousDiagnostics.bind(this))
       this._on('exportVisibleCheckbox', 'change', this._exportVisibleCheckboxChanged.bind(this))
       this._on('importVisibleCheckbox', 'change', this._importVisibleCheckboxChanged.bind(this))
       this._on('exportButton', 'click', this._exportButtonClicked.bind(this))
@@ -2432,6 +2453,20 @@
       },
       _initAdvancedNgRuleBuilder() {
         this.ruleEditor = RuleEditor.mount(this)
+      },
+      async _copyAnonymousDiagnostics() {
+        var status = this._e('anonymousDiagnosticStatus')
+        var textarea = this._e('anonymousDiagnosticText')
+        textarea.hidden = false
+        textarea.value = Diagnostics.publish('manual')
+        textarea.focus()
+        textarea.select()
+        try {
+          await textarea.ownerDocument.defaultView.navigator.clipboard.writeText(textarea.value)
+          status.textContent = '匿名診断をコピーしました。そのまま開発タスクに貼り付けてください。'
+        } catch (e) {
+          status.textContent = '下の診断文を選択しました。Ctrl+Cでコピーしてください。'
+        }
       },
       _runDeveloperDiagnostics() {
         var status = this._e('developerDiagnosticStatus')
@@ -2862,6 +2897,10 @@
       <div data-tab-panel=developer><details class=card open>
         <summary>開発者・診断</summary>
         <div class=sectionBody>
+          <div class=row><input class=primary type=button id=copyAnonymousDiagnostics value="匿名診断をコピー"></div>
+          <div class=hint>通信回数・待ち時間・必要情報の取得状況を共有します。動画名・検索語・投稿者ID・NG内容・URLは含めません。コピー時の追加通信はありません。</div>
+          <div id=anonymousDiagnosticStatus class=statusNote>共有するときは、このボタンを使ってください。開発者モードはOFFのままでも利用できます。</div>
+          <textarea id=anonymousDiagnosticText aria-label="匿名診断レポート" readonly hidden style="width:100%;height:180px;box-sizing:border-box"></textarea>
           <div class=row><label><input type=checkbox id=developerMode>開発者モード</label><span class=pill>再読み込み不要</span></div>
           <div class=row><label>自動診断の量
             <select id=developerDiagnosticMode>
@@ -2870,8 +2909,8 @@
               <option value=manual>手動のみ</option>
             </select>
           </label></div>
-          <div class=hint>通常利用は「軽量」推奨です。完全診断はSnapshot API通信まで行うため数秒余計にかかる場合があります。「診断を今すぐ実行」は設定に関係なく完全診断を実行します。</div>
-          <div class=row><input class=primary type=button id=runDeveloperDiagnostics value="診断を今すぐ実行"></div>
+          <div class=hint>通常利用は「軽量」推奨です。完全診断と下の比較診断は追加のAPI通信を行います。候補取得の比較と詳細通信数の見積もりであり、処理全体の速度比較ではありません。</div>
+          <div class=row><input type=button id=runDeveloperDiagnostics value="追加通信を伴う比較診断"></div>
           <div id=developerDiagnosticStatus class=statusNote>開発者モードをONにするとページ初期化後にも自動実行します。</div>
         </div>
       </details></div>
@@ -5123,7 +5162,7 @@ html[data-nrn-ui-theme="dark"] .nrn-contributor-ng-name-button:hover {
           credentials: 'same-origin',
           cache: 'no-store',
           signal: this._abortController?.signal
-        })
+        }, 15000, {run:this._diagnostics,kind:'page',lane:fetchScope === 'DEV' ? 'diagnostic' : 'run'})
         if (!res.ok) {
           var httpError = new Error('HTTP ' + res.status)
           httpError.status = res.status
@@ -5519,10 +5558,17 @@ html[data-nrn-ui-theme="dark"] .nrn-contributor-ng-name-button:hover {
       async _applyAdDecoration(root, videoId) {
         try {
           if (this._disposed || root.dataset.nrnAdDecorated === 'true') return
-          var json = await Network.ads('decoration:' + videoId, async function() {
-            var res = await Network.fetchResponse('https://api.nicoad.nicovideo.jp/v1/contents/video/' + videoId, {credentials: 'omit'}, 10000)
+          var diagnostics = this._diagnostics
+          var ownerPage = this
+          var json = await Network.ads((diagnostics?.queueKey || '') + ':decoration:' + videoId, async function() {
+            if (ownerPage._disposed) return null
+            var res = await Network.fetchResponse('https://api.nicoad.nicovideo.jp/v1/contents/video/' + videoId, {credentials:'omit',signal:ownerPage._abortController?.signal}, 10000, {run:diagnostics,kind:'adsDecoration'})
             if (!res.ok) throw new Error('広告 HTTP ' + res.status)
-            return res.json()
+            try {
+              var value = await res.json()
+              if (!value?.data || typeof value.data !== 'object') throw new Error('invalid decoration')
+              return value
+            } catch (error) { diagnostics?.validationFailure('adsDecoration','run','invalid'); throw error }
           })
           if (this._disposed || root.dataset.nrnAdDecorated === 'true') return
           root.dataset.nrnAdDecorated = 'true'
@@ -6947,50 +6993,184 @@ div:has(> div > a[data-anchor-page="ranking_genre"][href^="/watch/"] > div > p),
   // Cross-cutting behavior belongs here instead of individual card classes.
   // ========================================================================
   var Diagnostics = (function() {
-    var PREFIX = '[NicoNicoRankingNG v14.0]'
-    var history = []
-    var maxHistory = 300
-
-    var push = function(level, module, message, data) {
-      var entry = {
-        at: new Date().toISOString(),
-        level: level,
-        module: module,
-        message: message,
-        data: data == null ? null : data
+    const version = typeof NRN_VERSION === 'string' ? NRN_VERSION : 'unknown'
+    const native = typeof nrnNativeConsole === 'object' ? nrnNativeConsole : globalThis.console
+    const now = () => typeof performance === 'object' ? performance.now() : Date.now()
+    const clone = value => JSON.parse(JSON.stringify(value))
+    const number = value => typeof value === 'number' && Number.isFinite(value) ? Math.max(0,Math.round(value)) : null
+    const fields = ['ownerId','ownerType','ownerName','ownerVisibility','tags','lockedTags','description']
+    const kinds = ['detail','page','snapshot','adsThanks','adsDecoration','other']
+    const outcomes = ['ok','http','network','timeout','aborted','invalid','apiFailure']
+    const phases = ['starting','waiting-dom','initial-ng','validating-api','fetching','ng-check','adding','completed','stopped','error','disabled','disposed']
+    const runtimeKeys = ['visibleTotal','visibleOriginal','visibleInjected','originalNg','injectedNg','pending',
+      'candidatePool','fetchedUnits','fetchedItems','detailChecked','acceptedFromAdded','apiPrefilteredNg',
+      'duplicatesRemoved','adPending','detailCacheHits','detailCacheMisses','detailCacheRestores',
+      'detailCacheRestoreFailures','searchedPhysicalPageCount']
+    const history = [], previous = []
+    const problemCounts = {startup:0,routeSetup:0,developerAudit:0}
+    let active = null, sequence = 0, eventSequence = 0
+    function event(level,module) {
+      history.push({sequence:++eventSequence,level,module:['startup','new-tab'].includes(module) ? module : 'other'})
+      if (history.length > 300) history.shift()
+    }
+    function settings(config) {
+      const counts = {}
+      for (const key of ['ngMovies','ngTitles','ngUserIds','ngChannelIds','ngUserNames','ngTags','ngLockedTags']) counts[key] = number(config?.[key]?.set?.size)
+      return {
+        ngCounts:counts,
+        lockedTagCountEnabled:Boolean(config?.ngLockedTagCountEnabled?.value),
+        advancedRulesEnabled:Boolean(config?.advancedNgRulesEnabled?.value),
+        detailsEnabled:Boolean(config?.useGetThumbInfo?.value),
+        detailConcurrency:number(config?.thumbInfoConcurrency?.value),
+        detailPanelAlwaysOpen:config?.movieInfoTogglable?.value === false,
+        descriptionAlwaysOpen:config?.descriptionTogglable?.value === false,
+        sessionCacheEnabled:Boolean(config?.sessionDetailCacheEnabled?.value),
+        selfAdWarningEnabled:Boolean(config?.selfAdWarningEnabled?.value),
+        autoFillEnabled:Boolean(config?.autoFillEnabled?.value),
+        autoFillTarget:number(config?.autoFillTargetCount?.value),
+        requestedSource:['legacy','hybrid','snapshot'].includes(config?.autoFillInfoMode?.value) ? config.autoFillInfoMode.value : 'unknown'
       }
-      history.push(entry)
-      if (history.length > maxHistory) history.splice(0, history.length - maxHistory)
-      return entry
     }
-
-    var write = function(level, module, message, data) {
-      push(level, module, message, data)
-      var fn = level === 'error' ? console.error
-        : level === 'warn' ? console.warn : console.log
-      if (data == null) fn(PREFIX, '[' + module + ']', message)
-      else fn(PREFIX, '[' + module + ']', message, data)
-    }
-
-    var api = {
-      log: function(module, message, data) { write('log', module, message, data) },
-      warn: function(module, message, data) { write('warn', module, message, data) },
-      error: function(module, message, data) { write('error', module, message, data) },
-      getHistory: function() { return history.slice() },
-      snapshot: function() {
+    function start(config,path) {
+      active?.close()
+      const started = now(), seq = ++sequence
+      const routeKind = /^\/tag\//.test(path) ? 'tag' : /^\/search\//.test(path) ? 'search' : /^\/ranking/.test(path) ? 'ranking' : 'other'
+      let movies = null, queue = null, runtime = null, closed = false, phase = 'starting'
+      let frozen = null, initial = null, comparison = null, audit = null, terminalElapsedMs = null, endedPhase = null
+      const pending = new Set(), attempted = new Set(), recent = new Set(), session = new Set()
+      const payloadFailures = {run:{},diagnostic:{}}
+      const network = Object.fromEntries(['run','diagnostic'].map(lane => [lane,Object.fromEntries(kinds.map(kind => [kind,{
+        attempts:0,retries:0,active:0,peakActive:0,ok:0,http:0,network:0,timeout:0,aborted:0,invalid:0,apiFailure:0,durationSumMs:0
+      }]))]))
+      function detailState() {
+        const plan = {total:0,readyWithoutRequest:0,cacheOnly:0,requestedVideos:attempted.size,queued:queue?._pendingIds?.length || 0,terminalUnresolved:0,awaitingRequired:0}
+        const states = Object.fromEntries(fields.map(field => [field,{unknown:0,known:0,failed:0}]))
+        const missing = Object.fromEntries(fields.map(field => [field,0]))
+        for (const movie of movies?._idToMovie?.values() || []) {
+          plan.total++
+          const required = MetadataReadiness.required(movie,config)
+          let ready = true
+          for (const field of fields) {
+            const state = movie.metadata[field]
+            states[field][['known','failed'].includes(state) ? state : 'unknown']++
+            if (required.has(field) && state !== 'known') { missing[field]++; ready = false }
+          }
+          if (movie.thumbInfoDone && !ready) plan.terminalUnresolved++
+          if (!movie.thumbInfoDone && !ready) plan.awaitingRequired++
+          if (!attempted.has(movie.id)) {
+            if (recent.has(movie.id) || session.has(movie.id)) plan.cacheOnly++
+            else if (ready) plan.readyWithoutRequest++
+          }
+        }
+        return {detailPlan:plan,fieldStates:states,missingRequired:missing}
+      }
+      function snapshot() {
+        if (closed) return clone(frozen)
+        const data = typeof runtime === 'function' ? runtime() : {}
+        const safeRuntime = Object.fromEntries(runtimeKeys.map(key => [key,number(data?.[key])]))
+        const net = clone(network);net.run.detail.uniqueVideos = attempted.size
         return {
-          version: '14.1',
-          url: location.href,
-          historyCount: history.length,
-          recent: history.slice(-30)
+          sequence:seq,routeKind,phase,endedPhase,elapsedSinceRouteStartMs:number(now()-started),terminalElapsedMs,
+          settings:settings(config),network:net,payloadFailures:clone(payloadFailures),...detailState(),runtime:safeRuntime,
+          cache:{recentRestoredVideos:recent.size,sessionRestoredVideos:session.size,
+            restoredAfterRequestStarted:[...new Set([...recent,...session])].filter(id => attempted.has(id)).length},
+          initialProcessing:clone(initial),sourceComparison:clone(comparison),audit:clone(audit)
         }
       }
+      const run = {
+        queueKey:'route-' + seq,
+        validationFailure(kind,lane,result) {
+          if (closed || !kinds.includes(kind) || !['invalid','apiFailure','incomplete'].includes(result)) return
+          lane = lane === 'diagnostic' ? lane : 'run'
+          const counts = payloadFailures[lane][kind] || (payloadFailures[lane][kind] = {invalid:0,apiFailure:0,incomplete:0})
+          counts[result]++
+        },
+        bind(value,thumbInfo) { if (!closed) { movies = value; if (thumbInfo) queue = thumbInfo } },
+        runtime(provider) { if (!closed) runtime = provider },
+        phase(value) {
+          if (closed) return
+          phase = phases.includes(value) ? value : 'starting'
+          terminalElapsedMs = ['completed','stopped','error','disabled'].includes(phase) ? number(now()-started) : null
+        },
+        audit(value) {
+          if (!closed) audit = Object.fromEntries(['duplicateCards','modelWarnings','ownerNgMismatches','invalidNgIds'].map(key => [key,number(value[key])]))
+        },
+        initial(value) {
+          if (closed) return
+          initial = Object.fromEntries(['totalInitMs','domWaitMs','thumbInfoMs','selfAdMs','originalCount','visibleAfterNg'].map(key => [key,number(value[key])]))
+        },
+        comparison(value) {
+          if (closed) return
+          comparison = {measurement:'candidate-fetch-and-estimate',sameWorkload:false}
+          for (const mode of ['legacy','hybrid','snapshot']) {
+            const v = value?.[mode] || {}
+            comparison[mode] = {ok:v.ok === true,candidates:number(v.candidateCount),estimatedDetailChecks:number(v.estimatedDetailChecks),
+              sourceMs:number(v.sourceElapsedMs ?? v.elapsedMs),exactRate:number(v.exactRate),overlapRate:number(v.overlapRate),titleMismatches:number(v.titleMismatches)}
+          }
+        },
+        cache(id,kind) { if (!closed && (kind === 'recent' || kind === 'session')) (kind === 'recent' ? recent : session).add(id) },
+        begin(kind,lane,id,retry) {
+          if (closed) return function() {}
+          lane = lane === 'diagnostic' ? lane : 'run';kind = kinds.includes(kind) ? kind : 'other'
+          const counter = network[lane][kind], at = now()
+          counter.attempts++;counter.active++;counter.peakActive = Math.max(counter.peakActive,counter.active)
+          if (retry === true) counter.retries++
+          if (kind === 'detail' && lane === 'run' && id != null) attempted.add(id)
+          let settled = false
+          const finish = result => {
+            if (settled) return
+            settled = true;pending.delete(finish);counter.active--
+            counter[outcomes.includes(result) ? result : 'network']++
+            counter.durationSumMs += number(now()-at)
+          }
+          pending.add(finish);return finish
+        },
+        snapshot,
+        close() {
+          if (closed) return
+          for (const finish of [...pending]) finish('aborted')
+          endedPhase = phase;phase = 'disposed';frozen = snapshot();closed = true
+          previous.push(frozen);if (previous.length > 3) previous.shift()
+          movies = queue = runtime = config = null
+          attempted.clear();recent.clear();session.clear()
+          if (active === run) active = null
+        }
+      }
+      active = run
+      native?.log?.('[NRN ' + version + '] 診断開始。設定 → 開発者・診断 → 匿名診断をコピー で共有できます。')
+      return run
     }
-
+    const api = {
+      start,
+      log(module) { event('log',module) },
+      warn(module) { event('warn',module) },
+      error(module) { event('error',module) },
+      problem(code) {
+        if (!Object.hasOwn(problemCounts,code)) return
+        problemCounts[code]++
+        api.publish('error')
+      },
+      getHistory() { return clone(history) },
+      snapshot() {
+        return {format:'NRN-DIAGNOSTICS-1',version,scope:'this-userscript-only',
+          measurement:{network:'transport-invocations-including-retries',timings:'monotonic-milliseconds',
+            success:'detail-ok-includes-XML-validation;other-ok-is-HTTP-success-see-payloadFailures',
+            durationSum:'sum-of-requests-not-wall-time',detailPlan:'current-distinct-videos-not-cumulative-skips'},
+          privacy:{urls:false,searchTerms:false,videoIds:false,ownerIds:false,names:false,ruleValues:false,cookies:false,rawErrors:false},
+          current:active?.snapshot() || null,previous:clone(previous),
+          problemCounts:{...problemCounts},
+          consoleCounts:typeof nrnConsoleCounts === 'object' ? {...nrnConsoleCounts} : {warnings:0,errors:0},
+          historyCount:history.length,recent:clone(history.slice(-30))}
+      },
+      publish(reason) {
+        const text = JSON.stringify({...api.snapshot(),reportReason:['initial','terminal','audit','manual','error'].includes(reason) ? reason : 'manual'},null,2)
+        native?.log?.('NRN_REPORT_BEGIN\n' + text + '\nNRN_REPORT_END')
+        return text
+      }
+    }
     window.__nrnDiagnostics = api
     return api
   })()
-
   var NewTabService = (function() {
     var installed = false
     var config = null
@@ -7773,7 +7953,7 @@ a.nrn-parsed[data-anchor-detail="nicoad"] > .nrn-movie-info-toggle { background:
   })()
   var Main = (function() {
     var MAINTENANCE_MANIFEST = Object.freeze({
-      version:'14.0',
+      version:NRN_VERSION,
       principles:[
         '既存NGデータ形式を壊さない',
         '動画カードDOMと横断的ポリシーを分離する',
@@ -7841,13 +8021,13 @@ a.nrn-parsed[data-anchor-detail="nicoad"] > .nrn-movie-info-toggle { background:
     }
     // Short-lived successful metadata only; NG decisions always use current settings.
     var recentDetails = new Map()
-    var createThumbInfoRequester = function(movies, movieViewModes) {
+    var createThumbInfoRequester = function(movies, movieViewModes, diagnostics) {
       var disposed = false, scheduled = false
       var watched = new Set()
       var applyDetails = ThumbInfoListener.forCompleted(movies)
       var thumbInfo = new ThumbInfo(
           gmXmlHttpRequest(),
-          movies.config.thumbInfoConcurrency.value)
+          movies.config.thumbInfoConcurrency.value, diagnostics)
         .on('completed', function(info) {
           recentDetails.delete(info.id)
           recentDetails.set(info.id, {info:info, at:Date.now()})
@@ -7882,25 +8062,21 @@ a.nrn-parsed[data-anchor-detail="nicoad"] > .nrn-movie-info-toggle { background:
           }
           var cached = recentDetails.get(id)
           if (cached && Date.now() - cached.at > 120000) { recentDetails.delete(id); cached = null }
-          if (cached && !movies.get(id).thumbInfoDone) applyDetails(cached.info)
+          if (cached && !movies.get(id).thumbInfoDone) {
+            applyDetails(cached.info)
+            if (movie.thumbInfoDone) diagnostics?.cache(id,'recent')
+          }
         }
         var pendingIds = allIds.filter(function(id) {
           var movie = movies.get(id)
           return movie && !movie.thumbInfoDone && !MetadataReadiness.ready(movie,movies.config)
         })
-        var skippedDone = allIds.length - pendingIds.length
-        if (skippedDone > 0) {
-          console.log('[NicoNicoRankingNG ThumbInfo] 必要項目が既知または取得終了のため通信を省略:', {
-            totalIds: allIds.length,
-            requestIds: pendingIds.length,
-            skippedDone: skippedDone
-          })
-        }
         thumbInfo.request(pendingIds, prefer)
       }
       request.dispose = function() {
         disposed = true
         thumbInfo.dispose()
+        diagnostics?.close()
         movies.config.thumbInfoConcurrency.off('changed',updateConcurrency)
         for (var key of MetadataReadiness.settings) movies.config[key].off('changed',settingsChanged)
         for (var movie of watched) {
@@ -7909,18 +8085,21 @@ a.nrn-parsed[data-anchor-detail="nicoad"] > .nrn-movie-info-toggle { background:
         }
         watched.clear()
       }
+      diagnostics?.bind(movies,thumbInfo)
       return request
     }
-    var getThumbInfoRequester = function(movies, movieViewModes) {
-      return createThumbInfoRequester(movies, movieViewModes)
+    var getThumbInfoRequester = function(movies, movieViewModes, diagnostics) {
+      return createThumbInfoRequester(movies, movieViewModes, diagnostics)
     }
     var createModel = function(config) {
       var movies = new Movies(config)
+      var diagnostics = Diagnostics.start(config,location.pathname)
       config._nrnRulePreviewMovies = () => Array.from(movies._idToMovie.values()).slice(0,100)
       var applySearchOwner = ThumbInfoListener.forSearch(movies)
       var movieViewModes = new MovieViewModes(config)
-      var requestThumbInfo = getThumbInfoRequester(movies, movieViewModes)
+      var requestThumbInfo = getThumbInfoRequester(movies, movieViewModes, diagnostics)
       return {
+        diagnostics,
         config,
         movies,
         movieViewModes,
@@ -8333,7 +8512,7 @@ a.nrn-parsed[data-anchor-detail="nicoad"] > .nrn-movie-info-toggle { background:
         delete page._refreshPagerAnnotations
         if (typeof restorePagerUi === 'function') restorePagerUi()
       }
-      var LOG = '[NicoNicoRankingNG autoFill v14.1]'
+      var LOG = '[NicoNicoRankingNG autoFill ' + NRN_VERSION + ']'
 
       if (typeof page.fetchPageItems !== 'function') {
         console.warn(LOG, 'このページでは自動継ぎ足し用のページ取得処理が利用できません')
@@ -8349,19 +8528,27 @@ a.nrn-parsed[data-anchor-detail="nicoad"] > .nrn-movie-info-toggle { background:
           var request = typeof GM_xmlhttpRequest === 'undefined'
             ? GM.xmlHttpRequest : GM_xmlhttpRequest
           if (page._disposed) { resolve(null); return }
+          var measured = model.diagnostics?.begin(options._nrnKind,options._nrnLane) || function() {}
+          var transportOptions = {...options}
+          delete transportOptions._nrnKind
+          delete transportOptions._nrnLane
           var settled = false
-          var finish = function(fn) { return function(value) {
+          var finish = function(fn, outcome) { return function(value) {
             if (settled) return
-            settled = true; handles.delete(handle); fn(value)
+            settled = true; handles.delete(handle)
+            measured(outcome || (value?.status >= 200 && value.status < 300 ? 'ok' : 'http'))
+            fn(value)
           } }
-          var handle = request(Object.assign({}, options, {
+          try {
+          var handle = request(Object.assign({}, transportOptions, {
             onload: finish(resolve),
-            onerror: finish(reject),
-            onabort: finish(function() { reject(new Error('request aborted')) }),
-            ontimeout: finish(function() { reject(new Error('timeout')) })
+            onerror: finish(reject,'network'),
+            onabort: finish(function() { reject(new Error('request aborted')) },'aborted'),
+            ontimeout: finish(function() { reject(new Error('timeout')) },'timeout')
           }))
           if (handle && !settled) handles.add(handle)
-          if (handle && typeof handle.catch === 'function') handle.catch(finish(reject))
+          if (handle && typeof handle.catch === 'function') handle.catch(finish(reject,'network'))
+          } catch (error) { finish(reject,'network')(error) }
         })
       }
 
@@ -8440,6 +8627,7 @@ a.nrn-parsed[data-anchor-detail="nicoad"] > .nrn-movie-info-toggle { background:
         }
         try {
           var response = await gmRequest({
+            _nrnKind:'adsThanks',
             method:'GET',
             url:'https://api.nicoad.nicovideo.jp/v1/contents/video/'
               + encodeURIComponent(movie.id) + '/thanks?limit=100',
@@ -8455,12 +8643,15 @@ a.nrn-parsed[data-anchor-detail="nicoad"] > .nrn-movie-info-toggle { background:
           if (Number(response.status) < 200 || Number(response.status) >= 300) {
             throw new Error('HTTP ' + response.status)
           }
-          var json = JSON.parse(response.responseText || response.response || '{}')
-          if (!json || !json.data || !Array.isArray(json.data.sponsors)) {
-            throw new Error('広告者一覧の応答形式が不正です')
-          }
+          try {
+            var json = JSON.parse(response.responseText || response.response || '{}')
+            if (!json || !json.data || !Array.isArray(json.data.sponsors)) throw new Error('広告者一覧の応答形式が不正です')
+          } catch (error) { model.diagnostics?.validationFailure('adsThanks','run','invalid'); throw error }
           var sponsors = json.data.sponsors
-          if (sponsors.length >= 100) throw new Error('広告者一覧が取得上限100件に到達したため、一致・不一致の判定を保留します')
+          if (sponsors.length >= 100) {
+            model.diagnostics?.validationFailure('adsThanks','run','incomplete')
+            throw new Error('広告者一覧が取得上限100件に到達したため、一致・不一致の判定を保留します')
+          }
           result.sponsors = sponsors.map(function(s) {
             return {
               userId:s && s.userId != null ? Number(s.userId) : null,
@@ -8882,13 +9073,16 @@ a.nrn-parsed[data-anchor-detail="nicoad"] > .nrn-movie-info-toggle { background:
           updateStatus()
           return
         }
+        var phaseChanged = phase !== nextPhase
         phase = nextPhase
+        model.diagnostics?.phase(nextPhase)
         phaseDetail = detail
         if (nextPhase === 'completed' || nextPhase === 'stopped' || nextPhase === 'error') {
           finishedAt = performance.now()
         }
         console.log(LOG, '状態変更:', nextPhase, phaseDetail)
         updateStatus()
+        if (phaseChanged && ['completed','stopped','error'].includes(nextPhase)) Diagnostics.publish('terminal')
       }
 
       var phaseText = function() {
@@ -9100,7 +9294,7 @@ a.nrn-parsed[data-anchor-detail="nicoad"] > .nrn-movie-info-toggle { background:
       var logRuntimeSettings = function() {
         var search = currentSearchDescriptorForLog()
         var settings = {
-          version: '14.1',
+          version: NRN_VERSION,
           url: location.href,
           searchType: search.type,
           query: search.query,
@@ -9233,7 +9427,7 @@ a.nrn-parsed[data-anchor-detail="nicoad"] > .nrn-movie-info-toggle { background:
         }
 
         var lines = [
-          'Nico Nico Ranking NG / AutoFill v14.1',
+          'Nico Nico Ranking NG / AutoFill ' + NRN_VERSION,
           '状態：' + phaseText(),
           phaseDetail ? '処理：' + phaseDetail : '',
           '取得方式：' + sourceLabel + (fallbackReason ? '（fallback: ' + fallbackReason + '）' : ''),
@@ -9335,14 +9529,16 @@ a.nrn-parsed[data-anchor-detail="nicoad"] > .nrn-movie-info-toggle { background:
         return data
       }
 
-      listen(badge, 'dblclick', function() {
-        var s = logSnapshot('status badge dblclick', {
-          domCards: page.doc.querySelectorAll('[data-decoration-video-id]').length,
-          domInjected: page.doc.querySelectorAll('[data-nrn-autofill="true"]').length,
-          domHidden: page.doc.querySelectorAll('[data-decoration-video-id].nrn-hide').length
-        })
-        console.table(s)
+      model.diagnostics?.runtime(function() {
+        return {visibleTotal:initialized ? visibleTotalCount() : null,
+          visibleOriginal:initialized ? visibleOriginalCount() : null,visibleInjected:visibleInjectedCount(),
+          originalNg:initialized ? originalNgCount() : null,injectedNg:injectedNgCount(),pending:pendingInjectedCount(),
+          candidatePool:candidatePool.length,fetchedUnits:fetchedExtraPages,fetchedItems:totalFetchedItems,
+          detailChecked:totalDetailChecked,acceptedFromAdded:totalAcceptedFromAdded,apiPrefilteredNg:totalApiPrefilteredNg,
+          duplicatesRemoved:totalDuplicatesRemoved,adPending:adPending,searchedPhysicalPageCount:searchedPhysicalPageCount(),
+          detailCacheHits:cacheHits,detailCacheMisses:cacheMisses,detailCacheRestores:cacheRestores,detailCacheRestoreFailures:cacheRestoreFailures}
       })
+      listen(badge, 'dblclick', function() { Diagnostics.publish('manual') })
 
       // -------------------- waiting helpers --------------------
       var waitForInitialRoots = function(timeoutMs) {
@@ -9557,7 +9753,7 @@ a.nrn-parsed[data-anchor-detail="nicoad"] > .nrn-movie-info-toggle { background:
         console.groupEnd()
       }
 
-      var snapshotFetchOffset = async function(offset) {
+      var snapshotFetchOffset = async function(offset, diagnosticLane) {
         if (page._disposed) return
         var p = new URLSearchParams()
         p.set('q', snapshotDescriptor.q)
@@ -9581,6 +9777,7 @@ a.nrn-parsed[data-anchor-detail="nicoad"] > .nrn-movie-info-toggle { background:
 
         var started = performance.now()
         var res = await gmRequest({
+          _nrnKind:'snapshot',_nrnLane:diagnosticLane,
           method: 'GET',
           url: SNAPSHOT_ENDPOINT + '?' + p.toString(),
           timeout: 10000
@@ -9589,8 +9786,10 @@ a.nrn-parsed[data-anchor-detail="nicoad"] > .nrn-movie-info-toggle { background:
         var networkDone = performance.now()
 
         if (res.status !== 200) throw new Error('Snapshot API HTTP ' + res.status)
-        var json = JSON.parse(res.responseText)
-        if (!json || !Array.isArray(json.data)) throw new Error('Snapshot APIの応答形式が不正です')
+        try {
+          var json = JSON.parse(res.responseText)
+          if (!json || !Array.isArray(json.data)) throw new Error('Snapshot APIの応答形式が不正です')
+        } catch (error) { model.diagnostics?.validationFailure('snapshot',diagnosticLane,'invalid'); throw error }
         var data = json.data
         var rawTotal = json.meta && json.meta.totalCount
         var totalCount = rawTotal == null ? NaN : Number(rawTotal)
@@ -10653,6 +10852,7 @@ a.nrn-parsed[data-anchor-detail="nicoad"] > .nrn-movie-info-toggle { background:
               error: {type:'NO_ERROR', message:'cache'}
             })
             restored++
+            model.diagnostics?.cache(id,'session')
             cacheRestores++
             rows.push({
               id:id,
@@ -11506,7 +11706,7 @@ a.nrn-parsed[data-anchor-detail="nicoad"] > .nrn-movie-info-toggle { background:
         if (snapshotDescriptor.supported) {
           try {
             var s0 = performance.now()
-            var snapshot = await snapshotFetchOffset(0)
+            var snapshot = await snapshotFetchOffset(0,'diagnostic')
             if (page._disposed) return
             var apiItems = snapshot.items || []
             var sourceMs = Math.round(performance.now() - s0)
@@ -11702,6 +11902,10 @@ a.nrn-parsed[data-anchor-detail="nicoad"] > .nrn-movie-info-toggle { background:
           }
 
           developerSuiteStatus = verdicts.length ? '完了・要確認' : '完了・正常'
+          if (sourceAudit) model.diagnostics?.comparison(sourceAudit)
+          model.diagnostics?.audit({duplicateCards:domAudit.duplicateCardCount,modelWarnings:domAudit.mismatchWarningCount,
+            ownerNgMismatches:userAudit.mismatches.length,invalidNgIds:userAudit.invalidCount})
+          Diagnostics.publish('audit')
           console.log(LOG, '開発者診断総合判定:', verdicts.length ? verdicts : ['✓ 重大な整合性問題は検出されませんでした'])
           console.log(LOG, '診断所要時間:', Math.round(performance.now() - developerSuiteLastRunAt) + 'ms')
           console.log(LOG, '===== 開発者モード一括診断 END =====')
@@ -11709,6 +11913,7 @@ a.nrn-parsed[data-anchor-detail="nicoad"] > .nrn-movie-info-toggle { background:
           if (page._disposed) return
           developerSuiteStatus = '診断エラー'
           console.error(LOG, '開発者診断中にエラー:', e)
+          Diagnostics.problem('developerAudit')
         } finally {
           console.groupEnd()
           developerSuiteRunning = false
@@ -11976,6 +12181,8 @@ a.nrn-parsed[data-anchor-detail="nicoad"] > .nrn-movie-info-toggle { background:
         }
         console.log(LOG, '初期処理パフォーマンス:', initialPerformance)
         window.__nrnInitialPerformance = initialPerformance
+        model.diagnostics?.initial(initialPerformance)
+        Diagnostics.publish('initial')
         updatePagerUi('initial checks completed')
 
         maybeFetchMore()
@@ -12278,6 +12485,7 @@ a.nrn-parsed[data-anchor-detail="nicoad"] > .nrn-movie-info-toggle { background:
           try {
             if (config.useGetThumbInfo.value) setPendingMoviesInvisible()
             model = createModel(config)
+            page._diagnostics = model.diagnostics
             ctrl = new Controller(config, page)
             ctrl.addListenersTo(page.doc.body)
             const view = createView(page, ctrl)
@@ -12288,7 +12496,7 @@ a.nrn-parsed[data-anchor-detail="nicoad"] > .nrn-movie-info-toggle { background:
             view.observeMutation(model)
             setupAutoFill(model, page, ctrl)
             console.log('[NicoNicoRankingNG SPA]', 'Start NG checks', page._sourceUrl)
-          } catch (e) { stop(); console.error(e) }
+          } catch (e) { console.error(e); Diagnostics.problem('routeSetup'); stop() }
         }
         const configure = function() {
           window.__nrnConfigureSpaNavigationGuard?.({enabled:config.spaNavigationFix.value, start, stop})
@@ -12298,6 +12506,7 @@ a.nrn-parsed[data-anchor-detail="nicoad"] > .nrn-movie-info-toggle { background:
         configure()
       } catch (e) {
         console.error(e)
+        Diagnostics.problem('startup')
         removePendingMovieInvisibleStyle()
       }
     }

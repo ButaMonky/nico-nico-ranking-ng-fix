@@ -6,7 +6,7 @@
 // @match        *://www.nicovideo.jp/ranking*
 // @match        *://www.nicovideo.jp/search/*
 // @match        *://www.nicovideo.jp/tag/*
-// @version      160.12
+// @version      160.13
 // @grant        unsafeWindow
 // @grant        GM_getValue
 // @grant        GM_setValue
@@ -202,13 +202,18 @@
 
   // This facade is scoped to this userscript; other scripts keep their console.
   var nrnConsoleConfig = null
+  var NRN_VERSION = '160.13'
+  var nrnNativeConsole = globalThis.console
+  var nrnConsoleCounts = {warnings:0,errors:0}
   var nrnSetConsoleConfig = function(config) { nrnConsoleConfig = config }
   var console = (function(nativeConsole) {
     var local = {}
     ;['log', 'info', 'warn', 'error', 'table', 'group', 'groupCollapsed', 'groupEnd'].forEach(function(method) {
       local[method] = function() {
-        if (method !== 'error' && !(nrnConsoleConfig && nrnConsoleConfig.developerMode.value)) return
-        if (typeof nativeConsole[method] === 'function') nativeConsole[method].apply(nativeConsole, arguments)
+        // Legacy messages contain titles, URLs, identifiers and raw errors.
+        // Only the allowlisted Diagnostics report reaches the host console.
+        if (method === 'warn') nrnConsoleCounts.warnings++
+        if (method === 'error') nrnConsoleCounts.errors++
       }
     })
     return local

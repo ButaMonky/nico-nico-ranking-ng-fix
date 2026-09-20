@@ -79,9 +79,10 @@
       return res.status + ' ' + res.statusText
     }
 
-    var ThumbInfo = function(httpRequest, concurrent) {
+    var ThumbInfo = function(httpRequest, concurrent, diagnostics) {
       _super.call(this)
       this.httpRequest = httpRequest
+      this.diagnostics = diagnostics
       this.concurrent = Math.max(1, Math.min(20, Math.trunc(Number(concurrent)) || 5))
       this._requestCount = 0
       this._pendingIds = []
@@ -104,45 +105,54 @@
           this._requestMovie(id, true)
         }
       },
-      _onload(id, res) {
+      _onload(id, res, measured) {
+        var thumbInfo = res.status === 200 ? parseResText(res.responseText) : null
+        var outcome = !thumbInfo ? 'http'
+          : thumbInfo.videoId != null && thumbInfo.videoId !== id ? 'invalid'
+          : thumbInfo.error.type === 'NO_ERROR' ? 'ok'
+          : thumbInfo.error.type === 'PARSING' ? 'invalid' : 'apiFailure'
+        measured?.(outcome)
         this._requestCount--
         this._requestAsPossible()
         if (res.status === 200) {
-          var thumbInfo = parseResText(res.responseText)
           if (thumbInfo.videoId != null && thumbInfo.videoId !== id) {
             this.emit('errorOccurred',error('VIDEO_ID_MISMATCH','動画IDが一致しません',id))
-            return
+            return 'invalid'
           }
           thumbInfo.id = id
           if (thumbInfo.error.type === 'NO_ERROR') {
             this.emit('completed', thumbInfo)
+            return 'ok'
           } else {
             this.emit('errorOccurred', thumbInfo)
+            return thumbInfo.error.type === 'PARSING' ? 'invalid' : 'apiFailure'
           }
         } else {
           this.emit('errorOccurred'
                   , error('HTTP_STATUS', statusMessage(res), id))
+          return 'http'
         }
       },
       _requestMovie(id, retry) {
         if (this._disposed) return
         var settled = false
+        var measured = this.diagnostics?.begin('detail','run',id,retry) || function() {}
         var once = callback => value => {
           if (settled || this._disposed) return
           settled = true
           this._handles.delete(request)
           callback(value)
         }
-        var fail = once(this._onerror.bind(this, id))
+        var fail = once(value => { measured('network'); this._onerror(id,value) })
         try {
         var request = this.httpRequest({
           method: 'GET',
           url: 'https://ext.nicovideo.jp/api/getthumbinfo/' + id,
           timeout: 5000,
-          onload: once(this._onload.bind(this, id)),
+          onload: once(value => this._onload(id,value,measured)),
           onerror: fail,
-          onabort: fail,
-          ontimeout: once(this._ontimeout.bind(this, id, retry)),
+          onabort: once(() => { measured('aborted'); this._onerror(id) }),
+          ontimeout: once(() => { measured('timeout'); this._ontimeout(id,retry) }),
         })
         if (!settled && request) this._handles.add(request)
         if (request && typeof request.catch === 'function') request.catch(fail)

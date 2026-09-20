@@ -23,7 +23,7 @@ test('build assembles approved source order and produces repeatable output', asy
     assert.deepEqual(first, Buffer.concat(await Promise.all(sourceParts.map(part => readFile(join(root,part))))));
     const metadata = bytes => bytes.toString('utf8').match(/\/\/ ==UserScript==[\s\S]*?\/\/ ==\/UserScript==/)[0];
     assert.equal(metadata(first).replace(/\/\/ @grant        unsafeWindow[\r\n]+/, '').replace(/@version[^\r\n]+/, '@version'), metadata(original).replace(/@version[^\r\n]+/, '@version'));
-    assert.match(metadata(first), /@version\s+160\.12/);
+    assert.match(metadata(first), /@version\s+160\.13/);
     await build(baseline, destination);
     assert.deepEqual(await readFile(destination), first);
   } finally {

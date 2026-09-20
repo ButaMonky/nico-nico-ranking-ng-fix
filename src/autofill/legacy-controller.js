@@ -28,7 +28,7 @@
         delete page._refreshPagerAnnotations
         if (typeof restorePagerUi === 'function') restorePagerUi()
       }
-      var LOG = '[NicoNicoRankingNG autoFill v14.1]'
+      var LOG = '[NicoNicoRankingNG autoFill ' + NRN_VERSION + ']'
 
       if (typeof page.fetchPageItems !== 'function') {
         console.warn(LOG, 'このページでは自動継ぎ足し用のページ取得処理が利用できません')
@@ -44,19 +44,27 @@
           var request = typeof GM_xmlhttpRequest === 'undefined'
             ? GM.xmlHttpRequest : GM_xmlhttpRequest
           if (page._disposed) { resolve(null); return }
+          var measured = model.diagnostics?.begin(options._nrnKind,options._nrnLane) || function() {}
+          var transportOptions = {...options}
+          delete transportOptions._nrnKind
+          delete transportOptions._nrnLane
           var settled = false
-          var finish = function(fn) { return function(value) {
+          var finish = function(fn, outcome) { return function(value) {
             if (settled) return
-            settled = true; handles.delete(handle); fn(value)
+            settled = true; handles.delete(handle)
+            measured(outcome || (value?.status >= 200 && value.status < 300 ? 'ok' : 'http'))
+            fn(value)
           } }
-          var handle = request(Object.assign({}, options, {
+          try {
+          var handle = request(Object.assign({}, transportOptions, {
             onload: finish(resolve),
-            onerror: finish(reject),
-            onabort: finish(function() { reject(new Error('request aborted')) }),
-            ontimeout: finish(function() { reject(new Error('timeout')) })
+            onerror: finish(reject,'network'),
+            onabort: finish(function() { reject(new Error('request aborted')) },'aborted'),
+            ontimeout: finish(function() { reject(new Error('timeout')) },'timeout')
           }))
           if (handle && !settled) handles.add(handle)
-          if (handle && typeof handle.catch === 'function') handle.catch(finish(reject))
+          if (handle && typeof handle.catch === 'function') handle.catch(finish(reject,'network'))
+          } catch (error) { finish(reject,'network')(error) }
         })
       }
 
@@ -135,6 +143,7 @@
         }
         try {
           var response = await gmRequest({
+            _nrnKind:'adsThanks',
             method:'GET',
             url:'https://api.nicoad.nicovideo.jp/v1/contents/video/'
               + encodeURIComponent(movie.id) + '/thanks?limit=100',
@@ -150,12 +159,15 @@
           if (Number(response.status) < 200 || Number(response.status) >= 300) {
             throw new Error('HTTP ' + response.status)
           }
-          var json = JSON.parse(response.responseText || response.response || '{}')
-          if (!json || !json.data || !Array.isArray(json.data.sponsors)) {
-            throw new Error('広告者一覧の応答形式が不正です')
-          }
+          try {
+            var json = JSON.parse(response.responseText || response.response || '{}')
+            if (!json || !json.data || !Array.isArray(json.data.sponsors)) throw new Error('広告者一覧の応答形式が不正です')
+          } catch (error) { model.diagnostics?.validationFailure('adsThanks','run','invalid'); throw error }
           var sponsors = json.data.sponsors
-          if (sponsors.length >= 100) throw new Error('広告者一覧が取得上限100件に到達したため、一致・不一致の判定を保留します')
+          if (sponsors.length >= 100) {
+            model.diagnostics?.validationFailure('adsThanks','run','incomplete')
+            throw new Error('広告者一覧が取得上限100件に到達したため、一致・不一致の判定を保留します')
+          }
           result.sponsors = sponsors.map(function(s) {
             return {
               userId:s && s.userId != null ? Number(s.userId) : null,
@@ -577,13 +589,16 @@
           updateStatus()
           return
         }
+        var phaseChanged = phase !== nextPhase
         phase = nextPhase
+        model.diagnostics?.phase(nextPhase)
         phaseDetail = detail
         if (nextPhase === 'completed' || nextPhase === 'stopped' || nextPhase === 'error') {
           finishedAt = performance.now()
         }
         console.log(LOG, '状態変更:', nextPhase, phaseDetail)
         updateStatus()
+        if (phaseChanged && ['completed','stopped','error'].includes(nextPhase)) Diagnostics.publish('terminal')
       }
 
       var phaseText = function() {
@@ -795,7 +810,7 @@
       var logRuntimeSettings = function() {
         var search = currentSearchDescriptorForLog()
         var settings = {
-          version: '14.1',
+          version: NRN_VERSION,
           url: location.href,
           searchType: search.type,
           query: search.query,
@@ -928,7 +943,7 @@
         }
 
         var lines = [
-          'Nico Nico Ranking NG / AutoFill v14.1',
+          'Nico Nico Ranking NG / AutoFill ' + NRN_VERSION,
           '状態：' + phaseText(),
           phaseDetail ? '処理：' + phaseDetail : '',
           '取得方式：' + sourceLabel + (fallbackReason ? '（fallback: ' + fallbackReason + '）' : ''),
@@ -1030,14 +1045,16 @@
         return data
       }
 
-      listen(badge, 'dblclick', function() {
-        var s = logSnapshot('status badge dblclick', {
-          domCards: page.doc.querySelectorAll('[data-decoration-video-id]').length,
-          domInjected: page.doc.querySelectorAll('[data-nrn-autofill="true"]').length,
-          domHidden: page.doc.querySelectorAll('[data-decoration-video-id].nrn-hide').length
-        })
-        console.table(s)
+      model.diagnostics?.runtime(function() {
+        return {visibleTotal:initialized ? visibleTotalCount() : null,
+          visibleOriginal:initialized ? visibleOriginalCount() : null,visibleInjected:visibleInjectedCount(),
+          originalNg:initialized ? originalNgCount() : null,injectedNg:injectedNgCount(),pending:pendingInjectedCount(),
+          candidatePool:candidatePool.length,fetchedUnits:fetchedExtraPages,fetchedItems:totalFetchedItems,
+          detailChecked:totalDetailChecked,acceptedFromAdded:totalAcceptedFromAdded,apiPrefilteredNg:totalApiPrefilteredNg,
+          duplicatesRemoved:totalDuplicatesRemoved,adPending:adPending,searchedPhysicalPageCount:searchedPhysicalPageCount(),
+          detailCacheHits:cacheHits,detailCacheMisses:cacheMisses,detailCacheRestores:cacheRestores,detailCacheRestoreFailures:cacheRestoreFailures}
       })
+      listen(badge, 'dblclick', function() { Diagnostics.publish('manual') })
 
       // -------------------- waiting helpers --------------------
       var waitForInitialRoots = function(timeoutMs) {
@@ -1252,7 +1269,7 @@
         console.groupEnd()
       }
 
-      var snapshotFetchOffset = async function(offset) {
+      var snapshotFetchOffset = async function(offset, diagnosticLane) {
         if (page._disposed) return
         var p = new URLSearchParams()
         p.set('q', snapshotDescriptor.q)
@@ -1276,6 +1293,7 @@
 
         var started = performance.now()
         var res = await gmRequest({
+          _nrnKind:'snapshot',_nrnLane:diagnosticLane,
           method: 'GET',
           url: SNAPSHOT_ENDPOINT + '?' + p.toString(),
           timeout: 10000
@@ -1284,8 +1302,10 @@
         var networkDone = performance.now()
 
         if (res.status !== 200) throw new Error('Snapshot API HTTP ' + res.status)
-        var json = JSON.parse(res.responseText)
-        if (!json || !Array.isArray(json.data)) throw new Error('Snapshot APIの応答形式が不正です')
+        try {
+          var json = JSON.parse(res.responseText)
+          if (!json || !Array.isArray(json.data)) throw new Error('Snapshot APIの応答形式が不正です')
+        } catch (error) { model.diagnostics?.validationFailure('snapshot',diagnosticLane,'invalid'); throw error }
         var data = json.data
         var rawTotal = json.meta && json.meta.totalCount
         var totalCount = rawTotal == null ? NaN : Number(rawTotal)
@@ -2348,6 +2368,7 @@
               error: {type:'NO_ERROR', message:'cache'}
             })
             restored++
+            model.diagnostics?.cache(id,'session')
             cacheRestores++
             rows.push({
               id:id,
@@ -3201,7 +3222,7 @@
         if (snapshotDescriptor.supported) {
           try {
             var s0 = performance.now()
-            var snapshot = await snapshotFetchOffset(0)
+            var snapshot = await snapshotFetchOffset(0,'diagnostic')
             if (page._disposed) return
             var apiItems = snapshot.items || []
             var sourceMs = Math.round(performance.now() - s0)
@@ -3397,6 +3418,10 @@
           }
 
           developerSuiteStatus = verdicts.length ? '完了・要確認' : '完了・正常'
+          if (sourceAudit) model.diagnostics?.comparison(sourceAudit)
+          model.diagnostics?.audit({duplicateCards:domAudit.duplicateCardCount,modelWarnings:domAudit.mismatchWarningCount,
+            ownerNgMismatches:userAudit.mismatches.length,invalidNgIds:userAudit.invalidCount})
+          Diagnostics.publish('audit')
           console.log(LOG, '開発者診断総合判定:', verdicts.length ? verdicts : ['✓ 重大な整合性問題は検出されませんでした'])
           console.log(LOG, '診断所要時間:', Math.round(performance.now() - developerSuiteLastRunAt) + 'ms')
           console.log(LOG, '===== 開発者モード一括診断 END =====')
@@ -3404,6 +3429,7 @@
           if (page._disposed) return
           developerSuiteStatus = '診断エラー'
           console.error(LOG, '開発者診断中にエラー:', e)
+          Diagnostics.problem('developerAudit')
         } finally {
           console.groupEnd()
           developerSuiteRunning = false
@@ -3671,6 +3697,8 @@
         }
         console.log(LOG, '初期処理パフォーマンス:', initialPerformance)
         window.__nrnInitialPerformance = initialPerformance
+        model.diagnostics?.initial(initialPerformance)
+        Diagnostics.publish('initial')
         updatePagerUi('initial checks completed')
 
         maybeFetchMore()

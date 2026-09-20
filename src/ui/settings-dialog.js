@@ -182,6 +182,7 @@
         if (e.key === 'Escape') this._close()
       }.bind(this))
       this._on('runDeveloperDiagnostics', 'click', this._runDeveloperDiagnostics.bind(this))
+      this._on('copyAnonymousDiagnostics', 'click', this._copyAnonymousDiagnostics.bind(this))
       this._on('exportVisibleCheckbox', 'change', this._exportVisibleCheckboxChanged.bind(this))
       this._on('importVisibleCheckbox', 'change', this._importVisibleCheckboxChanged.bind(this))
       this._on('exportButton', 'click', this._exportButtonClicked.bind(this))
@@ -392,6 +393,20 @@
       },
       _initAdvancedNgRuleBuilder() {
         this.ruleEditor = RuleEditor.mount(this)
+      },
+      async _copyAnonymousDiagnostics() {
+        var status = this._e('anonymousDiagnosticStatus')
+        var textarea = this._e('anonymousDiagnosticText')
+        textarea.hidden = false
+        textarea.value = Diagnostics.publish('manual')
+        textarea.focus()
+        textarea.select()
+        try {
+          await textarea.ownerDocument.defaultView.navigator.clipboard.writeText(textarea.value)
+          status.textContent = '匿名診断をコピーしました。そのまま開発タスクに貼り付けてください。'
+        } catch (e) {
+          status.textContent = '下の診断文を選択しました。Ctrl+Cでコピーしてください。'
+        }
       },
       _runDeveloperDiagnostics() {
         var status = this._e('developerDiagnosticStatus')
@@ -822,6 +837,10 @@
       <div data-tab-panel=developer><details class=card open>
         <summary>開発者・診断</summary>
         <div class=sectionBody>
+          <div class=row><input class=primary type=button id=copyAnonymousDiagnostics value="匿名診断をコピー"></div>
+          <div class=hint>通信回数・待ち時間・必要情報の取得状況を共有します。動画名・検索語・投稿者ID・NG内容・URLは含めません。コピー時の追加通信はありません。</div>
+          <div id=anonymousDiagnosticStatus class=statusNote>共有するときは、このボタンを使ってください。開発者モードはOFFのままでも利用できます。</div>
+          <textarea id=anonymousDiagnosticText aria-label="匿名診断レポート" readonly hidden style="width:100%;height:180px;box-sizing:border-box"></textarea>
           <div class=row><label><input type=checkbox id=developerMode>開発者モード</label><span class=pill>再読み込み不要</span></div>
           <div class=row><label>自動診断の量
             <select id=developerDiagnosticMode>
@@ -830,8 +849,8 @@
               <option value=manual>手動のみ</option>
             </select>
           </label></div>
-          <div class=hint>通常利用は「軽量」推奨です。完全診断はSnapshot API通信まで行うため数秒余計にかかる場合があります。「診断を今すぐ実行」は設定に関係なく完全診断を実行します。</div>
-          <div class=row><input class=primary type=button id=runDeveloperDiagnostics value="診断を今すぐ実行"></div>
+          <div class=hint>通常利用は「軽量」推奨です。完全診断と下の比較診断は追加のAPI通信を行います。候補取得の比較と詳細通信数の見積もりであり、処理全体の速度比較ではありません。</div>
+          <div class=row><input type=button id=runDeveloperDiagnostics value="追加通信を伴う比較診断"></div>
           <div id=developerDiagnosticStatus class=statusNote>開発者モードをONにするとページ初期化後にも自動実行します。</div>
         </div>
       </details></div>

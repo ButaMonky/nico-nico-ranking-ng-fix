@@ -3,24 +3,18 @@ import assert from 'node:assert/strict';
 import vm from 'node:vm';
 import {readFile} from 'node:fs/promises';
 import {baseline,output} from '../scripts/build.mjs';
-test('generated: diagnostic console is quiet until enabled, follows settings, preserves errors and host console',async()=>{
+test('generated: raw diagnostic values never escape the local console, host console is untouched',async()=>{
  const source=await readFile(output,'utf8');
- const start=source.indexOf('  var nrnConsoleConfig = null');
- const end=source.indexOf('  var createObject',start);
- assert.ok(start>0 && end>start);
+ const start=source.indexOf('  var nrnConsoleConfig = null'),end=source.indexOf('  var createObject',start);
  const calls=[],host={};
  for(const key of ['log','info','warn','error','table','group','groupCollapsed','groupEnd'])host[key]=(...args)=>calls.push([key,...args]);
  const sandbox={console:host};
- const api=vm.runInNewContext('(function(){'+source.slice(start,end)+';return {console,set:nrnSetConsoleConfig}})()',sandbox);
- const keys=Object.keys(host).filter(k=>k!=='error');
- keys.forEach(k=>api.console[k]('startup'));
- assert.equal(calls.length,0);
- const config={developerMode:{value:false}};api.set(config);
- keys.forEach(k=>api.console[k]('off'));assert.equal(calls.length,0);
- api.console.error('failure');assert.deepEqual(calls.pop(),['error','failure']);
- config.developerMode.value=true;
- keys.forEach(k=>api.console[k]('on'));assert.equal(calls.length,keys.length);
- config.developerMode.value=false;api.console.log('off again');assert.equal(calls.length,keys.length);
+ const api=vm.runInNewContext('(function(){'+source.slice(start,end)+';return {console,set:nrnSetConsoleConfig,counts:nrnConsoleCounts}})()',sandbox);
+ for(const enabled of [false,true]){
+  api.set({developerMode:{value:enabled}});
+  Object.keys(host).forEach(key=>api.console[key]('PRIVATE_VALUE',{url:'private'}));
+ }
+ assert.equal(calls.length,0);assert.equal(api.counts.errors,2);assert.equal(api.counts.warnings,2);
  assert.equal(sandbox.console,host);host.log('other script');assert.deepEqual(calls.at(-1),['log','other script']);
 });
 async function load(path,extra={}){
@@ -28,7 +22,7 @@ async function load(path,extra={}){
  assert.equal(source.split(start).length,2);assert.equal(source.split(end).length,2);
  const logs=[],window={open:()=>null};
  const api=vm.runInNewContext(source.slice(source.indexOf(start),source.indexOf(end))+';({Diagnostics,NewTabService})',
- {window,location:{href:'https://www.nicovideo.jp/tag/test',origin:'https://www.nicovideo.jp'},URL,
+ {NRN_VERSION:'160.13',window,location:{href:'https://www.nicovideo.jp/tag/test',origin:'https://www.nicovideo.jp'},URL,
  console:{log:(...a)=>logs.push(['log',...a]),warn:(...a)=>logs.push(['warn',...a]),error:(...a)=>logs.push(['error',...a])},...extra},{timeout:1000});
  return {...api,logs,window};
 }
@@ -36,11 +30,11 @@ for(const [label,path] of [['baseline',baseline],['generated',output]]){
  test(`${label}: diagnostics retention and snapshots`,async()=>{
   const {Diagnostics:d,logs,window}=await load(path);
   for(let i=0;i<305;i++)d.log('test',String(i));
-  assert.equal(d.getHistory().length,300);assert.equal(d.getHistory()[0].message,'5');
+  assert.equal(d.getHistory().length,300);if(label==='baseline')assert.equal(d.getHistory()[0].message,'5');else assert.equal(d.getHistory()[0].sequence,6);
   const copy=d.getHistory();copy.pop();assert.equal(d.getHistory().length,300);
-  assert.equal(d.snapshot().recent.length,30);assert.equal(d.snapshot().version,'14.1');
+  assert.equal(d.snapshot().recent.length,30);assert.equal(d.snapshot().version,label==='baseline'?'14.1':'160.13');
   d.warn('x','warning');d.error('x','failure',{id:1});
-  assert.equal(logs.at(-2)[0],'warn');assert.equal(logs.at(-1)[0],'error');
+  if(label==='baseline'){assert.equal(logs.at(-2)[0],'warn');assert.equal(logs.at(-1)[0],'error');}else assert.equal(logs.length,0);
   assert.equal(window.__nrnDiagnostics,d);
  });
  test(`${label}: new-tab API priority and failure handling`,async()=>{
