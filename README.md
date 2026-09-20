@@ -1,4 +1,12 @@
-最新160.17: [投稿者欄をニコニコ本来の表示に統一](docs/native-owner-16017.md)。画像・名前の構造、余白、文字サイズをサイトの表示クラスに揃え、古いCSSによる縦並び等の競合を修正。GitHub反映は保留。
+最新160.19（試験機能は既定OFF）: [追加カードのホバープレビューと確認範囲](docs/hover-preview-16019.md)。[160.18のページ斜線修正](docs/pager-consumption-16018.md)を含みます。GitHub送信は保留。
+
+# Nico Nico Ranking NG
+
+[変更履歴](CHANGELOG.md) · [開発・検証手順](CONTRIBUTING.md) · [タスク一覧](docs/TASKS.md) · [調査・残作業の背景](docs/BACKLOG.md)
+
+版別の実装・検証記録を以下に残しています。進行中の160.18・160.19は変更履歴の `Unreleased` とタスク一覧で管理します。ローカルの実装済み状態とGitHub公開は別です。公開前のプライバシー確認・履歴整理は最終工程として残っています。
+
+160.17: [投稿者欄をニコニコ本来の表示に統一](docs/native-owner-16017.md)。画像・名前の構造、余白、文字サイズをサイトの表示クラスに揃え、古いCSSによる縦並び等の競合を修正。GitHub反映は保留。
 
 160.16: [通常表示の投稿者欄と初期待機の改善](docs/compact-owner-16016.md)。▼未展開時にも補完名を表示。カード以外の装飾要素で初期処理が15秒待つケースを修正。次のUI・論理回路NG・プレビューの作業単位も整理。GitHub反映は保留。
 
@@ -27,7 +35,7 @@
 
 160.4: [通信・安定性の改善報告](docs/network-stability-1604.md)。自動テスト95件。
 
-# Nico Nico Ranking NG — リスト／タイル表示修正版
+## 以前の版と分割時の記録
 
 160.3: [論理式NG・先読み終端の見直し](docs/logic-pagination-fix.md)。自動テスト85件。生成物は前回と同じファイル名です。
 
@@ -53,7 +61,7 @@ node scripts/check-privacy.mjs
 
 npmが利用できる環境では同じ処理を `npm run build`、`npm run check`、`npm test` で実行できます。この作業環境にはnpmがなく、上記Node.js直接実行を検証します。npm経由の実行は未検証です。
 
-生成物は `dist/nico-nico-ranking-ng-v16-list-tile-fix.user.js`（メタデータ版番号160.17）です。baselineのスクリプト原本は編集しないでください。原本のSHA-256検証は引き続き必須です。ビルドは分割ソースの順序どおりの連結と出力一致を検証します。
+生成物は `dist/nico-nico-ranking-ng-v16-list-tile-fix.user.js`（メタデータ版番号160.19）です。baselineのスクリプト原本は編集しないでください。原本のSHA-256検証は引き続き必須です。ビルドは分割ソースの順序どおりの連結と出力一致を検証します。
 
 Git保存後は別フォルダーへ `git clone --no-hardlinks <このリポジトリの絶対パス> <新しい作業フォルダー>` を実行し、上記手順を繰り返します。distやTempの元ファイルをコピーする必要はありません。
 

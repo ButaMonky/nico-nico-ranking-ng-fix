@@ -146,6 +146,7 @@
       initSelect(config, doc, 'autoFillInfoMode')
       initSelect(config, doc, 'autoFillAdMode')
       initCheckbox(config, doc, 'selfAdWarningEnabled')
+      initCheckbox(config, doc, 'hoverPreviewEnabled')
       initNumberInput(config, doc, 'thumbInfoConcurrency', 1, 20)
       initCheckbox(config, doc, 'developerMode')
       initSelect(config, doc, 'statusPanelMode')
@@ -828,6 +829,7 @@
               <select id=autoFillAdMode><option value=all>候補すべて取得</option><option value=visible>表示動画のみ（推奨）</option><option value=none>取得しない</option></select>
             </label></div>
             <div class=row><label><input type=checkbox id=selfAdWarningEnabled>自演広告の可能性を警告する（実験的）</label></div>
+            <div class=row><label><input type=checkbox id=hoverPreviewEnabled>追加カードのホバープレビュー（試験機能）</label></div>
             <div class=hint>広告の見た目と広告者照合は別の通信です。「追加動画の広告」をOFFにしても、警告や広告関連の複合NGが有効なら広告者照合は行います。広告通信は全体で最大4件同時。広告者は最大100件を取得し、上限到達・取得失敗時は判定を保留します。</div>
           </div>
           <div class=hint>APIが現在の検索条件・並びを再現できない場合は自動で従来方式へ戻ります。🔒 タグロック数NGは完全判定が必要です。採用率が低くても異常とは扱いません。SPA対応がOFFのときはページ番号を「取得済み範囲＋未取得の番号＋最終ページ」に整理できます。ONでは元の番号を保ちます。詳細キャッシュは同一タブの再読み込みを跨いで再利用し、保存するのはタグ・ロック状態・投稿者などの詳細情報です。NG設定変更時は保存済みの最終判定を使わず、現在の設定で再判定します。</div>
@@ -919,6 +921,7 @@
     sessionDetailCacheMaxEntries: 'キャッシュ件数の上限です。古いものから削除します。',
     autoFillAdMode: '追加動画の広告リボン・提供者表示の取得範囲です。広告者照合の警告・複合NGとは独立しています。無駄を抑えるには「表示動画のみ」を選んでください。',
     selfAdWarningEnabled: '広告者一覧を確認し、投稿者本人によるニコニ広告の可能性を警告します。追加通信が発生します。',
+    hoverPreviewEnabled: '既定OFF。自動追加カードにマウスを約0.2秒乗せてから、1件だけ読み込みます。最大30秒、最初は無音。離脱・画面外・タブ非表示で停止します。実サイトでの再生は確認中です。コメントNGを安全に反映できない場合は映像のみ表示します。公式カードのプレビューは変更しません。',
     spaNavigationFix: '画面を再読み込みせず、検索結果の切り替わりに合わせて古い処理を終了しNG判定を開始します。SPA利用時は本来のページ番号リンクを維持します。',
     developerMode: '不具合を調べるためのログをコンソールに表示します。通常はOFFで使えます。他の拡張機能やニコニコ本体のログには影響しません。',
     developerDiagnosticMode: '軽量はローカル監査のみ、完全はAPI通信を含む3方式比較、手動のみはボタンを押した時だけ診断します。',

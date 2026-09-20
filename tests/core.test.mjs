@@ -27,6 +27,7 @@ for (const [index, path] of paths.entries()) {
       unknownContributorMovieVisible:true,ngLockedTagCountEnabled:false,ngLockedTagCountThreshold:5,
       advancedNgRulesEnabled:false,advancedNgRulesJson:'[]',autoFillEnabled:false,autoFillTargetCount:36,
       autoFillMaxExtraPages:5,autoFillInfoMode:'legacy',autoFillAdMode:'visible',selfAdWarningEnabled:false,
+      ...(index?{hoverPreviewEnabled:false}:{}),
       thumbInfoConcurrency:12,developerMode:false,statusPanelMode:'compact',detailUiTheme:'auto',
       autoFillDetailBatchMax:48,spaNavigationFix:true,autoFillPagerMode:'compactSkip',
       sessionDetailCacheEnabled:false,statusAnimationEnabled:true,developerDiagnosticMode:'light',

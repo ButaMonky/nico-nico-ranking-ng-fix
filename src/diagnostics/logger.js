@@ -42,7 +42,7 @@
       const started = now(), seq = ++sequence
       const routeKind = /^\/tag\//.test(path) ? 'tag' : /^\/search\//.test(path) ? 'search' : /^\/ranking/.test(path) ? 'ranking' : 'other'
       let movies = null, queue = null, runtime = null, closed = false, phase = 'starting'
-      let frozen = null, initial = null, comparison = null, audit = null, terminalElapsedMs = null, endedPhase = null
+      let frozen = null, initial = null, comparison = null, audit = null, preview = null, terminalElapsedMs = null, endedPhase = null
       const pending = new Set(), attempted = new Set(), recent = new Set(), session = new Set()
       const payloadFailures = {run:{},diagnostic:{}}
       const network = Object.fromEntries(['run','diagnostic'].map(lane => [lane,Object.fromEntries(kinds.map(kind => [kind,{
@@ -85,16 +85,20 @@
         const data = typeof runtime === 'function' ? runtime() : {}
         const safeRuntime = Object.fromEntries(runtimeKeys.map(key => [key,number(data?.[key])]))
         const net = clone(network);net.run.detail.uniqueVideos = attempted.size
+        const p = typeof preview === 'function' ? preview() : {}
+        const previewState = Object.fromEntries(['started','playing','stopped','blocked','error','unavailable','commentsUnavailable','preview','rights','comments','http','invalid','aborted','network'].map(k=>[k,number(p[k])]))
+        Object.assign(previewState,{active:p.active===true,enabled:Boolean(config?.hoverPreviewEnabled?.value),controlRequestsOnly:true})
         return {
           sequence:seq,routeKind,phase,endedPhase,elapsedSinceRouteStartMs:number(now()-started),terminalElapsedMs,
           settings:settings(config),network:net,payloadFailures:clone(payloadFailures),...detailState(),runtime:safeRuntime,
           cache:{recentRestoredVideos:recent.size,sessionRestoredVideos:session.size,
             restoredAfterRequestStarted:[...new Set([...recent,...session])].filter(id => attempted.has(id)).length},
-          initialProcessing:clone(initial),sourceComparison:clone(comparison),audit:clone(audit)
+          initialProcessing:clone(initial),sourceComparison:clone(comparison),audit:clone(audit),preview:previewState
         }
       }
       const run = {
         queueKey:'route-' + seq,
+        bindPreview(read) { if (!closed) preview=typeof read==='function'?read:null },
         validationFailure(kind,lane,result) {
           if (closed || !kinds.includes(kind) || !['invalid','apiFailure','incomplete'].includes(result)) return
           lane = lane === 'diagnostic' ? lane : 'run'
@@ -147,7 +151,7 @@
           for (const finish of [...pending]) finish('aborted')
           endedPhase = phase;phase = 'disposed';frozen = snapshot();closed = true
           previous.push(frozen);if (previous.length > 3) previous.shift()
-          movies = queue = runtime = config = null
+          movies = queue = runtime = config = preview = null
           attempted.clear();recent.clear();session.clear()
           if (active === run) active = null
         }

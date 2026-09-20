@@ -134,6 +134,7 @@
       // all / visible / none
       this.autoFillAdMode = store('autoFillAdMode', 'visible');
       this.selfAdWarningEnabled = store('selfAdWarningEnabled', false);
+      this.hoverPreviewEnabled = store('hoverPreviewEnabled', false);
       // GetThumbInfo の同時取得数。従来は固定5だった。
       this.thumbInfoConcurrency = store('thumbInfoConcurrency', 12);
       // v9.2: 1回ONにすれば、各ページで診断スイートを自動実行する。
@@ -189,6 +190,7 @@
         this.autoFillInfoMode.sync(),
         this.autoFillAdMode.sync(),
         this.selfAdWarningEnabled.sync(),
+        this.hoverPreviewEnabled.sync(),
         this.thumbInfoConcurrency.sync(),
         this.developerMode.sync(),
         this.statusPanelMode.sync(),
@@ -243,4 +245,3 @@
     }
     return Config
   })()
-

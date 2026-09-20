@@ -1,0 +1,62 @@
+name: 不具合報告
+description: 個人情報を含めずに、再現手順と動作を報告します。
+title: "[Bug] "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        まず現在の版と既知の制限をREADME・CHANGELOG・docs/TASKS.mdで確認してください。
+        名前、動画・投稿者ID、検索語、個人のURL、認証情報、PCの個人パスは記載しないでください。
+        生HTML・HAR・生ログ・閲覧履歴は添付不要です。画像は問題箇所だけに切り出し、識別情報を消してください。
+  - type: input
+    id: version
+    attributes:
+      label: スクリプトの版
+      placeholder: "160.xx"
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: 利用環境
+      description: OS、ブラウザ、ユーザースクリプト管理拡張の種類と版のみ。個人のプロファイル名やパスは不要です。
+    validations:
+      required: true
+  - type: dropdown
+    id: layout
+    attributes:
+      label: 表示モード
+      options:
+        - リスト
+        - タイル
+        - 両方
+        - 該当なし・不明
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: 再現手順
+      description: ページの種類、操作順、関係する設定を架空の例で説明してください。実際の検索語や閲覧URLは不要です。
+    validations:
+      required: true
+  - type: textarea
+    id: behavior
+    attributes:
+      label: 期待した動作と実際の動作
+      description: どこで違いが出たか、毎回起きるかを記載してください。
+    validations:
+      required: true
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: 匿名診断（任意）
+      description: 設定の「匿名診断をコピー」の出力を使い、貼り付け前に個人情報がないことを確認してください。コンソール全体の生ログは不要です。
+      render: text
+  - type: checkboxes
+    id: privacy
+    attributes:
+      label: 送信前の確認
+      options:
+        - label: 本文と添付に個人情報・認証情報・生HTML・HAR・生ログが含まれていないことを確認しました。
+          required: true

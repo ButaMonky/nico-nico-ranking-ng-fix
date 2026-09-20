@@ -9,6 +9,7 @@
         DetailUiTheme.watch(config, document)
         addStyle(DetailUiTheme.CSS)
         addStyle(CardEnhancements.css)
+        addStyle(HoverPreview.css)
         config.detailUiTheme.on('changed', function(v) {
           DetailUiTheme.apply(config, document, 'setting-changed:' + v)
         })
@@ -32,6 +33,7 @@
           var model, ctrl
           dispose = function() {
             page._disposed = true
+            page._hoverPreview?.dispose()
             page._disposeAutoFill?.()
             model?.requestThumbInfo.dispose?.()
             ctrl?.dispose()
@@ -49,6 +51,8 @@
             initialOwners = null
             page._diagnostics = model.diagnostics
             page._ownerNames = model.ownerNames
+            page._hoverPreview = HoverPreview.create(page,config)
+            model.diagnostics.bindPreview?.(()=>page._hoverPreview.snapshot())
             ctrl = new Controller(config, page)
             ctrl.addListenersTo(page.doc.body)
             const view = createView(page, ctrl)

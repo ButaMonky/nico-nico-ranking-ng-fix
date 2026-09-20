@@ -1,3 +1,4 @@
 * text=auto
 baseline/*.user.js -text
 src/**/*.js -text
+vendor/hls.js/hls.min.js -text

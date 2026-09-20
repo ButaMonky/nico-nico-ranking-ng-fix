@@ -780,7 +780,7 @@
         if (togglable) togglable.hidden = true
       },
       observeMutation(callback, refreshOwners) {
-        const transient = '[data-scope="presence"], [data-scope="tooltip"], video, canvas, .nrn-movie-info-container, .nrn-ng-reasons, .nrn-compact-owner'
+        const transient = '[data-scope="presence"], [data-scope="tooltip"], video, canvas, .nrn-preview, .nrn-movie-info-container, .nrn-ng-reasons, .nrn-compact-owner'
         const ownerSelector = 'a[data-group-ignore="true"][data-anchor-area="main"]'
         const ownerRoots = new Set()
         let parsePending = false
