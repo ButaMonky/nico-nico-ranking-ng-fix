@@ -75,3 +75,31 @@ test('search item adapter: one broken item does not discard the rest',()=>{
  try{realmJSON.parse=()=>response;read=A.readDocument(doc('{}'));}finally{realmJSON.parse=original;}
  assert.equal(read.status,'ok');assert.deepEqual(plain(read.items.map(i=>i.videoId)),['sm1','sm3']);
 });
+// BRUSH-005b: fetched result pages go through the same adapter.
+async function fetchPage(items,missingMeta=false){
+ const metadata={data:{response:{$getSearchVideoV2:{data:{items}},page:{pagination:{maxPage:3},playlist:'pl'}}}};
+ const page={querySelector:s=>s==='meta[name="server-response"]'&&!missingMeta?{getAttribute:()=>JSON.stringify(metadata)}:null,querySelectorAll:()=>[]};
+ const ctx={URL,URLSearchParams,AbortController,setTimeout,clearTimeout,location:new URL('https://www.nicovideo.jp/tag/test'),performance,console:{log(){},warn(){}},
+  DOMParser:class{parseFromString(){return page;}},fetch:async()=>({ok:true,url:'',text:async()=>''})};
+ const end=source.indexOf('  var Diagnostics = (function() {');
+ const ListPage=vm.runInNewContext(source.slice(0,end)+'return ListPage; })()',ctx);
+ return ListPage.prototype.fetchPageItems(2);
+}
+test('fetched pages: server-response items carry normalized likes without losing raw fields',async()=>{
+ const result=await fetchPage([{id:'sm1',title:'t1',count:{like:0,view:5},owner:{type:'user',id:12}},{id:'sm2',title:'t2',count:{}},
+  {id:'sm3',count:{like:'7'}},{id:'bad',count:{like:9}}]);
+ const rows=plain(result.items);
+ assert.deepEqual(rows.map(r=>r.__nrnSearchItem&&r.__nrnSearchItem.likeCount),[0,null,null,null]);
+ assert.equal(rows[3].__nrnSearchItem,null,'invalid IDs stay raw-only, as before');
+ assert.equal(rows[0].title,'t1');assert.equal(rows[0].count.view,5);assert.equal(rows[0].__nrnPlaylist,'pl');
+ assert.deepEqual(rows[0].__nrnSearchItem.owner,{type:'user',id:12,name:null,visibility:null});
+ assert.equal(rows.length,4,'page item count is unchanged');
+});
+test('fetched pages: injected roots only return the item of the same video',()=>{
+ const root={dataset:{decorationVideoId:'sm1'}},other={dataset:{decorationVideoId:'sm2'}};
+ const item=A.normalize({id:'sm1',count:{like:3}});
+ A.register(root,item);A.register(other,item);A.register(root,null);
+ assert.equal(A.fromRoot(root,'sm1').likeCount,3);assert.equal(A.fromRoot(other,'sm1'),null,'mismatched card is never registered');
+ assert.equal(A.fromRoot(root,'sm2'),null);root.dataset.decorationVideoId='sm9';assert.equal(A.fromRoot(root,'sm1'),null,'card reused for another video');
+ assert.equal(A.tryNormalize({id:'sm1',get owner(){throw new Error('broken');}}),null);
+});

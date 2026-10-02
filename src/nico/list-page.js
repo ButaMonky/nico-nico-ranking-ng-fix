@@ -322,7 +322,9 @@
             if (searchData && Array.isArray(searchData.items)) {
               // Preserve this fetched page's official continuous-play context.
               var playlist = parsed.data.response.page && parsed.data.response.page.playlist
-              items = searchData.items.map(item => ({...item, __nrnPlaylist:typeof playlist === 'string' ? playlist : null}))
+              // __nrnSearchItem: the same normalized fields as the initial document (BRUSH-005b).
+              items = searchData.items.map(item => ({...item, __nrnPlaylist:typeof playlist === 'string' ? playlist : null,
+                __nrnSearchItem:SearchItemAdapter.tryNormalize(item)}))
               hasSearchItems = true
             }
           } catch (e) {
@@ -607,6 +609,7 @@
         root.setAttribute('data-decoration-video-id', item.id)
         root.setAttribute('data-nrn-autofill', 'true')
         OwnerEvidence.register(root, item)
+        SearchItemAdapter.register(root, item.__nrnSearchItem)
         if (Number.isFinite(item.__nrnPageContributorCount)) root.dataset.nrnPageContributorCount = String(item.__nrnPageContributorCount)
         root.setAttribute('data-anchor-area', 'main')
         root.setAttribute('data-anchor-page',

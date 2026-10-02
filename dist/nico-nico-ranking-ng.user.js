@@ -2031,6 +2031,10 @@
         likeCount:count(item.count?.like)
       }
     }
+    // For callers that must not fail a whole page because of one item.
+    function tryNormalize(item) {
+      try { return normalize(item) } catch (_) { return null }
+    }
     // Returns the raw items array, or null when the response has no such list.
     function itemsOf(response) {
       const items = response?.data?.response?.$getSearchVideoV2?.data?.items
@@ -2056,7 +2060,16 @@
       }
       return {status:'ok', items}
     }
-    return {normalize, count, itemsOf, readDocument}
+    // Injected cards keep the normalized item of the exact video they render.
+    const injected = new WeakMap()
+    function register(root, normalized) {
+      if (root && normalized && root.dataset?.decorationVideoId === normalized.videoId) injected.set(root, normalized)
+    }
+    function fromRoot(root, videoId) {
+      const normalized = root ? injected.get(root) : null
+      return normalized && normalized.videoId === videoId && root.dataset?.decorationVideoId === videoId ? normalized : null
+    }
+    return {normalize, tryNormalize, count, itemsOf, readDocument, register, fromRoot}
   })()
   var ThumbInfoListener = (function() {
     var createTagBuilder = function(config) {
@@ -5470,7 +5483,9 @@ html[data-nrn-ui-theme="dark"] .nrn-contributor-ng-name-button:hover {
             if (searchData && Array.isArray(searchData.items)) {
               // Preserve this fetched page's official continuous-play context.
               var playlist = parsed.data.response.page && parsed.data.response.page.playlist
-              items = searchData.items.map(item => ({...item, __nrnPlaylist:typeof playlist === 'string' ? playlist : null}))
+              // __nrnSearchItem: the same normalized fields as the initial document (BRUSH-005b).
+              items = searchData.items.map(item => ({...item, __nrnPlaylist:typeof playlist === 'string' ? playlist : null,
+                __nrnSearchItem:SearchItemAdapter.tryNormalize(item)}))
               hasSearchItems = true
             }
           } catch (e) {
@@ -5755,6 +5770,7 @@ html[data-nrn-ui-theme="dark"] .nrn-contributor-ng-name-button:hover {
         root.setAttribute('data-decoration-video-id', item.id)
         root.setAttribute('data-nrn-autofill', 'true')
         OwnerEvidence.register(root, item)
+        SearchItemAdapter.register(root, item.__nrnSearchItem)
         if (Number.isFinite(item.__nrnPageContributorCount)) root.dataset.nrnPageContributorCount = String(item.__nrnPageContributorCount)
         root.setAttribute('data-anchor-area', 'main')
         root.setAttribute('data-anchor-page',

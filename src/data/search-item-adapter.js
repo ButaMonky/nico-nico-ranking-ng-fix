@@ -21,6 +21,10 @@
         likeCount:count(item.count?.like)
       }
     }
+    // For callers that must not fail a whole page because of one item.
+    function tryNormalize(item) {
+      try { return normalize(item) } catch (_) { return null }
+    }
     // Returns the raw items array, or null when the response has no such list.
     function itemsOf(response) {
       const items = response?.data?.response?.$getSearchVideoV2?.data?.items
@@ -46,5 +50,14 @@
       }
       return {status:'ok', items}
     }
-    return {normalize, count, itemsOf, readDocument}
+    // Injected cards keep the normalized item of the exact video they render.
+    const injected = new WeakMap()
+    function register(root, normalized) {
+      if (root && normalized && root.dataset?.decorationVideoId === normalized.videoId) injected.set(root, normalized)
+    }
+    function fromRoot(root, videoId) {
+      const normalized = root ? injected.get(root) : null
+      return normalized && normalized.videoId === videoId && root.dataset?.decorationVideoId === videoId ? normalized : null
+    }
+    return {normalize, tryNormalize, count, itemsOf, readDocument, register, fromRoot}
   })()
