@@ -1967,18 +1967,14 @@
     }
     function initialDocument(doc) {
       const owners = new Map(), conflicts = new Set()
-      try {
-        const value = JSON.parse(doc.querySelector('meta[name="server-response"]')?.getAttribute('content') || 'null')
-        const items = value?.data?.response?.$getSearchVideoV2?.data?.items
-        if (!Array.isArray(items)) return owners
-        for (const item of items) {
-          if (!item || typeof item.id !== 'string' || !/^(sm|so|nm)[0-9]+$/.test(item.id)) continue
-          const owner = normalize(item.owner), previous = owners.get(item.id)
-          if (!owner || conflicts.has(item.id)) continue
-          if (previous && !same(previous,owner)) { owners.delete(item.id);conflicts.add(item.id);continue }
-          owners.set(item.id,previous ? {...owner,name:previous.name ?? owner.name} : owner)
-        }
-      } catch (_) {}
+      // SearchItemAdapter parses and validates the items; identity merging and
+      // conflict handling stay here.
+      for (const {videoId:id, owner} of SearchItemAdapter.readDocument(doc).items) {
+        const previous = owners.get(id)
+        if (!owner || conflicts.has(id)) continue
+        if (previous && !same(previous,owner)) { owners.delete(id);conflicts.add(id);continue }
+        owners.set(id,previous ? {...owner,name:previous.name ?? owner.name} : owner)
+      }
       return owners
     }
     function register(root,item) {

@@ -55,6 +55,15 @@ test('search item adapter: document reading reports missing, invalid and ok resp
  assert.equal(read.status,'ok');
  assert.deepEqual(read.items.map(i=>[i.videoId,i.likeCount,i.owner?.id??null]),[['sm1',0,1],['sm2',null,null],['sm1',4,2]],'page order and duplicates are kept for the caller');
 });
+test('owner evidence initial document reads owners through the adapter with unchanged identity rules',()=>{
+ const items=[{id:'sm1',owner:{type:'user',id:55,name:null},count:{like:0}},{id:'sm1',owner:{type:'user',id:55,name:'later'}},
+  {id:'sm2',owner:{type:'user',id:66}},{id:'sm2',owner:{type:'user',id:67}},{id:'sm2',owner:{type:'user',id:66}},
+  {id:'so3',owner:{type:'channel',id:'ch9'}},{id:'bad',owner:{type:'user',id:1}},{id:'sm4'}];
+ const owners=OwnerEvidence.initialDocument(doc(response(items)));
+ assert.deepEqual(plain([...owners.keys()]),['sm1','so3'],'conflicting sm2 stays excluded even if a later row repeats the first owner');
+ assert.equal(owners.get('sm1').name,'later');assert.equal(owners.get('so3').type,'channel');
+ for(const content of [undefined,'{broken','null',JSON.stringify({data:{}})]) assert.equal(OwnerEvidence.initialDocument(doc(content)).size,0);
+});
 test('search item adapter: one broken item does not discard the rest',()=>{
  const raw=[{id:'sm1',count:{like:1}},{id:'sm2',get owner(){throw new Error('broken');}},{id:'sm3',count:{like:2}}];
  const response={data:{response:{$getSearchVideoV2:{data:{items:raw}}}}};
