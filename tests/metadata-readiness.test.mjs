@@ -328,3 +328,59 @@ test('thumbinfo demand: a failed detail is not re-requested by the same requeste
  h.request();h.fail({id:'sm1',error:{type:'NETWORK'}});h.request();h.request();
  assert.equal(h.calls.length,1);assert.equal(h.movie.metadata.tags,'failed');
 });
+// BRUSH-017: every owner source reaches ordinary and advanced NG the same way;
+// an unresolved owner stays undecided under NOT / != / notExists.
+const ownerSources={
+ native:h=>h.search('sm1',h.OwnerEvidence.fromUrl('https://www.nicovideo.jp/user/12')),
+ search:h=>h.search('sm1',{type:'user',id:12,name:'s'}),
+ detail:h=>h.detail(payload('sm1',{type:'user',id:12,name:'d'})),
+ nicoad:h=>{h.detail(payload('sm1',null));assert.equal(h.ThumbInfoListener.forSupplement(h.movies)('sm1',{type:'user',id:'12',name:'n'},'nicoad'),true);},
+ snapshot:h=>{h.detail(payload('sm1',null));assert.equal(h.ThumbInfoListener.forSupplement(h.movies)('sm1',{type:'user',id:'12',name:null},'snapshot'),true);},
+};
+const ownerExpectations=[[condition('userId','eq',12),true],[condition('contributorId','eq',12),true],[condition('userId','neq',99),true],
+ [group('AND',[condition('userId','eq',99)],true),true],[group('AND',[condition('userId','eq',12)],true),false],
+ [condition('userId','notExists'),false],[condition('channelId','exists'),false],[condition('channelId','eq',12),false],[condition('channelId','notExists'),true]];
+test('owner NG: native, search, detail, nicoad and snapshot owners feed ngUserIds and advanced rules alike',async()=>{
+ for(const [name,apply] of Object.entries(ownerSources)){
+  const h=await setup();apply(h);
+  assert.equal(h.movie.contributor.type,'user',name);assert.equal(Number(h.movie.contributor.id),12,name);
+  assert.equal(h.movie.metadata.ownerId,'known',name);
+  for(const [node,expected] of ownerExpectations)assert.equal(h.AdvancedNgRules.evaluateNode(h.movie,node),expected,name+' '+JSON.stringify(node));
+  h.config.ngUserIds.add(12);assert.equal(h.movie.ng,true,name+' ngUserIds');
+  const c=await setup();apply(c);c.config.ngChannelIds.add(12);assert.equal(c.movie.ng,false,name+' a user is never matched as channel 12');
+  const r=await setup();apply(r);rulesOn(r,group('AND',[condition('userId','eq',99)],true));assert.equal(r.movie.ng,true,name+' NOT userId=99');
+ }
+});
+const undecided=[condition('userId','eq',12),condition('userId','neq',99),group('AND',[condition('userId','eq',99)],true),
+ condition('userId','notExists'),condition('channelId','notExists'),condition('contributorId','notExists'),
+ group('AND',[condition('contributorId','exists')],true),group('OR',[condition('userId','eq',99),condition('channelId','neq',5)])];
+const unresolvedStates={
+ unresolved:h=>{},
+ 'detail answered without owner':h=>h.detail(payload('sm1',null)),
+ 'conflicting search':h=>{h.search('sm1',{type:'user',id:12,name:'a'});h.search('sm1',{type:'user',id:13,name:'b'});},
+ 'failed detail':h=>h.fail({id:'sm1',error:{type:'NETWORK'}}),
+};
+test('owner NG: unresolved, missing, conflicting and failed owners never satisfy NOT / != / notExists',async()=>{
+ for(const [name,apply] of Object.entries(unresolvedStates)){
+  const h=await setup();apply(h);assert.notEqual(h.movie.metadata.ownerId,'known',name);
+  for(const node of undecided)assert.equal(h.AdvancedNgRules.evaluateNode(h.movie,node),false,name+' '+JSON.stringify(node));
+  h.config.ngUserIds.add(12);h.config.ngChannelIds.add(12);assert.equal(h.movie.ng,false,name);
+  const r=await setup();apply(r);rulesOn(r,...undecided);assert.equal(r.movie.ng,false,name+' via rules');
+ }
+});
+test('owner NG: a supplement that disagrees, names a channel or targets a non-user video is rejected',async()=>{
+ const h=await setup(),supplement=h.ThumbInfoListener.forSupplement(h.movies);h.search('sm1',{type:'user',id:12,name:'s'});
+ assert.equal(supplement('sm1',{type:'user',id:'13',name:'x'},'nicoad'),false);assert.equal(Number(h.movie.contributor.id),12);
+ const c=await setup();c.detail(payload('sm1',null));
+ assert.equal(c.ThumbInfoListener.forSupplement(c.movies)('sm1',{type:'channel',id:'12',name:'x'},'snapshot'),false);
+ assert.equal(c.movie.metadata.ownerId,'unknown');c.config.ngChannelIds.add(12);assert.equal(c.movie.ng,false);
+ assert.equal(c.ThumbInfoListener.forSupplement(c.movies)('sm1',{type:'user',id:'12',name:null},'guess'),false,'unknown source');
+ const so=await setup();so.movies.setIfAbsent([new so.Movie('so5','channel video')]);
+ assert.equal(so.ThumbInfoListener.forSupplement(so.movies)('so5',{type:'user',id:'12',name:null},'nicoad'),false,'so videos are channel videos');
+ for(const bad of ['9007199254740993','0','-1','abc'])
+  assert.equal(c.ThumbInfoListener.forSupplement(c.movies)('sm1',{type:'user',id:bad,name:null},'nicoad'),false,bad);
+});
+test('owner NG: removing an NG user ID releases a supplemented owner',async()=>{
+ const h=await setup();ownerSources.nicoad(h);h.config.ngUserIds.add(12);assert.equal(h.movie.ng,true);
+ h.config.ngUserIds.remove([12]);assert.equal(h.movie.ng,false);
+});
