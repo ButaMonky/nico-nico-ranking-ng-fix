@@ -4,6 +4,7 @@ import vm from 'node:vm';
 import {readFile} from 'node:fs/promises';
 const network=await readFile(new URL('../src/data/network.js',import.meta.url),'utf8');
 const auto=await readFile(new URL('../src/autofill/legacy-controller.js',import.meta.url),'utf8');
+const adapter=await readFile(new URL('../src/data/search-item-adapter.js',import.meta.url),'utf8');
 const quiet=new Proxy({}, {get:()=>()=>{}});
 function loadNetwork(extra={}){return vm.runInNewContext(network+';Network',{AbortController,setTimeout,clearTimeout,...extra});}
 test('network diagnostics record actual fetch outcomes including body timeout and caller cancellation',async()=>{
@@ -73,7 +74,7 @@ test('Snapshot: bad response triggers fallback path; empty data cannot claim a n
  let body={data:[],meta:{totalCount:10000}};
  const ctx=vm.createContext({page:{},model:{},URLSearchParams,performance,console:quiet,LOG:'test',SNAPSHOT_ENDPOINT:'https://example.invalid',snapshotDescriptor:{q:'test',isTag:true,order:'desc',sortField:'startTime'},gmRequest:async()=>({status:200,responseText:JSON.stringify(body)})});
  const a=auto.indexOf('      var snapshotFetchOffset = async function(offset,'),b=auto.indexOf('      var requestedMode',a);
- const run=vm.runInContext(auto.slice(a,b)+';snapshotFetchOffset',ctx);
+ const run=vm.runInContext(adapter+'\n'+auto.slice(a,b)+';snapshotFetchOffset',ctx);
  assert.equal((await run(100)).hasNextPage,false);
  body={data:[{contentId:'sm1'}],meta:{totalCount:null}};assert.equal((await run(0)).totalCount,null);
  body={meta:{status:503}};await assert.rejects(run(0),/応答形式/);

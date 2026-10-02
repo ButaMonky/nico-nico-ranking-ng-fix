@@ -11988,14 +11988,14 @@ var CardActionData = (function () {
             id: x.contentId,
             title: x.title || x.contentId,
             description: x.description || '',
-            duration: Number(x.lengthSeconds) || 0,
+            duration: SearchItemAdapter.count(x.lengthSeconds),
             registeredAt: x.startTime || '',
             thumbnail: {listingUrl: x.thumbnailUrl || ''},
             count: {
-              view: Number(x.viewCounter) || 0,
-              comment: Number(x.commentCounter) || 0,
-              mylist: Number(x.mylistCounter) || 0,
-              like: Number(x.likeCounter) || 0
+              view: SearchItemAdapter.count(x.viewCounter),
+              comment: SearchItemAdapter.count(x.commentCounter),
+              mylist: SearchItemAdapter.count(x.mylistCounter),
+              like: SearchItemAdapter.count(x.likeCounter)
             },
             owner: {
               id: x.userId != null ? Number(x.userId) : null,
