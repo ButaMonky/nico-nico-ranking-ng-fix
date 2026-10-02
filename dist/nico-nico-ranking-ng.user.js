@@ -6060,7 +6060,8 @@ html[data-nrn-ui-theme="dark"] .nrn-contributor-ng-name-button:hover {
         var res = await Network.fetchResponse(url.toString(), {
           credentials: 'same-origin',
           cache: 'no-store',
-          signal: this._abortController?.signal
+          // Refill callers bind their narrower signal to the owning route.
+          signal: options.signal || this._abortController?.signal
         }, 15000, {run:this._diagnostics,kind:'page',lane:fetchScope === 'DEV' ? 'diagnostic' : 'run'})
         if (!res.ok) {
           var httpError = new Error('HTTP ' + res.status)
@@ -10772,6 +10773,11 @@ var CardActionData = (function () {
       var timers = new Set(), intervals = new Set(), frames = new Set(), handles = new Set()
       var listeners = []
       var runLifetime = new AbortController()
+      var refillController = null
+      var stopRefillIfUnneeded = function() {
+        if (refillController && (page._disposed || !model.config.autoFillEnabled.value
+            || (visibleTotalCount() >= targetCount() && !hasEarlierCandidate()))) refillController.abort()
+      }
       var clearTimeout = function(id) { timers.delete(id); globalThis.clearTimeout(id) }
       var clearInterval = function(id) { intervals.delete(id); globalThis.clearInterval(id) }
       var cancelAnimationFrame = function(id) { frames.delete(id); globalThis.cancelAnimationFrame(id) }
@@ -12092,7 +12098,7 @@ var CardActionData = (function () {
         console.groupEnd()
       }
 
-      var snapshotFetchOffset = async function(offset, diagnosticLane) {
+      var snapshotFetchOffset = async function(offset, diagnosticLane, signal) {
         if (page._disposed) return
         var p = new URLSearchParams()
         p.set('q', snapshotDescriptor.q)
@@ -12116,7 +12122,7 @@ var CardActionData = (function () {
 
         var started = performance.now()
         var res = await gmRequest({
-          _nrnKind:'snapshot',_nrnLane:diagnosticLane,
+          _nrnKind:'snapshot',_nrnLane:diagnosticLane,signal:signal,
           method: 'GET',
           url: SNAPSHOT_ENDPOINT + '?' + p.toString(),
           timeout: 10000
@@ -12310,13 +12316,13 @@ var CardActionData = (function () {
 
       // 現在ページとAPI先頭を比較。
       // 投稿日時等で並びが一致しない場合に、間違った続きを足さないためfallbackする。
-      var validateSnapshotAgainstCurrentDom = async function() {
+      var validateSnapshotAgainstCurrentDom = async function(signal) {
         if (page._disposed) return
         if (!useSnapshot || snapshotValidated) return
         setPhase('validating-api', '現在ページと検索APIの並び順を照合中')
 
-        var result = await snapshotFetchOffset(snapshotValidationOffset)
-        if (page._disposed) return
+        var result = await snapshotFetchOffset(snapshotValidationOffset,undefined,signal)
+        if (page._disposed || signal?.aborted) return
         var domIds = []
         var seen = new Set()
         page.doc.querySelectorAll(
@@ -12921,27 +12927,27 @@ var CardActionData = (function () {
 
 
       // -------------------- CandidateSource / pool --------------------
-      var fetchMoreCandidates = async function(minNeeded) {
-        if (page._disposed) return
+      var fetchMoreCandidates = async function(minNeeded, signal) {
+        if (page._disposed || signal?.aborted) return
         var fetchStart = performance.now()
         var issuedThisCall = 0
         var sourceWindowLimit = 8
         var mayRequest = function() {
           var limit = Number(model.config.autoFillMaxExtraPages.value) || 0
-          return !page._disposed && issuedThisCall < sourceWindowLimit
+          return !page._disposed && !signal?.aborted && issuedThisCall < sourceWindowLimit
             && model.config.autoFillEnabled.value && (limit <= 0 || fetchedExtraPages < limit)
         }
 
         if (useSnapshot) {
-          if (!snapshotValidated) await validateSnapshotAgainstCurrentDom()
-          if (page._disposed) return
-          if (!useSnapshot) return fetchMoreCandidates(minNeeded)
+          if (!snapshotValidated) await validateSnapshotAgainstCurrentDom(signal)
+          if (page._disposed || signal?.aborted) return
+          if (!useSnapshot) return fetchMoreCandidates(minNeeded,signal)
 
           while (candidatePool.length < minNeeded && lastFetchedHadNext !== false) {
             if (!mayRequest()) break
             issuedThisCall++
-            var result = await snapshotFetchOffset(snapshotOffset)
-            if (page._disposed) return
+            var result = await snapshotFetchOffset(snapshotOffset,undefined,signal)
+            if (page._disposed || signal?.aborted) return
             snapshotOffset += 100
             fetchedExtraPages++
             totalFetchedItems += result.items.length
@@ -13016,12 +13022,12 @@ var CardActionData = (function () {
             try {
               issuedThisCall++
               result = await page.fetchPageItems(pageNumber, {
-                scope: 'RUN',
+                scope: 'RUN', signal:signal,
                 requestId: 'RUN-autofill-p' + pageNumber
               })
-              if (page._disposed) return
+              if (page._disposed || signal?.aborted) return
             } catch (e) {
-              if (page._disposed) return
+              if (page._disposed || signal?.aborted) return
               // 終端情報を読めなかった場合の安全弁。
               // 連番の次ページ取得で400/404なら検索終端として正常終了扱いにする。
               if (e && (e.status === 400 || e.status === 404)
@@ -13591,6 +13597,11 @@ var CardActionData = (function () {
         }
 
         fetching = true
+        var cycleController = new AbortController()
+        refillController = cycleController
+        var cancelCycle = function() { cycleController.abort() }
+        if (runLifetime.signal.aborted) cancelCycle()
+        else runLifetime.signal.addEventListener('abort',cancelCycle,{once:true})
         var cycleStart = performance.now()
 
         try {
@@ -13606,9 +13617,14 @@ var CardActionData = (function () {
           if (!hasEarlierCandidate() && candidatePool.length < detailBatchSize) {
             setPhase('fetching',
               '候補を補充中（必要 ' + detailBatchSize + '件 / プール ' + candidatePool.length + '件）')
-            fetchMs = await fetchMoreCandidates(desiredPool)
+            fetchMs = await fetchMoreCandidates(desiredPool,cycleController.signal)
             if (page._disposed) return
           }
+
+          // A user action or another settled card may have removed the need
+          // while the source was loading. Keep raw candidates for later use.
+          if (!model.config.autoFillEnabled.value) { setPhase('disabled','自動継ぎ足しOFF'); return }
+          if (cycleController.signal.aborted || (visibleTotalCount() >= targetCount() && !hasEarlierCandidate())) return
 
           if (!candidatePool.length) {
             if (lastFetchedHadNext === false) {
@@ -13715,7 +13731,7 @@ var CardActionData = (function () {
             setPhase('stopped', stopReason)
           }
         } catch (e) {
-          if (page._disposed) return
+          if (page._disposed || cycleController.signal.aborted) return
           console.error(LOG, '自動継ぎ足しでエラー:', e)
 
           if (useSnapshot) {
@@ -13734,6 +13750,8 @@ var CardActionData = (function () {
             setPhase('error', stopReason)
           }
         } finally {
+          runLifetime.signal.removeEventListener('abort',cancelCycle)
+          if (refillController === cycleController) refillController = null
           fetching = false
           if (page._disposed) return
           updateStatus()
@@ -14608,6 +14626,7 @@ var CardActionData = (function () {
 
       model.movieViewModes.on('movieViewModeChanged', function() {
         if (!initialized) return
+        stopRefillIfUnneeded()
         rebalanceOverflow()
         updateStatus()
         clearTimeout(debounceTimer)
@@ -14615,6 +14634,7 @@ var CardActionData = (function () {
       })
 
       model.config.autoFillEnabled.on('changed', function(enabled) {
+        stopRefillIfUnneeded()
         if (enabled) {
           gaveUp = false
           stopReason = ''
@@ -14629,6 +14649,7 @@ var CardActionData = (function () {
       })
 
       model.config.autoFillTargetCount.on('changed', function() {
+        stopRefillIfUnneeded()
         gaveUp = false
         stopReason = ''
         finishedAt = null

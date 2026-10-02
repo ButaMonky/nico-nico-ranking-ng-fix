@@ -61,6 +61,11 @@
         }
 
         fetching = true
+        var cycleController = new AbortController()
+        refillController = cycleController
+        var cancelCycle = function() { cycleController.abort() }
+        if (runLifetime.signal.aborted) cancelCycle()
+        else runLifetime.signal.addEventListener('abort',cancelCycle,{once:true})
         var cycleStart = performance.now()
 
         try {
@@ -76,9 +81,14 @@
           if (!hasEarlierCandidate() && candidatePool.length < detailBatchSize) {
             setPhase('fetching',
               '候補を補充中（必要 ' + detailBatchSize + '件 / プール ' + candidatePool.length + '件）')
-            fetchMs = await fetchMoreCandidates(desiredPool)
+            fetchMs = await fetchMoreCandidates(desiredPool,cycleController.signal)
             if (page._disposed) return
           }
+
+          // A user action or another settled card may have removed the need
+          // while the source was loading. Keep raw candidates for later use.
+          if (!model.config.autoFillEnabled.value) { setPhase('disabled','自動継ぎ足しOFF'); return }
+          if (cycleController.signal.aborted || (visibleTotalCount() >= targetCount() && !hasEarlierCandidate())) return
 
           if (!candidatePool.length) {
             if (lastFetchedHadNext === false) {
@@ -185,7 +195,7 @@
             setPhase('stopped', stopReason)
           }
         } catch (e) {
-          if (page._disposed) return
+          if (page._disposed || cycleController.signal.aborted) return
           console.error(LOG, '自動継ぎ足しでエラー:', e)
 
           if (useSnapshot) {
@@ -204,6 +214,8 @@
             setPhase('error', stopReason)
           }
         } finally {
+          runLifetime.signal.removeEventListener('abort',cancelCycle)
+          if (refillController === cycleController) refillController = null
           fetching = false
           if (page._disposed) return
           updateStatus()

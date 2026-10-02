@@ -1,27 +1,27 @@
 
 
       // -------------------- CandidateSource / pool --------------------
-      var fetchMoreCandidates = async function(minNeeded) {
-        if (page._disposed) return
+      var fetchMoreCandidates = async function(minNeeded, signal) {
+        if (page._disposed || signal?.aborted) return
         var fetchStart = performance.now()
         var issuedThisCall = 0
         var sourceWindowLimit = 8
         var mayRequest = function() {
           var limit = Number(model.config.autoFillMaxExtraPages.value) || 0
-          return !page._disposed && issuedThisCall < sourceWindowLimit
+          return !page._disposed && !signal?.aborted && issuedThisCall < sourceWindowLimit
             && model.config.autoFillEnabled.value && (limit <= 0 || fetchedExtraPages < limit)
         }
 
         if (useSnapshot) {
-          if (!snapshotValidated) await validateSnapshotAgainstCurrentDom()
-          if (page._disposed) return
-          if (!useSnapshot) return fetchMoreCandidates(minNeeded)
+          if (!snapshotValidated) await validateSnapshotAgainstCurrentDom(signal)
+          if (page._disposed || signal?.aborted) return
+          if (!useSnapshot) return fetchMoreCandidates(minNeeded,signal)
 
           while (candidatePool.length < minNeeded && lastFetchedHadNext !== false) {
             if (!mayRequest()) break
             issuedThisCall++
-            var result = await snapshotFetchOffset(snapshotOffset)
-            if (page._disposed) return
+            var result = await snapshotFetchOffset(snapshotOffset,undefined,signal)
+            if (page._disposed || signal?.aborted) return
             snapshotOffset += 100
             fetchedExtraPages++
             totalFetchedItems += result.items.length
@@ -96,12 +96,12 @@
             try {
               issuedThisCall++
               result = await page.fetchPageItems(pageNumber, {
-                scope: 'RUN',
+                scope: 'RUN', signal:signal,
                 requestId: 'RUN-autofill-p' + pageNumber
               })
-              if (page._disposed) return
+              if (page._disposed || signal?.aborted) return
             } catch (e) {
-              if (page._disposed) return
+              if (page._disposed || signal?.aborted) return
               // 終端情報を読めなかった場合の安全弁。
               // 連番の次ページ取得で400/404なら検索終端として正常終了扱いにする。
               if (e && (e.status === 400 || e.status === 404)

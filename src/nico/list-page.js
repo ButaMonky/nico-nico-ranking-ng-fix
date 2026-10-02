@@ -267,7 +267,8 @@
         var res = await Network.fetchResponse(url.toString(), {
           credentials: 'same-origin',
           cache: 'no-store',
-          signal: this._abortController?.signal
+          // Refill callers bind their narrower signal to the owning route.
+          signal: options.signal || this._abortController?.signal
         }, 15000, {run:this._diagnostics,kind:'page',lane:fetchScope === 'DEV' ? 'diagnostic' : 'run'})
         if (!res.ok) {
           var httpError = new Error('HTTP ' + res.status)

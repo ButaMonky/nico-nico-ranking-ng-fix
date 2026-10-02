@@ -11,6 +11,8 @@ const require=createRequire(import.meta.url);
 const {chromium}=require(process.env.NRN_PLAYWRIGHT || 'playwright');
 const args=process.argv.slice(2),option=(key,fallback)=>{const i=args.indexOf(key);return i<0?fallback:args[i+1];};
 const ref=option('--ref','working'),selected=option('--scenario','all');
+const stopMode=option('--exercise-stop','none');
+if(!['none','target','disabled'].includes(stopMode))throw Error('Invalid stop mode');
 if(ref!=='working'&&!/^[a-f0-9]{7,40}$/i.test(ref))throw Error('Invalid ref');
 const names=selected==='all'?scenarioNames:[selected];for(const name of names)makeScenario(name);
 const git=a=>execFileSync('git',a,{cwd:root,encoding:'utf8',maxBuffer:12*1024*1024,env:{...process.env,GIT_OPTIONAL_LOCKS:'0'}}).trim();
@@ -47,8 +49,8 @@ try{
    }
    doc.body.prepend(main);return '<!doctype html>'+doc.documentElement.outerHTML;
   },{fixture,items:data.initial,html:data.html(1)});
-  await context.addInitScript(({settings,pages,details})=>{
-   window.__nrnBenchWire={pageRequests:0,detailRequests:0,otherRequests:0,aborted:0};
+  await context.addInitScript(({settings,pages,details,holdFirst})=>{
+   window.__nrnBenchWire={pageRequests:0,detailRequests:0,otherRequests:0,aborted:0,pageNumbers:[]};
    window.GM_getValue=(key,fallback)=>Object.hasOwn(settings,key)?(Array.isArray(settings[key])?JSON.stringify(settings[key]):settings[key]):fallback;
    window.GM_setValue=()=>{};
    window.GM_xmlhttpRequest=options=>{
@@ -61,20 +63,32 @@ try{
    window.fetch=(value,options={})=>new Promise((resolve,reject)=>{
     const url=new URL(String(value),location.href);let done=false;
     if(url.origin!==location.origin||url.pathname!=='/tag/fixture'){window.__nrnBenchWire.otherRequests++;reject(Error('Unexpected fixture fetch'));return;}
-    window.__nrnBenchWire.pageRequests++;const n=Number(url.searchParams.get('page')||1);
+    window.__nrnBenchWire.pageRequests++;const n=Number(url.searchParams.get('page')||1);window.__nrnBenchWire.pageNumbers.push(n);
     const abort=()=>{if(done)return;done=true;clearTimeout(timer);window.__nrnBenchWire.aborted++;reject(new DOMException('Aborted','AbortError'));};
-    const timer=setTimeout(()=>{if(done)return;done=true;options.signal?.removeEventListener('abort',abort);resolve(new Response(pages[n]||pages.end,{status:200,headers:{'content-type':'text/html'}}));},2);
+    let timer;const respond=()=>{if(done)return;done=true;options.signal?.removeEventListener('abort',abort);resolve(new Response(pages[n]||pages.end,{status:200,headers:{'content-type':'text/html'}}));};
+    if(holdFirst){holdFirst=false;window.__nrnHeldPage={page:n,respond};}else timer=setTimeout(respond,2);
     if(options.signal?.aborted)abort();else options.signal?.addEventListener('abort',abort,{once:true});
    });
-  },{settings:data.settings,pages:{...Object.fromEntries(Array.from({length:data.lastPage},(_,i)=>[i+1,data.html(i+1)])),end:data.html(data.lastPage+1)},details:Object.fromEntries(data.items.map(x=>[x.id,data.xml(x.id)]))});
+  },{holdFirst:stopMode!=='none',settings:data.settings,pages:{...Object.fromEntries(Array.from({length:data.lastPage},(_,i)=>[i+1,data.html(i+1)])),end:data.html(data.lastPage+1)},details:Object.fromEntries(data.items.map(x=>[x.id,data.xml(x.id)]))});
   const pair=[];
   for(const cache of ['cold','warm']){
    await page.goto('http://nrn.test/tag/fixture');const started=performance.now();
    await page.addScriptTag({content:instrumented});
+   let earlyStop=null;
+   if(stopMode!=='none'){
+    assert.equal(name,'none','early stop uses the deterministic no-NG fixture');
+    await page.waitForFunction(()=>window.__nrnHeldPage,{},{timeout:5000});
+    await page.evaluate(mode=>{if(mode==='target')window.__nrnBenchModel.config.autoFillTargetCount.value=8;else window.__nrnBenchModel.config.autoFillEnabled.value=false;},stopMode);
+    await page.waitForFunction(mode=>{const s=window.__nrnBenchState?.();return s&&!s.fetching&&s.phase===(mode==='target'?'completed':'disabled');},stopMode,{timeout:5000});
+    earlyStop=await page.evaluate(()=>({state:window.__nrnBenchState(),wire:window.__nrnBenchWire}));
+    assert.equal(earlyStop.state.domCards,8);assert.equal(earlyStop.wire.pageRequests,1);assert.equal(earlyStop.wire.aborted,1);
+    await page.evaluate(mode=>{if(mode==='target')window.__nrnBenchModel.config.autoFillTargetCount.value=12;else window.__nrnBenchModel.config.autoFillEnabled.value=true;},stopMode);
+   }
    try {await page.waitForFunction(()=>{const s=window.__nrnBenchState?.();return s?.initialized&&!s.fetching&&['completed','stopped','error'].includes(s.phase);},{},{timeout:20000});}
    catch(error){throw Error(name+' '+cache+' benchmark did not settle: '+JSON.stringify({errors,...await page.evaluate(()=>({state:window.__nrnBenchState?.(),wire:window.__nrnBenchWire,rootCount:document.querySelectorAll('[data-decoration-video-id]').length,modelCount:window.__nrnBenchModel?.movies?._idToMovie?.size,badge:document.querySelector('#nrn-status-badge')?.textContent}))}));}
    const result=await page.evaluate(()=>({state:window.__nrnBenchState(),wire:window.__nrnBenchWire,initial:window.__nrnInitialPerformance}));
    result.elapsedMs=performance.now()-started;result.cache=cache;
+   if(earlyStop){result.earlyStop=earlyStop;assert.deepEqual(result.wire.pageNumbers,[2,2],'resume must retry the cancelled page, not skip it');}
    assert.equal(result.state.phase,'completed',name+': '+JSON.stringify(result));assert.equal(result.state.visible,data.target,name);
    assert.deepEqual(result.state.ids,data.expectedIds,name+' must retain the original filtered order');assert.equal(result.wire.otherRequests,0,name);
    assert.deepEqual(errors,[],name);

@@ -3,6 +3,11 @@
       var timers = new Set(), intervals = new Set(), frames = new Set(), handles = new Set()
       var listeners = []
       var runLifetime = new AbortController()
+      var refillController = null
+      var stopRefillIfUnneeded = function() {
+        if (refillController && (page._disposed || !model.config.autoFillEnabled.value
+            || (visibleTotalCount() >= targetCount() && !hasEarlierCandidate()))) refillController.abort()
+      }
       var clearTimeout = function(id) { timers.delete(id); globalThis.clearTimeout(id) }
       var clearInterval = function(id) { intervals.delete(id); globalThis.clearInterval(id) }
       var cancelAnimationFrame = function(id) { frames.delete(id); globalThis.cancelAnimationFrame(id) }

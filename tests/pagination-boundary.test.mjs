@@ -30,7 +30,7 @@ async function poolHarness(responses,last=null){
  knownLastPage:last,endReachedWithoutRequest:false,endPageDetectionSource:'test',currentPageNumber:()=>1,fetchedPageNumbers:new Set(),fetchedExtraPages:0,totalFetchedItems:0,
  page:{fetchPageItems:async n=>{calls.push(n);const r=responses.shift();if(r instanceof Error)throw r;if(!r)throw Error('unexpected request');return r;}},
  updatePagerUi:r=>updates.push(r),logCandidateTable(){},filterFreshItems:items=>({freshItems:items})});
- const a=source.indexOf('      var fetchMoreCandidates = async function(minNeeded) {');
+ const a=source.indexOf('      var fetchMoreCandidates = async function(minNeeded, signal) {');
  const b=source.indexOf('      // -------------------- AdService',a);
  const run=vm.runInContext(source.slice(a,b)+';fetchMoreCandidates',ctx);
  return {run,ctx,calls,updates};
@@ -98,4 +98,15 @@ test('paging integrity: Snapshot filtered-only units have the same per-call requ
 test('paging integrity: disposal during a pending page leaves its cursor and candidates unchanged',async()=>{
  const h=await poolHarness([]);h.ctx.page.fetchPageItems=async()=>{h.ctx.page._disposed=true;return {items:[{id:'sm2'}],hasNextPage:true};};
  await h.run(1);assert.equal(h.ctx.nextPageToFetch,2);assert.equal(h.ctx.fetchedExtraPages,0);assert.equal(h.ctx.candidatePool.length,0);
+});
+
+// BRUSH-025: stopping a refill is not consuming a results page.
+test('early-stop paging: already-aborted refill performs no page requests',async()=>{
+ const h=await poolHarness([{items:[{id:'sm2'}],hasNextPage:false}]),c=new AbortController();c.abort();
+ await h.run(1,c.signal);assert.equal(h.calls.length,0);assert.equal(h.ctx.nextPageToFetch,2);
+});
+test('early-stop paging: caller signal reaches page transport and late response cannot advance the cursor',async()=>{
+ const h=await poolHarness([]),c=new AbortController();let received;
+ h.ctx.page.fetchPageItems=async(_page,options)=>{received=options.signal;c.abort();return {items:[{id:'sm2'}],hasNextPage:true};};
+ await h.run(1,c.signal);assert.equal(received,c.signal);assert.equal(h.ctx.nextPageToFetch,2);assert.equal(h.ctx.candidatePool.length,0);
 });

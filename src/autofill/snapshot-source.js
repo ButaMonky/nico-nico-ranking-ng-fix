@@ -93,7 +93,7 @@
         console.groupEnd()
       }
 
-      var snapshotFetchOffset = async function(offset, diagnosticLane) {
+      var snapshotFetchOffset = async function(offset, diagnosticLane, signal) {
         if (page._disposed) return
         var p = new URLSearchParams()
         p.set('q', snapshotDescriptor.q)
@@ -117,7 +117,7 @@
 
         var started = performance.now()
         var res = await gmRequest({
-          _nrnKind:'snapshot',_nrnLane:diagnosticLane,
+          _nrnKind:'snapshot',_nrnLane:diagnosticLane,signal:signal,
           method: 'GET',
           url: SNAPSHOT_ENDPOINT + '?' + p.toString(),
           timeout: 10000
@@ -311,13 +311,13 @@
 
       // 現在ページとAPI先頭を比較。
       // 投稿日時等で並びが一致しない場合に、間違った続きを足さないためfallbackする。
-      var validateSnapshotAgainstCurrentDom = async function() {
+      var validateSnapshotAgainstCurrentDom = async function(signal) {
         if (page._disposed) return
         if (!useSnapshot || snapshotValidated) return
         setPhase('validating-api', '現在ページと検索APIの並び順を照合中')
 
-        var result = await snapshotFetchOffset(snapshotValidationOffset)
-        if (page._disposed) return
+        var result = await snapshotFetchOffset(snapshotValidationOffset,undefined,signal)
+        if (page._disposed || signal?.aborted) return
         var domIds = []
         var seen = new Set()
         page.doc.querySelectorAll(

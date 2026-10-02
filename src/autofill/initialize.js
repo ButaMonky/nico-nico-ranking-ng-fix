@@ -271,6 +271,7 @@
 
       model.movieViewModes.on('movieViewModeChanged', function() {
         if (!initialized) return
+        stopRefillIfUnneeded()
         rebalanceOverflow()
         updateStatus()
         clearTimeout(debounceTimer)
@@ -278,6 +279,7 @@
       })
 
       model.config.autoFillEnabled.on('changed', function(enabled) {
+        stopRefillIfUnneeded()
         if (enabled) {
           gaveUp = false
           stopReason = ''
@@ -292,6 +294,7 @@
       })
 
       model.config.autoFillTargetCount.on('changed', function() {
+        stopRefillIfUnneeded()
         gaveUp = false
         stopReason = ''
         finishedAt = null
