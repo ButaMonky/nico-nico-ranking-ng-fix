@@ -157,3 +157,71 @@ test('recent raw details cannot block separately cached name evidence; cache tim
  await restoreCache(h,{id:'sm1',ownerNameSupplement:supplement});assert.equal(h.movie.contributor.name,'restored');
  assert.equal(h.movie._nrnOwnerNameStatus,'cached');assert.equal(h.calls.length,0);
 });
+
+// BRUSH-003: provenance records sit beside the authoritative status strings.
+const ruleSet=[condition('userId','eq',12),condition('tag','notExists'),condition('contributorName','exists'),
+ group('AND',[condition('userId','eq',12),condition('tag','contains','synthetic')],true),group('OR',[condition('userId','eq',99),condition('description','exists')])];
+const evaluateAll=h=>ruleSet.map(node=>h.AdvancedNgRules.evaluateNode(h.movie,node));
+test('provenance: status strings keep their values and search owner is attributed',async()=>{
+ const h=await setup();assert.deepEqual({...h.movie.metadataSource},{});
+ for(const field of h.MetadataReadiness.fields)assert.equal(h.movie.metadata[field],'unknown');
+ const before=Date.now();h.search('sm1',{type:'user',id:12,name:null,visibility:'visible'});
+ for(const field of ['ownerId','ownerType','ownerVisibility']){
+  assert.equal(h.movie.metadata[field],'known');const record=h.MetadataReadiness.sourceOf(h.movie,field);
+  assert.equal(record.source,'search');assert.ok(record.observedAt>=before);
+ }
+ assert.equal(h.movie.metadata.ownerName,'unknown');assert.equal(h.MetadataReadiness.sourceOf(h.movie,'ownerName'),null);
+ assert.equal(h.MetadataReadiness.sourceOf(h.movie,'tags'),null);
+});
+test('provenance: detail, nicoad name and failure kinds are distinguished',async()=>{
+ const h=await setup();h.search('sm1',{type:'user',id:12,name:null});h.fail({id:'sm1',error:{type:'TIMEOUT'}});
+ assert.equal(h.movie.metadata.tags,'failed');assert.equal(h.MetadataReadiness.sourceOf(h.movie,'tags').failureKind,'TIMEOUT');
+ assert.equal(h.MetadataReadiness.sourceOf(h.movie,'ownerId').source,'search','known fields are not overwritten by a failure');
+ const at=Date.now()-5000;h.detail({...payload('sm1',{type:'user',id:12,name:null}),fetchedAt:at});
+ assert.equal(h.movie.metadata.tags,'known');assert.deepEqual({...h.MetadataReadiness.sourceOf(h.movie,'tags')},{source:'detail',observedAt:at});
+ assert.equal(h.MetadataReadiness.sourceOf(h.movie,'ownerId').source,'detail');
+ const supplementAt=Date.now()-1000;
+ assert.equal(h.ThumbInfoListener.forOwnerName(h.movies)('sm1',{id:'sm1',ownerId:12,ownerName:'named'},supplementAt),true);
+ assert.deepEqual({...h.MetadataReadiness.sourceOf(h.movie,'ownerName')},{source:'nicoad',observedAt:supplementAt});
+ assert.equal(h.MetadataReadiness.sourceOf(h.movie,'ownerId').source,'detail');
+});
+test('provenance: absent records keep legacy behaviour and never change NG results',async()=>{
+ const withSource=await setup(),legacy=await setup();
+ for(const h of [withSource,legacy]){h.config.advancedNgRulesEnabled.value=true;
+  h.config.advancedNgRulesJson.value=JSON.stringify([{expression:condition('userId','eq',12)}]);}
+ withSource.search('sm1',{type:'user',id:12,name:'synthetic'});
+ delete legacy.movie.metadataSource;legacy.search('sm1',{type:'user',id:12,name:'synthetic'});
+ assert.deepEqual(evaluateAll(withSource),evaluateAll(legacy));assert.equal(withSource.movie.ng,legacy.movie.ng);
+ const cleared=await setup();cleared.search('sm1',{type:'user',id:12,name:'synthetic'});const expected=evaluateAll(cleared);
+ cleared.movie.metadataSource={};assert.deepEqual(evaluateAll(cleared),expected);
+ assert.equal(cleared.MetadataReadiness.sourceOf(cleared.movie,'ownerId'),null);
+ assert.equal(cleared.MetadataReadiness.ready(cleared.movie,cleared.config),true,'readiness ignores provenance');
+});
+test('provenance: cache restore keeps statuses and is labelled cache',async()=>{
+ const h=await setup(),cachedAt=Date.now()-60000;
+ await restoreCache(h,{id:'sm1',cachedAt,metadata:{tags:'known',lockedTags:'known',description:'known',ownerName:'unknown'},
+  contributor:{type:'user',id:12,name:''},tags:[],description:''});
+ assert.equal(h.movie.metadata.tags,'known');assert.equal(h.movie.metadata.ownerName,'unknown');
+ assert.deepEqual({...h.MetadataReadiness.sourceOf(h.movie,'tags')},{source:'cache',observedAt:cachedAt});
+ assert.equal(h.MetadataReadiness.sourceOf(h.movie,'ownerId').source,'cache');
+ assert.equal(h.MetadataReadiness.sourceOf(h.movie,'ownerName'),null);
+});
+test('provenance: records never promote fields and stale records are not reported',async()=>{
+ const h=await setup(),M=h.MetadataReadiness;
+ assert.equal(M.noteSource(h.movie,'tags','detail',1),false);assert.equal(h.movie.metadata.tags,'unknown');
+ assert.equal(M.noteSource(h.movie,'likeCount','search',1),false);assert.equal('likeCount' in h.movie.metadata,false);
+ h.search('sm1',{type:'user',id:12,name:'x'});assert.equal(M.noteSource(h.movie,'ownerId','guess',1),false);
+ assert.equal(M.noteFailure(h.movie,'ownerId','NETWORK'),false,'known fields cannot be marked failed');
+ h.movie.metadataSource.tags={source:'detail',observedAt:1};assert.equal(M.sourceOf(h.movie,'tags'),null);
+ h.movie.metadataSource.description={source:'detail',observedAt:null,failureKind:'NETWORK'};h.movie.metadata.description='known';
+ assert.equal(M.sourceOf(h.movie,'description'),null);
+ h.search('sm1',{type:'user',id:13,name:'conflict'});assert.equal(h.movie.metadata.ownerId,'unknown');
+ assert.equal(h.movie.metadataSource.ownerId,undefined,'conflict clears owner records');
+});
+test('provenance: records are per movie and a new SPA model starts empty',async()=>{
+ const first=await setup();first.search('sm1',{type:'user',id:12,name:'x'});
+ const second=await setup();assert.deepEqual({...second.movie.metadataSource},{});
+ assert.equal(Object.prototype.hasOwnProperty.call(second.Movie.prototype,'metadataSource'),false);
+ const other=new first.Movie('sm2','other');assert.notEqual(other.metadataSource,first.movie.metadataSource);
+ assert.deepEqual({...other.metadataSource},{});
+});

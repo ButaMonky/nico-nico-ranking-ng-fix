@@ -44,5 +44,35 @@
     function ready(movie, config) {
       return [...required(movie,config)].every(field => movie.metadata[field] === 'known')
     }
-    return {fields,ruleFields,settings,required,ready}
+    // Provenance is an optional record kept beside movie.metadata. The status
+    // strings stay authoritative: a record never promotes a field to known, and
+    // a record that no longer matches its field status is not reported.
+    const sources = new Set(['search','detail','cache','nicoad'])
+    function provenanceMap(movie) {
+      if (!movie.metadataSource) movie.metadataSource = {}
+      return movie.metadataSource
+    }
+    function noteSource(movie, field, source, observedAt) {
+      if (!movie?.metadata || !fields.includes(field) || !sources.has(source)) return false
+      if (movie.metadata[field] !== 'known') return false
+      provenanceMap(movie)[field] = {source, observedAt:Number.isFinite(observedAt) ? observedAt : null}
+      return true
+    }
+    function noteFailure(movie, field, failureKind) {
+      if (!movie?.metadata || !fields.includes(field) || movie.metadata[field] !== 'failed') return false
+      provenanceMap(movie)[field] = {source:'detail', observedAt:null,
+        failureKind:typeof failureKind === 'string' && failureKind ? failureKind : 'unknown'}
+      return true
+    }
+    function clearSource(movie, field) {
+      if (movie?.metadataSource && fields.includes(field)) delete movie.metadataSource[field]
+    }
+    function sourceOf(movie, field) {
+      const status = movie?.metadata?.[field], record = movie?.metadataSource?.[field]
+      if (!record) return null
+      if (status === 'known' && !record.failureKind) return {...record}
+      if (status === 'failed' && record.failureKind) return {...record}
+      return null
+    }
+    return {fields,ruleFields,settings,required,ready,sources,noteSource,noteFailure,clearSource,sourceOf}
   })()

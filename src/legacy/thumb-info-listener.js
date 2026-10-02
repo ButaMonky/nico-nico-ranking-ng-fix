@@ -56,8 +56,10 @@
       movie._nrnContributorSource = movie._nrnDetailContributor ? 'detail' : owner ? 'search' : 'unknown'
       movie._nrnOwnerNameSource = owner?.name != null ? movie._nrnContributorSource : 'unknown'
       const search = movie._nrnSearchContributor
+      let visibilitySource = movie._nrnContributorSource
       if (owner && OwnerEvidence.same(owner,search)) {
         if (owner.name === null && search.name !== null) movie._nrnOwnerNameSource = 'search'
+        if (owner.visibility == null && search.visibility != null) visibilitySource = 'search'
         owner = {...owner,name:owner.name ?? search.name,visibility:owner.visibility ?? search.visibility}
       }
       const supplement = movie._nrnOwnerNameSupplement
@@ -65,7 +67,12 @@
         owner = {...owner,name:supplement.ownerName.trim()}
         movie._nrnOwnerNameSource = 'nicoad'
       }
-      movie.setOwnerKnowledge(owner || null)
+      const mark = source => source === 'search' ? {source,at:movie._nrnSearchObservedAt}
+        : source === 'nicoad' ? {source,at:supplement?.fetchedAt}
+        : source === 'detail' ? {source:movie._nrnDetailOwnerSource || 'detail',at:movie._nrnDetailOwnerAt} : null
+      movie.setOwnerKnowledge(owner || null,owner ? {ownerId:mark(movie._nrnContributorSource),
+        ownerType:mark(movie._nrnContributorSource),ownerName:mark(movie._nrnOwnerNameSource),
+        ownerVisibility:mark(visibilitySource)} : null)
       const selected = owner ? getContributorBy(owner,movie._nrnContributorSource) : Contributor.NULL
       if (movie.contributor !== selected) movie.contributor = selected
       movie.metadataChanged()
@@ -97,6 +104,7 @@
           } else {
             movie._nrnSearchContributor = previous ? {...owner,
               name:previous.name || (owner.name ?? previous.name),visibility:previous.visibility ?? owner.visibility} : owner
+            movie._nrnSearchObservedAt = Date.now()
           }
           selectOwner(movie,getContributorBy)
         }
@@ -107,15 +115,26 @@
         return function(thumbInfo) {
           var m = movies.get(thumbInfo.id)
           m._nrnDetailFetchedAt = Number.isFinite(thumbInfo.fetchedAt) && thumbInfo.fetchedAt <= Date.now() ? thumbInfo.fetchedAt : Date.now()
+          // Session cache restores arrive through this listener marked with message 'cache'.
+          m._nrnDetailSource = thumbInfo.source === 'cache' || thumbInfo.error?.message === 'cache' ? 'cache' : 'detail'
           if (m.error && m.error.type !== 'NO_ERROR') m.error = Movie.NO_ERROR
-          if (typeof thumbInfo.description === 'string') m.description = thumbInfo.description
-          if (Array.isArray(thumbInfo.tags)) m.tags = getTagsBy(thumbInfo.tags)
+          if (typeof thumbInfo.description === 'string') {
+            m.description = thumbInfo.description
+            MetadataReadiness.noteSource(m,'description',m._nrnDetailSource,m._nrnDetailFetchedAt)
+          }
+          if (Array.isArray(thumbInfo.tags)) {
+            m.tags = getTagsBy(thumbInfo.tags)
+            MetadataReadiness.noteSource(m,'tags',m._nrnDetailSource,m._nrnDetailFetchedAt)
+            MetadataReadiness.noteSource(m,'lockedTags',m._nrnDetailSource,m._nrnDetailFetchedAt)
+          }
           // Keep raw API/cache objects unchanged; search evidence belongs to this route's movie.
           const detailOwner = OwnerEvidence.normalize(thumbInfo.contributor)
           if (detailOwner) {
             const previous = m._nrnDetailContributor
             m._nrnDetailContributor = OwnerEvidence.same(previous,detailOwner) ? {...detailOwner,
               name:detailOwner.name ?? previous.name,visibility:detailOwner.visibility ?? previous.visibility} : detailOwner
+            m._nrnDetailOwnerSource = m._nrnDetailSource
+            m._nrnDetailOwnerAt = m._nrnDetailFetchedAt
           }
           selectOwner(m,getContributorBy)
           m.setThumbInfoDone()
@@ -126,7 +145,10 @@
           var m = movies.get(thumbInfo.id)
           m.error = thumbInfo.error
           for (const field of MetadataReadiness.fields) {
-            if (m.metadata[field] !== 'known') m.metadata[field] = 'failed'
+            if (m.metadata[field] !== 'known') {
+              m.metadata[field] = 'failed'
+              MetadataReadiness.noteFailure(m,field,thumbInfo.error?.type)
+            }
           }
           m.setThumbInfoDone()
         }

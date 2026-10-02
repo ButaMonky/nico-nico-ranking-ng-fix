@@ -12,6 +12,7 @@
       this._error = Movie.NO_ERROR
       this._thumbInfoDone = false
       this.metadata = Object.fromEntries(MetadataReadiness.fields.map(field => [field,'unknown']))
+      this.metadataSource = {}
       this.owner = null
       this._ng = false
       this.ngByLockedTagCount = false
@@ -160,11 +161,16 @@
         this.emit('metadataDemandChanged')
         this.emit('metadataChanged')
       },
-      setOwnerKnowledge(owner) {
+      setOwnerKnowledge(owner, provenance) {
         this.owner = owner
         this.metadata.ownerId = this.metadata.ownerType = owner ? 'known' : 'unknown'
         this.metadata.ownerName = owner && owner.name !== null ? 'known' : 'unknown'
         this.metadata.ownerVisibility = owner && owner.visibility !== null ? 'known' : 'unknown'
+        for (const field of ['ownerId','ownerType','ownerName','ownerVisibility']) {
+          MetadataReadiness.clearSource(this,field)
+          const mark = provenance?.[field]
+          if (mark) MetadataReadiness.noteSource(this,field,mark.source,mark.at)
+        }
         this._refreshNicoadMatches()
       },
       metadataChanged() {

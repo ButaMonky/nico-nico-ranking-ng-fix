@@ -1120,7 +1120,37 @@
     function ready(movie, config) {
       return [...required(movie,config)].every(field => movie.metadata[field] === 'known')
     }
-    return {fields,ruleFields,settings,required,ready}
+    // Provenance is an optional record kept beside movie.metadata. The status
+    // strings stay authoritative: a record never promotes a field to known, and
+    // a record that no longer matches its field status is not reported.
+    const sources = new Set(['search','detail','cache','nicoad'])
+    function provenanceMap(movie) {
+      if (!movie.metadataSource) movie.metadataSource = {}
+      return movie.metadataSource
+    }
+    function noteSource(movie, field, source, observedAt) {
+      if (!movie?.metadata || !fields.includes(field) || !sources.has(source)) return false
+      if (movie.metadata[field] !== 'known') return false
+      provenanceMap(movie)[field] = {source, observedAt:Number.isFinite(observedAt) ? observedAt : null}
+      return true
+    }
+    function noteFailure(movie, field, failureKind) {
+      if (!movie?.metadata || !fields.includes(field) || movie.metadata[field] !== 'failed') return false
+      provenanceMap(movie)[field] = {source:'detail', observedAt:null,
+        failureKind:typeof failureKind === 'string' && failureKind ? failureKind : 'unknown'}
+      return true
+    }
+    function clearSource(movie, field) {
+      if (movie?.metadataSource && fields.includes(field)) delete movie.metadataSource[field]
+    }
+    function sourceOf(movie, field) {
+      const status = movie?.metadata?.[field], record = movie?.metadataSource?.[field]
+      if (!record) return null
+      if (status === 'known' && !record.failureKind) return {...record}
+      if (status === 'failed' && record.failureKind) return {...record}
+      return null
+    }
+    return {fields,ruleFields,settings,required,ready,sources,noteSource,noteFailure,clearSource,sourceOf}
   })()
   var AdvancedNgRules = (function() {
     // v12 recursive expression format:
@@ -1554,6 +1584,7 @@
       this._error = Movie.NO_ERROR
       this._thumbInfoDone = false
       this.metadata = Object.fromEntries(MetadataReadiness.fields.map(field => [field,'unknown']))
+      this.metadataSource = {}
       this.owner = null
       this._ng = false
       this.ngByLockedTagCount = false
@@ -1702,11 +1733,16 @@
         this.emit('metadataDemandChanged')
         this.emit('metadataChanged')
       },
-      setOwnerKnowledge(owner) {
+      setOwnerKnowledge(owner, provenance) {
         this.owner = owner
         this.metadata.ownerId = this.metadata.ownerType = owner ? 'known' : 'unknown'
         this.metadata.ownerName = owner && owner.name !== null ? 'known' : 'unknown'
         this.metadata.ownerVisibility = owner && owner.visibility !== null ? 'known' : 'unknown'
+        for (const field of ['ownerId','ownerType','ownerName','ownerVisibility']) {
+          MetadataReadiness.clearSource(this,field)
+          const mark = provenance?.[field]
+          if (mark) MetadataReadiness.noteSource(this,field,mark.source,mark.at)
+        }
         this._refreshNicoadMatches()
       },
       metadataChanged() {
@@ -1950,8 +1986,10 @@
       movie._nrnContributorSource = movie._nrnDetailContributor ? 'detail' : owner ? 'search' : 'unknown'
       movie._nrnOwnerNameSource = owner?.name != null ? movie._nrnContributorSource : 'unknown'
       const search = movie._nrnSearchContributor
+      let visibilitySource = movie._nrnContributorSource
       if (owner && OwnerEvidence.same(owner,search)) {
         if (owner.name === null && search.name !== null) movie._nrnOwnerNameSource = 'search'
+        if (owner.visibility == null && search.visibility != null) visibilitySource = 'search'
         owner = {...owner,name:owner.name ?? search.name,visibility:owner.visibility ?? search.visibility}
       }
       const supplement = movie._nrnOwnerNameSupplement
@@ -1959,7 +1997,12 @@
         owner = {...owner,name:supplement.ownerName.trim()}
         movie._nrnOwnerNameSource = 'nicoad'
       }
-      movie.setOwnerKnowledge(owner || null)
+      const mark = source => source === 'search' ? {source,at:movie._nrnSearchObservedAt}
+        : source === 'nicoad' ? {source,at:supplement?.fetchedAt}
+        : source === 'detail' ? {source:movie._nrnDetailOwnerSource || 'detail',at:movie._nrnDetailOwnerAt} : null
+      movie.setOwnerKnowledge(owner || null,owner ? {ownerId:mark(movie._nrnContributorSource),
+        ownerType:mark(movie._nrnContributorSource),ownerName:mark(movie._nrnOwnerNameSource),
+        ownerVisibility:mark(visibilitySource)} : null)
       const selected = owner ? getContributorBy(owner,movie._nrnContributorSource) : Contributor.NULL
       if (movie.contributor !== selected) movie.contributor = selected
       movie.metadataChanged()
@@ -1991,6 +2034,7 @@
           } else {
             movie._nrnSearchContributor = previous ? {...owner,
               name:previous.name || (owner.name ?? previous.name),visibility:previous.visibility ?? owner.visibility} : owner
+            movie._nrnSearchObservedAt = Date.now()
           }
           selectOwner(movie,getContributorBy)
         }
@@ -2001,15 +2045,26 @@
         return function(thumbInfo) {
           var m = movies.get(thumbInfo.id)
           m._nrnDetailFetchedAt = Number.isFinite(thumbInfo.fetchedAt) && thumbInfo.fetchedAt <= Date.now() ? thumbInfo.fetchedAt : Date.now()
+          // Session cache restores arrive through this listener marked with message 'cache'.
+          m._nrnDetailSource = thumbInfo.source === 'cache' || thumbInfo.error?.message === 'cache' ? 'cache' : 'detail'
           if (m.error && m.error.type !== 'NO_ERROR') m.error = Movie.NO_ERROR
-          if (typeof thumbInfo.description === 'string') m.description = thumbInfo.description
-          if (Array.isArray(thumbInfo.tags)) m.tags = getTagsBy(thumbInfo.tags)
+          if (typeof thumbInfo.description === 'string') {
+            m.description = thumbInfo.description
+            MetadataReadiness.noteSource(m,'description',m._nrnDetailSource,m._nrnDetailFetchedAt)
+          }
+          if (Array.isArray(thumbInfo.tags)) {
+            m.tags = getTagsBy(thumbInfo.tags)
+            MetadataReadiness.noteSource(m,'tags',m._nrnDetailSource,m._nrnDetailFetchedAt)
+            MetadataReadiness.noteSource(m,'lockedTags',m._nrnDetailSource,m._nrnDetailFetchedAt)
+          }
           // Keep raw API/cache objects unchanged; search evidence belongs to this route's movie.
           const detailOwner = OwnerEvidence.normalize(thumbInfo.contributor)
           if (detailOwner) {
             const previous = m._nrnDetailContributor
             m._nrnDetailContributor = OwnerEvidence.same(previous,detailOwner) ? {...detailOwner,
               name:detailOwner.name ?? previous.name,visibility:detailOwner.visibility ?? previous.visibility} : detailOwner
+            m._nrnDetailOwnerSource = m._nrnDetailSource
+            m._nrnDetailOwnerAt = m._nrnDetailFetchedAt
           }
           selectOwner(m,getContributorBy)
           m.setThumbInfoDone()
@@ -2020,7 +2075,10 @@
           var m = movies.get(thumbInfo.id)
           m.error = thumbInfo.error
           for (const field of MetadataReadiness.fields) {
-            if (m.metadata[field] !== 'known') m.metadata[field] = 'failed'
+            if (m.metadata[field] !== 'known') {
+              m.metadata[field] = 'failed'
+              MetadataReadiness.noteFailure(m,field,thumbInfo.error?.type)
+            }
           }
           m.setThumbInfoDone()
         }
