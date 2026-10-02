@@ -11,8 +11,10 @@
       // Only explicitly channel-typed sources and native channel URLs accept ch.
       const text = type === 'channel' ? raw.replace(/^ch/,'') : raw
       if (!/^[0-9]+$/.test(text)) return null
-      const id = Number(text)
-      if (!Number.isSafeInteger(id) || id <= 0) return null
+      // BRUSH-012A: digits are checked before any Number conversion; IDs
+      // beyond the safe range stay unknown instead of being rounded.
+      const id = OwnerId.safe(text)
+      if (id === null) return null
       const name = typeof owner.name === 'string' ? owner.name.trim() : null
       const visibility = owner.visibility === 'hidden' || owner.ownerType === 'hidden'
         ? 'hidden' : owner.visibility === 'visible' ? 'visible' : null

@@ -291,6 +291,46 @@
     return Listeners
   })()
 
+
+  // BRUSH-012A: one place that parses user/channel IDs without rounding.
+  // A string is validated as decimal digits first and never passes through
+  // Number before that, so "9007199254740993" cannot become ...992.
+  // Inside the safe integer range IDs stay numbers, exactly as stored today.
+  var OwnerId = (function() {
+    const maxSafe = '9007199254740991'
+    // Canonical decimal string of a positive ID, or null. Leading zeros are
+    // dropped ("000123" -> "123"); "0", signs, fractions, exponents, spaces
+    // inside, empty values and non-integral numbers are rejected.
+    function canonical(value) {
+      if (typeof value === 'number') return Number.isSafeInteger(value) && value > 0 ? String(value) : null
+      if (typeof value === 'bigint') return value > 0n ? value.toString() : null
+      if (typeof value !== 'string') return null
+      const text = value.trim()
+      if (!/^[0-9]+$/.test(text)) return null
+      const digits = text.replace(/^0+/,'')
+      return digits ? digits : null
+    }
+    function isSafeDigits(digits) {
+      return digits.length < maxSafe.length || (digits.length === maxSafe.length && digits <= maxSafe)
+    }
+    // The ID as a safe integer number, or null when absent, invalid or beyond
+    // Number.MAX_SAFE_INTEGER (such IDs are never rounded into another ID).
+    function safe(value) {
+      const digits = canonical(value)
+      return digits !== null && isSafeDigits(digits) ? Number(digits) : null
+    }
+    function same(a, b) {
+      const left = canonical(a)
+      return left !== null && left === canonical(b)
+    }
+    // User icon CDN bucket: floor(id / 10000) computed on the digits.
+    function bucket(value) {
+      const digits = canonical(value)
+      if (digits === null) return null
+      return digits.length > 4 ? digits.slice(0,-4) : '0'
+    }
+    return {canonical, safe, same, bucket, isSafeDigits}
+  })()
   var ArrayStore = (function(_super) {
     var isObject = function(v) {
       return v === Object(v)
@@ -323,8 +363,17 @@
       },
       _normalizeValue(value) {
         if (this._isIntegerIdStore()) {
-          var n = Math.trunc(Number(value))
-          return Number.isFinite(n) ? n : value
+          // BRUSH-012A: safe IDs stay numbers (stored format unchanged);
+          // decimal IDs beyond Number.MAX_SAFE_INTEGER stay exact canonical
+          // strings and are never rounded into another ID. Other stored
+          // values keep the v14.1 behaviour (e.g. 12.9 -> 12) for compatibility;
+          // new input is validated strictly before it reaches the store.
+          var n = OwnerId.safe(value)
+          if (n !== null) return n
+          var digits = OwnerId.canonical(value)
+          if (digits !== null) return digits
+          var legacy = Math.trunc(Number(value))
+          return Number.isFinite(legacy) ? legacy : value
         }
         return this.caseInsensitive && typeof value === 'string'
           ? value.toUpperCase() : value
@@ -498,15 +547,17 @@
       var isIntValueType = function(type) {
         return ['ngUserId', 'ngChannelId'].indexOf(type) >= 0
       }
+      // BRUSH-012A: ID rows must be positive safe decimal integers; "1.5",
+      // "1e3" or IDs beyond Number.MAX_SAFE_INTEGER are skipped, never rounded.
       var hasValidValue = function(record) {
         var v = record[VALUE]
         return v.length !== 0
-            && !(isIntValueType(record[TYPE]) && Number.isNaN(Math.trunc(v)))
+            && !(isIntValueType(record[TYPE]) && OwnerId.safe(v) === null)
       }
       var valueToIntIfIntValueType = function(record) {
         var r = record
         return isIntValueType(r[TYPE])
-             ? createRecord(r[TYPE], Math.trunc(r[VALUE]), r[TEXT])
+             ? createRecord(r[TYPE], OwnerId.safe(r[VALUE]), r[TEXT])
              : r
       }
       var records = function(csv) {
@@ -759,8 +810,9 @@
     };
     var contributor = function(rootElem, type, id, name) {
       const raw = rootElem.querySelector(id).textContent
-      const numericId = /^[0-9]+$/.test(raw) ? Number(raw) : NaN
-      if (!Number.isSafeInteger(numericId) || numericId <= 0) return {type:'unknown',id:-1,name:null}
+      // BRUSH-012A: digits only, no rounding; out-of-range IDs stay unknown.
+      const numericId = /^[0-9]+$/.test(raw) ? OwnerId.safe(raw) : null
+      if (numericId === null) return {type:'unknown',id:-1,name:null}
       return {
         type: type,
         id: numericId,
@@ -1975,8 +2027,10 @@
       // Only explicitly channel-typed sources and native channel URLs accept ch.
       const text = type === 'channel' ? raw.replace(/^ch/,'') : raw
       if (!/^[0-9]+$/.test(text)) return null
-      const id = Number(text)
-      if (!Number.isSafeInteger(id) || id <= 0) return null
+      // BRUSH-012A: digits are checked before any Number conversion; IDs
+      // beyond the safe range stay unknown instead of being rounded.
+      const id = OwnerId.safe(text)
+      if (id === null) return null
       const name = typeof owner.name === 'string' ? owner.name.trim() : null
       const visibility = owner.visibility === 'hidden' || owner.ownerType === 'hidden'
         ? 'hidden' : owner.visibility === 'visible' ? 'visible' : null
@@ -2250,11 +2304,9 @@
       ids.forEach((id,i) => params.set('filters[contentId][' + i + ']',id))
       return endpoint + '?' + params.toString()
     }
+    // Positive safe integer ID or null (BRUSH-012A: no rounding of large IDs).
     function positiveId(value) {
-      const text = typeof value === 'number' ? String(value) : typeof value === 'string' ? value : ''
-      if (!/^[0-9]+$/.test(text)) return null
-      const id = Number(text)
-      return Number.isSafeInteger(id) && id > 0 ? id : null
+      return OwnerId.safe(value)
     }
     // -> {status:'ok', owners:Map(id -> {type,id}), missing:[id], conflicts:[id]} | {status:'invalid'}
     function parse(text, ids) {
@@ -2691,8 +2743,9 @@
         'ng-user-id': {
           targetText: 'NGユーザーID',
           storeName: 'ngUserIds',
-          convert: Math.trunc,
-          isValid(v) { return isPositiveInt(Math.trunc(v)) },
+          // BRUSH-012A: "1.5" or "1e3" are not IDs; large IDs are never rounded.
+          convert(v) { return OwnerId.safe(v) },
+          isValid(v) { return OwnerId.safe(v) !== null },
           inputRequestText: POSITIVE_INT_INPUT_TEXT,
           urlOf(userId) { return 'https://www.nicovideo.jp/user/' + userId },
         },
@@ -2707,8 +2760,8 @@
         'ng-channel-id': {
           targetText: 'NGチャンネルID',
           storeName: 'ngChannelIds',
-          convert: Math.trunc,
-          isValid(v) { return isPositiveInt(Math.trunc(v)) },
+          convert(v) { return OwnerId.safe(v) },
+          isValid(v) { return OwnerId.safe(v) !== null },
           inputRequestText: POSITIVE_INT_INPUT_TEXT,
           urlOf(channelId) { return 'https://ch.nicovideo.jp/ch' + channelId },
         },
@@ -8259,12 +8312,13 @@ div:has(> div > a[data-anchor-page="ranking_genre"][href^="/watch/"] > div > p),
       },
       async _toggleContributorNgId(target) {
         var ds = target.dataset
-        var contributor = Contributor.new(ds.contributorType, parseInt(ds.id, 10), ds.name)
+        // BRUSH-012A: parse the card's ID once, without rounding or truncation.
+        var id = OwnerId.safe(ds.id)
+        var contributor = Contributor.new(ds.contributorType, id, ds.name)
         var storeName = contributor.ngIdStoreName
         var store = this.config[storeName]
-        var id = Math.trunc(Number(ds.id))
 
-        if (!Number.isFinite(id) || id <= 0) {
+        if (id === null) {
           console.error('[NicoNicoRankingNG NG-ID] 不正な投稿者IDのため操作を中止:', {
             contributorType: ds.contributorType,
             rawId: ds.id,

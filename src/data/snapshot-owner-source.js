@@ -17,11 +17,9 @@
       ids.forEach((id,i) => params.set('filters[contentId][' + i + ']',id))
       return endpoint + '?' + params.toString()
     }
+    // Positive safe integer ID or null (BRUSH-012A: no rounding of large IDs).
     function positiveId(value) {
-      const text = typeof value === 'number' ? String(value) : typeof value === 'string' ? value : ''
-      if (!/^[0-9]+$/.test(text)) return null
-      const id = Number(text)
-      return Number.isSafeInteger(id) && id > 0 ? id : null
+      return OwnerId.safe(value)
     }
     // -> {status:'ok', owners:Map(id -> {type,id}), missing:[id], conflicts:[id]} | {status:'invalid'}
     function parse(text, ids) {

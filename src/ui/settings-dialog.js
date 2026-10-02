@@ -76,8 +76,9 @@
         'ng-user-id': {
           targetText: 'NGユーザーID',
           storeName: 'ngUserIds',
-          convert: Math.trunc,
-          isValid(v) { return isPositiveInt(Math.trunc(v)) },
+          // BRUSH-012A: "1.5" or "1e3" are not IDs; large IDs are never rounded.
+          convert(v) { return OwnerId.safe(v) },
+          isValid(v) { return OwnerId.safe(v) !== null },
           inputRequestText: POSITIVE_INT_INPUT_TEXT,
           urlOf(userId) { return 'https://www.nicovideo.jp/user/' + userId },
         },
@@ -92,8 +93,8 @@
         'ng-channel-id': {
           targetText: 'NGチャンネルID',
           storeName: 'ngChannelIds',
-          convert: Math.trunc,
-          isValid(v) { return isPositiveInt(Math.trunc(v)) },
+          convert(v) { return OwnerId.safe(v) },
+          isValid(v) { return OwnerId.safe(v) !== null },
           inputRequestText: POSITIVE_INT_INPUT_TEXT,
           urlOf(channelId) { return 'https://ch.nicovideo.jp/ch' + channelId },
         },

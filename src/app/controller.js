@@ -214,12 +214,13 @@
       },
       async _toggleContributorNgId(target) {
         var ds = target.dataset
-        var contributor = Contributor.new(ds.contributorType, parseInt(ds.id, 10), ds.name)
+        // BRUSH-012A: parse the card's ID once, without rounding or truncation.
+        var id = OwnerId.safe(ds.id)
+        var contributor = Contributor.new(ds.contributorType, id, ds.name)
         var storeName = contributor.ngIdStoreName
         var store = this.config[storeName]
-        var id = Math.trunc(Number(ds.id))
 
-        if (!Number.isFinite(id) || id <= 0) {
+        if (id === null) {
           console.error('[NicoNicoRankingNG NG-ID] 不正な投稿者IDのため操作を中止:', {
             contributorType: ds.contributorType,
             rawId: ds.id,

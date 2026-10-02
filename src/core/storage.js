@@ -30,8 +30,17 @@
       },
       _normalizeValue(value) {
         if (this._isIntegerIdStore()) {
-          var n = Math.trunc(Number(value))
-          return Number.isFinite(n) ? n : value
+          // BRUSH-012A: safe IDs stay numbers (stored format unchanged);
+          // decimal IDs beyond Number.MAX_SAFE_INTEGER stay exact canonical
+          // strings and are never rounded into another ID. Other stored
+          // values keep the v14.1 behaviour (e.g. 12.9 -> 12) for compatibility;
+          // new input is validated strictly before it reaches the store.
+          var n = OwnerId.safe(value)
+          if (n !== null) return n
+          var digits = OwnerId.canonical(value)
+          if (digits !== null) return digits
+          var legacy = Math.trunc(Number(value))
+          return Number.isFinite(legacy) ? legacy : value
         }
         return this.caseInsensitive && typeof value === 'string'
           ? value.toUpperCase() : value

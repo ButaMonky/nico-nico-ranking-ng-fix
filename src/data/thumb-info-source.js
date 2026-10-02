@@ -9,8 +9,9 @@
     };
     var contributor = function(rootElem, type, id, name) {
       const raw = rootElem.querySelector(id).textContent
-      const numericId = /^[0-9]+$/.test(raw) ? Number(raw) : NaN
-      if (!Number.isSafeInteger(numericId) || numericId <= 0) return {type:'unknown',id:-1,name:null}
+      // BRUSH-012A: digits only, no rounding; out-of-range IDs stay unknown.
+      const numericId = /^[0-9]+$/.test(raw) ? OwnerId.safe(raw) : null
+      if (numericId === null) return {type:'unknown',id:-1,name:null}
       return {
         type: type,
         id: numericId,

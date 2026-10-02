@@ -37,15 +37,17 @@
       var isIntValueType = function(type) {
         return ['ngUserId', 'ngChannelId'].indexOf(type) >= 0
       }
+      // BRUSH-012A: ID rows must be positive safe decimal integers; "1.5",
+      // "1e3" or IDs beyond Number.MAX_SAFE_INTEGER are skipped, never rounded.
       var hasValidValue = function(record) {
         var v = record[VALUE]
         return v.length !== 0
-            && !(isIntValueType(record[TYPE]) && Number.isNaN(Math.trunc(v)))
+            && !(isIntValueType(record[TYPE]) && OwnerId.safe(v) === null)
       }
       var valueToIntIfIntValueType = function(record) {
         var r = record
         return isIntValueType(r[TYPE])
-             ? createRecord(r[TYPE], Math.trunc(r[VALUE]), r[TEXT])
+             ? createRecord(r[TYPE], OwnerId.safe(r[VALUE]), r[TEXT])
              : r
       }
       var records = function(csv) {
