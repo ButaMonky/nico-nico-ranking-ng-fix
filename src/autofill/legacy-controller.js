@@ -2,6 +2,10 @@
       // Resources belong to one result route. No timer/listener survives disposal.
       var timers = new Set(), intervals = new Set(), frames = new Set(), handles = new Set()
       var listeners = []
+      var runLifetime = new AbortController()
+      var clearTimeout = function(id) { timers.delete(id); globalThis.clearTimeout(id) }
+      var clearInterval = function(id) { intervals.delete(id); globalThis.clearInterval(id) }
+      var cancelAnimationFrame = function(id) { frames.delete(id); globalThis.cancelAnimationFrame(id) }
       var setTimeout = function(fn, delay) {
         var id = globalThis.setTimeout(function() { timers.delete(id); if (!page._disposed) fn() }, delay)
         timers.add(id); return id
@@ -20,10 +24,12 @@
       }
       page._disposeAutoFill = function() {
         page._disposed = true
+        runLifetime.abort()
         timers.forEach(globalThis.clearTimeout); intervals.forEach(globalThis.clearInterval)
         frames.forEach(globalThis.cancelAnimationFrame)
         for (var handle of handles) { try { handle.abort?.() } catch (e) {} }
         handles.clear(); listeners.forEach(function(remove) { remove() })
+        timers.clear(); intervals.clear(); frames.clear(); listeners.length = 0
         delete model.config._nrnDiagnosticHook
         delete page._refreshPagerAnnotations
         if (typeof restorePagerUi === 'function') restorePagerUi()
@@ -41,29 +47,40 @@
       var requestScope = setupAutoFill.sequence = (setupAutoFill.sequence || 0) + 1
       var gmRequest = function(options) {
         return new Promise(function(resolve, reject) {
-          var request = typeof GM_xmlhttpRequest === 'undefined'
-            ? GM.xmlHttpRequest : GM_xmlhttpRequest
-          if (page._disposed) { resolve(null); return }
+          var signals = [...new Set([runLifetime.signal,options.signal].filter(Boolean))]
+          var abortError = function() { var error = new Error('request aborted'); error.name = 'AbortError'; return error }
+          if (page._disposed || signals.some(signal => signal.aborted)) { reject(abortError()); return }
           var measured = model.diagnostics?.begin(options._nrnKind,options._nrnLane) || function() {}
           var transportOptions = {...options}
           delete transportOptions._nrnKind
           delete transportOptions._nrnLane
-          var settled = false
+          delete transportOptions.signal
+          var settled = false, handle
           var finish = function(fn, outcome) { return function(value) {
             if (settled) return
             settled = true; handles.delete(handle)
+            signals.forEach(signal => signal.removeEventListener('abort',cancel))
             measured(outcome || (value?.status >= 200 && value.status < 300 ? 'ok' : 'http'))
             fn(value)
           } }
+          var cancel = function() {
+            if (settled) return
+            finish(reject,'aborted')(abortError())
+            try { handle?.abort?.() } catch (_) {}
+          }
+          signals.forEach(signal => signal.addEventListener('abort',cancel,{once:true}))
           try {
-          var handle = request(Object.assign({}, transportOptions, {
-            onload: finish(resolve),
-            onerror: finish(reject,'network'),
-            onabort: finish(function() { reject(new Error('request aborted')) },'aborted'),
-            ontimeout: finish(function() { reject(new Error('timeout')) },'timeout')
-          }))
-          if (handle && !settled) handles.add(handle)
-          if (handle && typeof handle.catch === 'function') handle.catch(finish(reject,'network'))
+            var request = typeof GM_xmlhttpRequest === 'undefined'
+              ? (typeof GM === 'undefined' ? null : GM.xmlHttpRequest) : GM_xmlhttpRequest
+            if (typeof request !== 'function') throw new Error('GM transport unavailable')
+            handle = request(Object.assign({}, transportOptions, {
+              onload: finish(resolve),
+              onerror: finish(reject,'network'),
+              onabort: finish(function() { reject(abortError()) },'aborted'),
+              ontimeout: finish(function() { reject(new Error('timeout')) },'timeout')
+            }))
+            if (handle && !settled) handles.add(handle)
+            if (handle && typeof handle.catch === 'function') handle.catch(finish(reject,'network'))
           } catch (error) { finish(reject,'network')(error) }
         })
       }
@@ -111,7 +128,7 @@
       }
       var fetchSelfAdResult = function(movie) {
         if (!movie) return Promise.resolve(null)
-        return Network.ads(requestScope + ':thanks:' + movie.id, function() { return fetchSelfAdResultUnshared(movie) })
+        return Network.ads(requestScope + ':thanks:' + movie.id, function() { return fetchSelfAdResultUnshared(movie) }, {signal:runLifetime.signal})
       }
       var fetchSelfAdResultUnshared = async function(movie) {
         if (page._disposed) return
@@ -1070,13 +1087,42 @@
       listen(badge, 'dblclick', function() { Diagnostics.publish('manual') })
 
       // -------------------- waiting helpers --------------------
-      var waitForInitialRoots = function(timeoutMs) {
+      var waitForPaint = function() {
+        if (page._disposed || runLifetime.signal.aborted) return Promise.resolve(false)
         return new Promise(function(resolve) {
+          var first, second, done = false
+          var finish = function(value) {
+            if (done) return
+            done = true
+            cancelAnimationFrame(first); cancelAnimationFrame(second)
+            runLifetime.signal.removeEventListener('abort',cancel)
+            resolve(value)
+          }
+          var cancel = function() { finish(false) }
+          runLifetime.signal.addEventListener('abort',cancel,{once:true})
+          first = requestAnimationFrame(function() {
+            second = requestAnimationFrame(function() { finish(true) })
+          })
+        })
+      }
+      var waitForInitialRoots = function(timeoutMs) {
+        if (page._disposed || runLifetime.signal.aborted) return Promise.resolve([])
+        return new Promise(function(resolve) {
+          var done = false, timer
+          var finish = function(roots) {
+            if (done) return
+            done = true; clearTimeout(timer)
+            runLifetime.signal.removeEventListener('abort',cancel)
+            resolve(roots)
+          }
+          var cancel = function() { finish([]) }
           var startedAt = Date.now()
           var lastCount = -1
           var stableSince = 0
 
           var check = function() {
+            if (done) return
+            if (page._disposed) { cancel(); return }
             var candidates = currentOriginalRootCandidates()
             var count = candidates.length
             // Decoration/hover elements also carry video IDs. Only real main
@@ -1091,7 +1137,7 @@
               if (!stableSince) stableSince = Date.now()
               if (Date.now() - stableSince >= 300
                   && allBound) {
-                resolve(candidates.slice())
+                finish(candidates.slice())
                 return
               }
             } else {
@@ -1100,16 +1146,18 @@
             }
 
             if (Date.now() - startedAt >= timeoutMs) {
-              resolve(candidates.slice())
+              finish(candidates.slice())
               return
             }
-            setTimeout(check, 100)
+            timer = setTimeout(check, 100)
           }
+          runLifetime.signal.addEventListener('abort',cancel,{once:true})
           check()
         })
       }
 
       var waitForThumbInfo = function(movieIds, timeoutMs) {
+        if (page._disposed || runLifetime.signal.aborted) return Promise.resolve(false)
         if (!model.config.useGetThumbInfo.value) return Promise.resolve(true)
         var ids = [...new Set(movieIds)]
         if (!ids.length) return Promise.resolve(true)
@@ -1117,8 +1165,10 @@
         return new Promise(function(resolve) {
           var done = false
           var listeners = new Map(), checking = false
+          var cancel = function() { if (done) return; done = true; cleanup(); resolve(false) }
           var cleanup = function() {
             clearTimeout(timer)
+            runLifetime.signal.removeEventListener('abort',cancel)
             for (var [movie,listener] of listeners) movie.off('metadataChanged',listener)
             listeners.clear()
           }
@@ -1133,6 +1183,7 @@
               done = true;cleanup();resolve(true)
             })
           }
+          runLifetime.signal.addEventListener('abort',cancel,{once:true})
           ids.forEach(function(id) {
             var movie = model.movies.get(id)
             if (!movie) return

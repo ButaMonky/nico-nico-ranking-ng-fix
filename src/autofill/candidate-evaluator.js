@@ -279,11 +279,7 @@
 
         // v13.3: 非表示中に▲▼を測定しない。カードを表示してから2フレーム待ち、
         // 追加カード全件のトグル位置を実DOM上で再確定する。
-        await new Promise(function(resolve) {
-          requestAnimationFrame(function() {
-            requestAnimationFrame(resolve)
-          })
-        })
+        await waitForPaint()
         if (page._disposed) return
 
         renderStoredSelfAdWarnings(addedIds, '自動追加カード表示後')

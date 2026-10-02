@@ -690,7 +690,7 @@
               if (!value?.data || typeof value.data !== 'object') throw new Error('invalid decoration')
               return value
             } catch (error) { diagnostics?.validationFailure('adsDecoration','run','invalid'); throw error }
-          })
+          }, {signal:ownerPage._abortController?.signal})
           if (this._disposed || root.dataset.nrnAdDecorated === 'true') return
           root.dataset.nrnAdDecorated = 'true'
           var data = json && json.data

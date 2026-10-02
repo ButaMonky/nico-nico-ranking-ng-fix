@@ -58,7 +58,7 @@ test('network: response timeout includes body download',async()=>{
 });
 test('ads: parallel callers share one request; malformed response is not a negative match; cooldown expires',async()=>{
  let calls=0,now=1000,body={data:{sponsors:[]}};
- const ctx=vm.createContext({page:{},requestScope:'test-route',Network:loadNetwork(),Date:{now:()=>now},model:{},AdvancedNgRules:{},gmRequest:async()=>{calls++;return {status:200,responseText:JSON.stringify(body)};}});
+ const ctx=vm.createContext({runLifetime:new AbortController(),page:{},requestScope:'test-route',Network:loadNetwork(),Date:{now:()=>now},model:{},AdvancedNgRules:{},gmRequest:async()=>{calls++;return {status:200,responseText:JSON.stringify(body)};}});
  const a=auto.indexOf('      var selfAdCache = new Map()'),b=auto.indexOf('      var findDomRootsForMovieId',a);
  const run=vm.runInContext(auto.slice(a,b)+';fetchSelfAdResult',ctx);
  const movie={id:'sm1',contributor:{type:'user',id:42,name:'user'}};

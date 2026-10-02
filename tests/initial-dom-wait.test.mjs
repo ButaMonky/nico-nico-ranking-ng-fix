@@ -9,7 +9,7 @@ const element=id=>({dataset:{decorationVideoId:id},contains(other){return this==
 async function run({raw,expected,candidates}){
  let time=100;const jobs=[];
  const wait=vm.runInNewContext(source.slice(start,end)+';waitForInitialRoots',{
-  Date:{now:()=>time},setTimeout:(fn,ms)=>jobs.push(()=>{time+=ms;fn()}),
+  runLifetime:new AbortController(),clearTimeout(){},Date:{now:()=>time},setTimeout:(fn,ms)=>jobs.push(()=>{time+=ms;fn()}),
   page:{doc:{querySelectorAll:selector=>selector.includes('[data-anchor-area="main"]')?expected:raw}},
   currentOriginalRootCandidates:()=>candidates
  });
