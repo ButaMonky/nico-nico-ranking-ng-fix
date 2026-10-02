@@ -838,7 +838,25 @@
         throw error;
       } finally { clearTimeout(timer); externalSignal?.removeEventListener('abort', abort); }
     }
-    return {createQueue, fetchResponse, ads:createQueue(4)};
+    // BRUSH-022: remembers successful "nothing here" answers (e.g. HTTP 404 for
+    // a record that does not exist) for a short time so SPA routes do not ask
+    // again at once. Failures (timeout, network error, 5xx, malformed, abort)
+    // must never be noted. Memory only, bounded, every entry expires.
+    function negativeCache(ttlMs, maxEntries = 1000) {
+      const entries = new Map();
+      function has(key, now = Date.now()) {
+        const at = entries.get(key);
+        if (at === undefined) return false;
+        if (now - at >= ttlMs || at > now) { entries.delete(key); return false; }
+        return true;
+      }
+      function note(key, now = Date.now()) {
+        entries.delete(key); entries.set(key, now);
+        while (entries.size > maxEntries) entries.delete(entries.keys().next().value);
+      }
+      return {ttlMs, has, note, forget:key => entries.delete(key), clear:() => entries.clear(), get size() { return entries.size; }};
+    }
+    return {createQueue, fetchResponse, negativeCache, ads:createQueue(4)};
   })();
   var ThumbInfo = (function(_super) {
     const parseTags = tags => {
@@ -2386,6 +2404,15 @@
     // _limit=101 is rejected (400). 100 is the page size, not a filter limit.
     const batchSize = 100
     const videoIdPattern = /^(sm|nm)[0-9]+$/
+    // BRUSH-022: a successful answer that does not contain the video (index
+    // lag for new uploads, deleted videos) is remembered for 5 minutes across
+    // SPA routes; HTTP errors, timeouts, malformed bodies and aborts never are.
+    // Created on first use so this module does not need Network at load time.
+    let absentCache = null
+    const absent = {
+      get cache() { return absentCache || (absentCache = Network.negativeCache(5 * 60 * 1000, 2000)) },
+      has(id) { return this.cache.has(id) }, note(id, at) { this.cache.note(id, at) }
+    }
     function url(ids) {
       const params = new URLSearchParams()
       params.set('q','');params.set('targets','title');params.set('fields','contentId,userId,channelId')
@@ -2448,6 +2475,7 @@
             const status = owner?.type === 'user'
               ? (applySupplement(id,{type:'user',id:String(owner.id)},'snapshot',at) ? 'accepted' : 'rejected')
               : owner ? 'channel' : result.conflicts.includes(id) ? 'conflict' : 'absent'
+            if (status === 'absent' && result.missing.includes(id)) absent.note(id,at)
             finishMovie(id,status)
           }
         }
@@ -2467,6 +2495,7 @@
       function enqueue(movie, onDone) {
         if (disposed || !movie || attempted.has(movie.id) || !videoIdPattern.test(movie.id)) return false
         if (movie.ownerResolution?.status !== 'missing') return false
+        if (absent.has(movie.id)) { movie._nrnOwnerSnapshotStatus = 'absent';return false }
         attempted.add(movie.id);queue.push(movie.id)
         if (typeof onDone === 'function') callbacks.set(movie.id,onDone)
         movie._nrnOwnerIdPending = true
@@ -2483,7 +2512,7 @@
       }
       return {enqueue, flush, dispose}
     }
-    return {endpoint, batchSize, url, parse, create}
+    return {endpoint, batchSize, url, parse, create, get _absent() { return absent.cache }}
   })()
 
   // BRUSH-012B: owner icon candidates in one priority order. An icon is only
@@ -8818,6 +8847,14 @@ a.nrn-parsed[data-anchor-detail="nicoad"] > .nrn-movie-info-toggle { background:
   // stop returning it. Its numeric ownerId alone does not establish owner type.
   var OwnerNameSource = (function() {
     let sequence = 0
+    // BRUSH-022: HTTP 404 = nicoad has no record for the video (a normal
+    // answer). Kept for 5 minutes across SPA routes; failures are never kept.
+    // Created on first use so this module does not need Network at load time.
+    let absentCache = null
+    const absent = {
+      get cache() { return absentCache || (absentCache = Network.negativeCache(5 * 60 * 1000, 1000)) },
+      has(id) { return this.cache.has(id) }, note(id) { this.cache.note(id) }
+    }
     // options.snapshot: SnapshotOwnerSource for IDs nicoad could not supply (BRUSH-010).
     function create(movies,diagnostics,options = {}) {
       const snapshot = options.snapshot || null
@@ -8825,9 +8862,17 @@ a.nrn-parsed[data-anchor-detail="nicoad"] > .nrn-movie-info-toggle { background:
       const abort = new AbortController(), apply = ThumbInfoListener.forOwnerName(movies)
       const applySupplement = ThumbInfoListener.forSupplement(movies)
       let disposed = false, extraRequests = 0
+      // No new network request needed for this video (shared or known absent).
+      const free = id => responses.has(id) || absent.has(id)
       function getData(id,kind = 'adsDecoration') {
         if (disposed || !/^(sm|so|nm)[0-9]+$/.test(id)) return Promise.resolve(null)
         if (responses.has(id)) return responses.get(id)
+        if (absent.has(id)) {
+          // Same outcome as the 404 it remembers, without a request.
+          const error = new Error('owner content absent (remembered)')
+          error.status = 404;error.remembered = true
+          return Promise.reject(error)
+        }
         const controller = new AbortController()
         let expired = false, timer, cancel
         const deadline = new Promise((resolve,reject) => {
@@ -8844,6 +8889,7 @@ a.nrn-parsed[data-anchor-detail="nicoad"] > .nrn-movie-info-toggle { background:
           if (disposed || expired) return null
           if (!res.ok) {
             // Keep the status: 404 means nicoad has no record, not a failed request.
+            if (res.status === 404) absent.note(id)
             const error = new Error('owner content HTTP failure')
             error.status = res.status
             throw error
@@ -8896,13 +8942,13 @@ a.nrn-parsed[data-anchor-detail="nicoad"] > .nrn-movie-info-toggle { background:
       }
       function lookupNicoad(movie, snapshotAfter) {
         if (disposed || movie.ownerResolution?.status !== 'missing') return
-        if (!responses.has(movie.id) && extraRequests >= 64) {
+        if (!free(movie.id) && extraRequests >= 64) {
           // Over the per-video budget: the batched Snapshot lookup is cheaper.
           movie._nrnOwnerIdStatus = 'budget'
           if (snapshotAfter) snapshot?.enqueue(movie)
           return
         }
-        if (!responses.has(movie.id)) extraRequests++
+        if (!free(movie.id)) extraRequests++
         movie._nrnOwnerIdPending = true
         movie._nrnOwnerIdStatus = 'pending'
         movie.metadataChanged()
@@ -8932,8 +8978,8 @@ a.nrn-parsed[data-anchor-detail="nicoad"] > .nrn-movie-info-toggle { background:
           if (!identity || identity.type !== 'user') { movie._nrnOwnerNameStatus = 'untyped'; continue }
           if (!movie.thumbInfoDone && !MetadataReadiness.ready(movie,movies.config)) continue
           if (attempted.has(movie.id)) continue
-          if (!responses.has(movie.id) && extraRequests >= 64) { movie._nrnOwnerNameStatus = 'budget'; continue }
-          if (!responses.has(movie.id)) extraRequests++
+          if (!free(movie.id) && extraRequests >= 64) { movie._nrnOwnerNameStatus = 'budget'; continue }
+          if (!free(movie.id)) extraRequests++
           attempted.add(movie.id)
           movie._nrnOwnerNamePending = true
           movie._nrnOwnerNameStatus = 'pending'
@@ -8941,7 +8987,7 @@ a.nrn-parsed[data-anchor-detail="nicoad"] > .nrn-movie-info-toggle { background:
           getData(movie.id,'ownerName').then(result => {
             if (disposed) return
             movie._nrnOwnerNameStatus = result && apply(movie.id,result.data,result.fetchedAt) ? 'accepted' : 'rejected'
-          },() => { if (!disposed) movie._nrnOwnerNameStatus = 'failed' }).finally(() => {
+          },error => { if (!disposed) movie._nrnOwnerNameStatus = error?.status === 404 ? 'absent' : 'failed' }).finally(() => {
             movie._nrnOwnerNamePending = false
             if (!disposed) movie.metadataChanged()
           })
@@ -8954,7 +9000,7 @@ a.nrn-parsed[data-anchor-detail="nicoad"] > .nrn-movie-info-toggle { background:
       }}
       return api
     }
-    return {create}
+    return {create, get _absent() { return absent.cache }}
   })()
 /*
 Bundled HLS.js 1.6.19 license notices (library is unmodified).

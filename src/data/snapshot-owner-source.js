@@ -9,6 +9,15 @@
     // _limit=101 is rejected (400). 100 is the page size, not a filter limit.
     const batchSize = 100
     const videoIdPattern = /^(sm|nm)[0-9]+$/
+    // BRUSH-022: a successful answer that does not contain the video (index
+    // lag for new uploads, deleted videos) is remembered for 5 minutes across
+    // SPA routes; HTTP errors, timeouts, malformed bodies and aborts never are.
+    // Created on first use so this module does not need Network at load time.
+    let absentCache = null
+    const absent = {
+      get cache() { return absentCache || (absentCache = Network.negativeCache(5 * 60 * 1000, 2000)) },
+      has(id) { return this.cache.has(id) }, note(id, at) { this.cache.note(id, at) }
+    }
     function url(ids) {
       const params = new URLSearchParams()
       params.set('q','');params.set('targets','title');params.set('fields','contentId,userId,channelId')
@@ -71,6 +80,7 @@
             const status = owner?.type === 'user'
               ? (applySupplement(id,{type:'user',id:String(owner.id)},'snapshot',at) ? 'accepted' : 'rejected')
               : owner ? 'channel' : result.conflicts.includes(id) ? 'conflict' : 'absent'
+            if (status === 'absent' && result.missing.includes(id)) absent.note(id,at)
             finishMovie(id,status)
           }
         }
@@ -90,6 +100,7 @@
       function enqueue(movie, onDone) {
         if (disposed || !movie || attempted.has(movie.id) || !videoIdPattern.test(movie.id)) return false
         if (movie.ownerResolution?.status !== 'missing') return false
+        if (absent.has(movie.id)) { movie._nrnOwnerSnapshotStatus = 'absent';return false }
         attempted.add(movie.id);queue.push(movie.id)
         if (typeof onDone === 'function') callbacks.set(movie.id,onDone)
         movie._nrnOwnerIdPending = true
@@ -106,5 +117,5 @@
       }
       return {enqueue, flush, dispose}
     }
-    return {endpoint, batchSize, url, parse, create}
+    return {endpoint, batchSize, url, parse, create, get _absent() { return absent.cache }}
   })()

@@ -145,3 +145,12 @@ test('broker: aborting after start leaves the running task to its own signal',as
  const running=q('k',task('k'),{signal:controller.signal});await tick();controller.abort();
  assert.equal(runs.length,1);runs[0].resolve('done');assert.equal(await running,'done');
 });
+// BRUSH-022: negative cache primitive.
+test('negative cache: entries expire, future stamps are ignored and the size is bounded',()=>{
+ const c=loadNetwork().negativeCache(1000,3);
+ assert.equal(c.has('a',0),false);c.note('a',0);assert.equal(c.has('a',999),true);assert.equal(c.has('a',1000),false,'expires at the TTL');
+ assert.equal(c.size,0,'expired entries are removed');
+ c.note('f',5000);assert.equal(c.has('f',100),false,'a stamp from the future is not trusted');
+ for(const k of ['1','2','3','4'])c.note(k,10);assert.equal(c.size,3);assert.equal(c.has('1',10),false);assert.equal(c.has('4',10),true);
+ c.forget('4');assert.equal(c.has('4',10),false);c.clear();assert.equal(c.size,0);
+});

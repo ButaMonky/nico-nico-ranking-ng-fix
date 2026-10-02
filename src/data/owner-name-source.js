@@ -2,6 +2,14 @@
   // stop returning it. Its numeric ownerId alone does not establish owner type.
   var OwnerNameSource = (function() {
     let sequence = 0
+    // BRUSH-022: HTTP 404 = nicoad has no record for the video (a normal
+    // answer). Kept for 5 minutes across SPA routes; failures are never kept.
+    // Created on first use so this module does not need Network at load time.
+    let absentCache = null
+    const absent = {
+      get cache() { return absentCache || (absentCache = Network.negativeCache(5 * 60 * 1000, 1000)) },
+      has(id) { return this.cache.has(id) }, note(id) { this.cache.note(id) }
+    }
     // options.snapshot: SnapshotOwnerSource for IDs nicoad could not supply (BRUSH-010).
     function create(movies,diagnostics,options = {}) {
       const snapshot = options.snapshot || null
@@ -9,9 +17,17 @@
       const abort = new AbortController(), apply = ThumbInfoListener.forOwnerName(movies)
       const applySupplement = ThumbInfoListener.forSupplement(movies)
       let disposed = false, extraRequests = 0
+      // No new network request needed for this video (shared or known absent).
+      const free = id => responses.has(id) || absent.has(id)
       function getData(id,kind = 'adsDecoration') {
         if (disposed || !/^(sm|so|nm)[0-9]+$/.test(id)) return Promise.resolve(null)
         if (responses.has(id)) return responses.get(id)
+        if (absent.has(id)) {
+          // Same outcome as the 404 it remembers, without a request.
+          const error = new Error('owner content absent (remembered)')
+          error.status = 404;error.remembered = true
+          return Promise.reject(error)
+        }
         const controller = new AbortController()
         let expired = false, timer, cancel
         const deadline = new Promise((resolve,reject) => {
@@ -28,6 +44,7 @@
           if (disposed || expired) return null
           if (!res.ok) {
             // Keep the status: 404 means nicoad has no record, not a failed request.
+            if (res.status === 404) absent.note(id)
             const error = new Error('owner content HTTP failure')
             error.status = res.status
             throw error
@@ -80,13 +97,13 @@
       }
       function lookupNicoad(movie, snapshotAfter) {
         if (disposed || movie.ownerResolution?.status !== 'missing') return
-        if (!responses.has(movie.id) && extraRequests >= 64) {
+        if (!free(movie.id) && extraRequests >= 64) {
           // Over the per-video budget: the batched Snapshot lookup is cheaper.
           movie._nrnOwnerIdStatus = 'budget'
           if (snapshotAfter) snapshot?.enqueue(movie)
           return
         }
-        if (!responses.has(movie.id)) extraRequests++
+        if (!free(movie.id)) extraRequests++
         movie._nrnOwnerIdPending = true
         movie._nrnOwnerIdStatus = 'pending'
         movie.metadataChanged()
@@ -116,8 +133,8 @@
           if (!identity || identity.type !== 'user') { movie._nrnOwnerNameStatus = 'untyped'; continue }
           if (!movie.thumbInfoDone && !MetadataReadiness.ready(movie,movies.config)) continue
           if (attempted.has(movie.id)) continue
-          if (!responses.has(movie.id) && extraRequests >= 64) { movie._nrnOwnerNameStatus = 'budget'; continue }
-          if (!responses.has(movie.id)) extraRequests++
+          if (!free(movie.id) && extraRequests >= 64) { movie._nrnOwnerNameStatus = 'budget'; continue }
+          if (!free(movie.id)) extraRequests++
           attempted.add(movie.id)
           movie._nrnOwnerNamePending = true
           movie._nrnOwnerNameStatus = 'pending'
@@ -125,7 +142,7 @@
           getData(movie.id,'ownerName').then(result => {
             if (disposed) return
             movie._nrnOwnerNameStatus = result && apply(movie.id,result.data,result.fetchedAt) ? 'accepted' : 'rejected'
-          },() => { if (!disposed) movie._nrnOwnerNameStatus = 'failed' }).finally(() => {
+          },error => { if (!disposed) movie._nrnOwnerNameStatus = error?.status === 404 ? 'absent' : 'failed' }).finally(() => {
             movie._nrnOwnerNamePending = false
             if (!disposed) movie.metadataChanged()
           })
@@ -138,5 +155,5 @@
       }}
       return api
     }
-    return {create}
+    return {create, get _absent() { return absent.cache }}
   })()

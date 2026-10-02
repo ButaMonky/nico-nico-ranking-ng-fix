@@ -71,3 +71,21 @@ test('snapshot owners: parse is pure and keeps user and channel IDs apart',async
  assert.equal(r.status,'ok');assert.deepEqual(plain([...r.owners]),[['sm4',{type:'channel',id:8}]]);assert.deepEqual(plain(r.missing),['sm5']);
  assert.equal(S.parse('null',['sm1']).status,'invalid');assert.equal(S.parse(JSON.stringify({meta:{status:200},data:null}),['sm1']).status,'invalid');
 });
+// BRUSH-022: only a successful answer without the video is remembered, briefly.
+test('negative cache: a video missing from a successful answer is not asked again for a while; failures are',async()=>{
+ const h=await setup(['sm1','sm2']);h.service.enqueue(h.list[0]);await tick();
+ reply(h.requests[0],[]);assert.equal(h.list[0]._nrnOwnerSnapshotStatus,'absent');
+ const route2=h.SnapshotOwnerSource.create(h.movies,options=>{h.requests.push({options,abort(){}});return {abort(){}};});
+ assert.equal(route2.enqueue(h.list[0]),false,'a new SPA route does not repeat the lookup at once');
+ assert.equal(h.list[0]._nrnOwnerSnapshotStatus,'absent');await tick();assert.equal(h.requests.length,1);
+ h.SnapshotOwnerSource._absent.note('sm1',Date.now()-h.SnapshotOwnerSource._absent.ttlMs);
+ const route3=h.SnapshotOwnerSource.create(h.movies,options=>{h.requests.push({options,abort(){}});return {abort(){}};});
+ assert.equal(route3.enqueue(h.list[0]),true,'after the TTL it may be looked up again');
+ for(const s of [route2,route3,h.service])s.dispose();
+ for(const fail of [r=>reply(r,[],500),r=>r.options.ontimeout(),r=>r.options.onerror(),r=>r.options.onabort(),
+  r=>r.options.onload({status:200,responseText:'{'}),r=>reply(r,[],200,500),r=>reply(r,[{contentId:'sm1',userId:null,channelId:null}])]){
+  const f=await setup(['sm1']);f.service.enqueue(f.list[0]);await tick();fail(f.requests[0]);
+  assert.equal(f.SnapshotOwnerSource._absent.has('sm1'),false,String(fail));
+  const again=f.SnapshotOwnerSource.create(f.movies,()=>({abort(){}}));assert.equal(again.enqueue(f.list[0]),true,String(fail));again.dispose();f.service.dispose();
+ }
+});

@@ -19,7 +19,7 @@ async function setup(extra={}){
  const movie=new lib.Movie('sm1','synthetic');movies.setIfAbsent([movie]);
  lib.ThumbInfoListener.forSearch(movies)('sm1',{type:'user',id:55,name:null,visibility:'hidden'});
  const service=OwnerNameSource.create(movies);
- return {...lib,config,movies,movie,service,calls};
+ return {...lib,config,movies,movie,service,calls,OwnerNameSourceModule:OwnerNameSource};
 }
 const tick=()=>new Promise(r=>setImmediate(r));
 test('missing account name is fetched once, gates settlement and immediately re-evaluates name NG',async()=>{
@@ -177,4 +177,23 @@ test('broker: SPA dispose removes queued lookups before they start; one request 
  const next=await setup(),fresh=next.service.getData('sm1').catch(()=>null);await new Promise(r=>setImmediate(r));
  assert.equal(next.calls.length,1,'a new route gets its own request');
  next.service.dispose();await fresh;
+});
+// BRUSH-022: nicoad 404 (no record) is remembered for a short time; failures never.
+test('negative cache: nicoad 404 is remembered across routes, 503 and network errors are not',async()=>{
+ const a=await idSetup();a.service.request([a.m]);await tick();a.pending[0].status(404);await tick();
+ assert.equal(a.m._nrnOwnerIdStatus,'absent');a.service.dispose();
+ // Same page (same module instance), new SPA route: no new request, same 'absent' outcome.
+ const OwnerNameSource=a.OwnerNameSourceModule;
+ const route2=OwnerNameSource.create(a.movies);route2.request([a.m]);await tick();
+ assert.equal(a.pending.length,1,'no second nicoad request');assert.equal(a.m._nrnOwnerIdStatus,'absent');
+ await assert.rejects(route2.getData('sm2'),e=>e.status===404&&e.remembered===true);
+ OwnerNameSource._absent.note('sm2',Date.now()-OwnerNameSource._absent.ttlMs);
+ const route3=OwnerNameSource.create(a.movies);route3.request([a.m]);await tick();
+ assert.equal(a.pending.length,2,'after the TTL the lookup may run again');route2.dispose();route3.dispose();
+ for(const fail of [h=>h.pending[0].status(503),h=>h.pending[0].status(500),h=>h.pending[0].fail()]){
+  const h=await idSetup();h.service.request([h.m]);await tick();fail(h);await tick();
+  assert.equal(h.OwnerNameSourceModule._absent.has('sm2'),false);
+  const again=h.OwnerNameSourceModule.create(h.movies);again.request([h.m]);await tick();
+  assert.equal(h.pending.length,2,'a failure is retried by the next route');again.dispose();h.service.dispose();
+ }
 });

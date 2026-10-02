@@ -79,5 +79,23 @@
         throw error;
       } finally { clearTimeout(timer); externalSignal?.removeEventListener('abort', abort); }
     }
-    return {createQueue, fetchResponse, ads:createQueue(4)};
+    // BRUSH-022: remembers successful "nothing here" answers (e.g. HTTP 404 for
+    // a record that does not exist) for a short time so SPA routes do not ask
+    // again at once. Failures (timeout, network error, 5xx, malformed, abort)
+    // must never be noted. Memory only, bounded, every entry expires.
+    function negativeCache(ttlMs, maxEntries = 1000) {
+      const entries = new Map();
+      function has(key, now = Date.now()) {
+        const at = entries.get(key);
+        if (at === undefined) return false;
+        if (now - at >= ttlMs || at > now) { entries.delete(key); return false; }
+        return true;
+      }
+      function note(key, now = Date.now()) {
+        entries.delete(key); entries.set(key, now);
+        while (entries.size > maxEntries) entries.delete(entries.keys().next().value);
+      }
+      return {ttlMs, has, note, forget:key => entries.delete(key), clear:() => entries.clear(), get size() { return entries.size; }};
+    }
+    return {createQueue, fetchResponse, negativeCache, ads:createQueue(4)};
   })();
