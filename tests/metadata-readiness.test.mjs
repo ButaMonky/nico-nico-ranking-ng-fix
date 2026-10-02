@@ -10,7 +10,7 @@ const group=(op,children,not=false)=>({kind:'group',op,children,not});
 const payload=(id,contributor)=>({id,contributor,description:'',tags:[]});
 async function setup(){
  const calls=[],context=vm.createContext({URL,queueMicrotask,console:{log(){}},GM_xmlhttpRequest:o=>{calls.push(o);return {abort(){}};}});
- const lib=vm.runInContext(source.slice(0,boundary)+'return {Movie,Movies,Config,ThumbInfo,OwnerEvidence,ThumbInfoListener,AdvancedNgRules,MetadataReadiness:typeof MetadataReadiness === "undefined" ? null : MetadataReadiness}; })()',context);
+ const lib=vm.runInContext(source.slice(0,boundary)+'return {Movie,Movies,Config,ThumbInfo,OwnerEvidence,ThumbInfoListener,AdvancedNgRules,SourcePlan,MetadataReadiness:typeof MetadataReadiness === "undefined" ? null : MetadataReadiness}; })()',context);
  const config=new lib.Config((k,d)=>d,()=>{});await config.sync();
  const movies=new lib.Movies(config),movie=new lib.Movie('sm1','synthetic');movies.setIfAbsent([movie]);
  Object.assign(context,lib,{movies,config,gmXmlHttpRequest:()=>context.GM_xmlhttpRequest});
@@ -420,4 +420,51 @@ test('NG trace: explain lists matching, non-matching, undecided and disabled rul
  assert.deepEqual(report.map(r=>[r.id,r.enabled,r.result,r.waitingFor]),[['a',true,true,[]],['b',true,false,[]],['c',true,null,['tag']],['d',false,null,[]]]);
  assert.equal(report[2].trace.find(t=>t.field==='tag').state,'unknown');
  assert.deepEqual([...h.AdvancedNgRules.match(h.movie,true,rules).map(r=>r.id)],['a'],'match() is unchanged');
+});
+
+// BRUSH-015: resolve cheap, stable branches before asking for missing detail.
+test('progressive demand: a stable title NG does not fetch unrelated tags or owner identity',async()=>{
+ const h=await setup();h.config.ngTitles.add('synthetic');h.config.ngTags.add('blocked');
+ h.request();assert.equal(h.calls.length,0);assert.equal(h.movie.ng,true);assert.equal(h.movie.metadataSettled,true);
+ assert.equal(h.movie.metadata.tags,'unknown');h.request.dispose();
+});
+test('progressive demand: OR true and AND false prune their unknown detail branches',async()=>{
+ for(const [op,text,matched] of [['OR','synthetic',true],['AND','absent',false]]){
+  const h=await setup();h.search('sm1',{type:'user',id:12,name:'synthetic'});
+  h.config.advancedNgRulesEnabled.value=true;h.config.advancedNgRulesJson.value=JSON.stringify([{expression:group(op,[condition('title','contains',text),condition('tag','contains','blocked')])}]);
+  h.request();assert.equal(h.calls.length,0,op);assert.equal(h.movie.ng,matched);h.request.dispose();
+ }
+});
+test('progressive demand: only still-relevant unresolved subtrees contribute fields',async()=>{
+ const h=await setup();h.search('sm1',{type:'user',id:12,name:'synthetic'});
+ h.config.advancedNgRulesEnabled.value=true;h.config.advancedNgRulesJson.value=JSON.stringify([{expression:group('OR',[
+  group('AND',[condition('title','contains','absent'),condition('tag','exists')]),condition('description','contains','secret')])}]);
+ const need=h.MetadataReadiness.required(h.movie,h.config);assert.equal(need.has('tags'),false);assert.equal(need.has('description'),true);
+ h.request();assert.equal(h.calls.length,1);h.request.dispose();
+});
+test('progressive demand: weak search owner never suppresses a required authoritative detail',async()=>{
+ const h=await setup();h.search('sm1',{type:'user',id:12,name:'search'});
+ h.config.advancedNgRulesEnabled.value=true;h.config.advancedNgRulesJson.value=JSON.stringify([{expression:group('OR',[condition('userId','eq',12),condition('tag','contains','blocked')])}]);
+ h.request();assert.equal(h.calls.length,1);h.detail(payload('sm1',{type:'user',id:13,name:'actual'}));assert.equal(h.movie.ng,false);h.request.dispose();
+});
+test('progressive demand: removing a stable NG reschedules the now-required details',async()=>{
+ const h=await setup();h.search('sm1',{type:'user',id:12,name:'search'});h.config.ngTags.add('blocked');h.config.ngTitles.add('synthetic');
+ h.request();assert.equal(h.calls.length,0);h.config.ngTitles.clear();await new Promise(r=>setImmediate(r));
+ assert.equal(h.calls.length,1);h.request.dispose();
+});
+test('progressive demand: explicit detail expansion still fetches on a filtered movie',async()=>{
+ const h=await setup();h.config.ngTitles.add('synthetic');h.request();assert.equal(h.calls.length,0);
+ h.movie.requestDetails();await new Promise(r=>setImmediate(r));assert.equal(h.calls.length,1);h.request.dispose();
+});
+test('progressive demand: unresolved NOT never turns into a definite rejection',async()=>{
+ const h=await setup();h.search('sm1',{type:'user',id:12,name:'search'});
+ h.config.advancedNgRulesEnabled.value=true;h.config.advancedNgRulesJson.value=JSON.stringify([{expression:group('OR',[condition('title','contains','absent'),condition('tag','contains','blocked')],true)}]);
+ h.request();assert.equal(h.movie.ng,false);assert.equal(h.calls.length,1);h.request.dispose();
+});
+test('progressive demand: detail requests consult the pure SourcePlan instead of fetching unsupported fields',async()=>{
+ const h=await setup();h.search('sm1',{type:'user',id:12,name:'search'});
+ let planned=0;const original=h.SourcePlan.planMovie;h.SourcePlan.planMovie=(...args)=>{planned++;return original(...args);};
+ const required=h.MetadataReadiness.required;h.MetadataReadiness.required=()=>new Set(['likeCount']);
+ h.request();assert.ok(planned>0);assert.equal(h.calls.length,0);
+ h.MetadataReadiness.required=required;h.request.dispose();
 });

@@ -119,7 +119,9 @@
         request.restoreCachedDetails?.(allIds,'通信前')
         var pendingIds = allIds.filter(function(id) {
           var movie = movies.get(id)
-          return movie && !movie.thumbInfoDone && !MetadataReadiness.ready(movie,movies.config)
+          if (!movie || movie.thumbInfoDone) return false
+          const plan = SourcePlan.planMovie(movie,movies.config,{available:['detail']})
+          return Boolean(plan.requests.detail?.length)
         })
         thumbInfo.request(pendingIds, prefer)
         request.ownerNames?.request(allIds.map(id => movies.get(id)))

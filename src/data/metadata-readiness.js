@@ -10,39 +10,57 @@
       tag:'tags', tagCount:'tags', lockedTag:'lockedTags', lockedTagCount:'lockedTags', description:'description',
       selfAdIdMatch:'ownerId', selfAdNameMatch:'ownerName'
     }
-    const settings = ['ngUserIds','ngChannelIds','ngUserNames','ngTags','ngLockedTags',
+    const settings = ['ngMovies','ngTitles','ngUserIds','ngChannelIds','ngUserNames','ngTags','ngLockedTags',
       'ngLockedTagCountEnabled','advancedNgRulesEnabled','advancedNgRulesJson',
       'visibleContributorType','unknownContributorMovieVisible','movieInfoTogglable',
       'descriptionTogglable','selfAdWarningEnabled','useGetThumbInfo']
-    const ruleDemandCache = new Map()
-    function ruleRequirements(raw) {
+    const parsedRuleCache = new Map()
+    function parsedRules(raw) {
       const key = typeof raw === 'string' ? raw : JSON.stringify(raw)
-      if (ruleDemandCache.has(key)) return ruleDemandCache.get(key)
-      const need = new Set()
-      const visit = function(node) {
-        if (node.kind === 'condition' && ruleFields[node.field]) need.add(ruleFields[node.field])
-        if (node.children) node.children.forEach(visit)
+      if (!parsedRuleCache.has(key)) {
+        parsedRuleCache.set(key,AdvancedNgRules.parse(raw).filter(rule => rule.enabled !== false))
+        if (parsedRuleCache.size > 32) parsedRuleCache.delete(parsedRuleCache.keys().next().value)
       }
-      AdvancedNgRules.parse(raw).filter(rule => rule.enabled !== false).forEach(rule => visit(rule.expression))
-      ruleDemandCache.set(key,need)
-      if (ruleDemandCache.size > 32) ruleDemandCache.delete(ruleDemandCache.keys().next().value)
-      return need
+      return parsedRuleCache.get(key)
+    }
+    function progressive(movie, config) {
+      const need = new Set()
+      if (!config?.advancedNgRulesEnabled?.value) return {matched:false,need}
+      const stable = Object.create(movie || null)
+      stable.metadata = {...movie?.metadata}
+      // A pending detail can supersede weak owner evidence. Do not prune a
+      // sibling branch merely because a search/supplemental owner matches.
+      for (const field of ['ownerId','ownerType','ownerName','ownerVisibility']) {
+        if (!['detail','cache'].includes(sourceOf(movie,field)?.source)) stable.metadata[field] = 'unknown'
+      }
+      function collect(node) {
+        if (!node || AdvancedNgRules.evaluateState(stable,node) !== null) return
+        if (node.kind === 'condition' && ruleFields[node.field]) need.add(ruleFields[node.field])
+        else if (node.children) node.children.forEach(collect)
+      }
+      for (const rule of parsedRules(config.advancedNgRulesJson.value)) {
+        const result = AdvancedNgRules.evaluateState(stable,rule.expression)
+        if (result === true) return {matched:true,need:new Set()}
+        if (result === null) collect(rule.expression)
+      }
+      return {matched:false,need}
     }
     function required(movie, config) {
-      // The owner row and contributor-type visibility need a trustworthy identity.
-      const need = new Set(['ownerId','ownerType'])
+      const rulePlan = progressive(movie,config)
+      const blocked = Boolean(movie?.ngId || movie?.ngTitle || rulePlan.matched)
+      const need = blocked ? new Set() : new Set(['ownerId','ownerType'])
       if (!config) return need
-      if (config.ngUserNames.set.size) need.add('ownerName')
-      if (config.ngTags.set.size) need.add('tags')
-      if (config.ngLockedTags.set.size || config.ngLockedTagCountEnabled.value) need.add('lockedTags')
-      if (config.selfAdWarningEnabled.value) { need.add('ownerId'); need.add('ownerName') }
-      if (config.advancedNgRulesEnabled.value) {
-        for (const field of ruleRequirements(config.advancedNgRulesJson.value)) need.add(field)
+      if (!blocked) {
+        if (config.ngUserNames.set.size) need.add('ownerName')
+        if (config.ngTags.set.size) need.add('tags')
+        if (config.ngLockedTags.set.size || config.ngLockedTagCountEnabled.value) need.add('lockedTags')
+        if (config.selfAdWarningEnabled.value) { need.add('ownerId'); need.add('ownerName') }
+        for (const field of rulePlan.need) need.add(field)
       }
-      if (movie._detailsRequested || !config.movieInfoTogglable.value) {
+      if (movie._detailsRequested || (!blocked && !config.movieInfoTogglable.value)) {
         need.add('ownerName'); need.add('tags'); need.add('lockedTags')
       }
-      if (movie._detailsRequested || movie._descriptionRequested || !config.descriptionTogglable.value) need.add('description')
+      if (movie._detailsRequested || movie._descriptionRequested || (!blocked && !config.descriptionTogglable.value)) need.add('description')
       return need
     }
     // BRUSH-011: whether an owner the normal route could not find is worth an
@@ -50,7 +68,9 @@
     // name: something also reads the account name (implies id).
     function ownerDemand(movie, config) {
       if (!config) return {id:true, name:true}
-      const rules = config.advancedNgRulesEnabled.value ? ruleRequirements(config.advancedNgRulesJson.value) : new Set()
+      const rulePlan = progressive(movie,config)
+      if ((movie?.ngId || movie?.ngTitle || rulePlan.matched) && !movie?._detailsRequested) return {id:false,name:false}
+      const rules = rulePlan.need
       const name = config.ngUserNames.set.size > 0 || rules.has('ownerName') || Boolean(config.selfAdWarningEnabled.value)
         || Boolean(movie?._detailsRequested) || !config.movieInfoTogglable.value
       const id = name || config.ngUserIds.set.size > 0 || config.ngChannelIds.set.size > 0 || rules.has('ownerId')
