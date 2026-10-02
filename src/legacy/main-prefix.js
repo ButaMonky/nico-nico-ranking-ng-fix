@@ -150,7 +150,8 @@
       var applySearchOwner = ThumbInfoListener.forSearch(movies)
       var movieViewModes = new MovieViewModes(config)
       var requestThumbInfo = getThumbInfoRequester(movies, movieViewModes, diagnostics)
-      var ownerNames = requestThumbInfo.ownerNames = OwnerNameSource.create(movies,diagnostics)
+      var ownerNames = requestThumbInfo.ownerNames = OwnerNameSource.create(movies,diagnostics,
+        {snapshot:SnapshotOwnerSource.create(movies,options => gmXmlHttpRequest()(options),diagnostics)})
       return {
         ownerNames,
         diagnostics,

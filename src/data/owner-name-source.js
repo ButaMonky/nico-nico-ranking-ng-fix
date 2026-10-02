@@ -2,7 +2,9 @@
   // stop returning it. Its numeric ownerId alone does not establish owner type.
   var OwnerNameSource = (function() {
     let sequence = 0
-    function create(movies,diagnostics) {
+    // options.snapshot: SnapshotOwnerSource for IDs nicoad could not supply (BRUSH-010).
+    function create(movies,diagnostics,options = {}) {
+      const snapshot = options.snapshot || null
       const scope = 'owner-name-' + ++sequence, responses = new Map(), attempted = new Set(), idAttempted = new Set()
       const abort = new AbortController(), apply = ThumbInfoListener.forOwnerName(movies)
       const applySupplement = ThumbInfoListener.forSupplement(movies)
@@ -58,7 +60,11 @@
         if (movie.ownerResolution?.status !== 'missing' || movie._nrnOwnerIdPending) return
         if (!/^(sm|nm)[0-9]+$/.test(movie.id) || idAttempted.has(movie.id)) return
         if (movie.ng && !movie._detailsRequested) return
-        if (!responses.has(movie.id) && extraRequests >= 64) { movie._nrnOwnerIdStatus = 'budget'; return }
+        if (!responses.has(movie.id) && extraRequests >= 64) {
+          // Over the per-video budget: the batched Snapshot lookup is cheaper.
+          idAttempted.add(movie.id);movie._nrnOwnerIdStatus = 'budget';snapshot?.enqueue(movie)
+          return
+        }
         if (!responses.has(movie.id)) extraRequests++
         idAttempted.add(movie.id)
         movie._nrnOwnerIdPending = true
@@ -73,7 +79,10 @@
           movie._nrnOwnerIdStatus = accepted ? 'accepted' : 'rejected'
         },error => { if (!disposed) movie._nrnOwnerIdStatus = error?.status === 404 ? 'absent' : 'failed' }).finally(() => {
           movie._nrnOwnerIdPending = false
-          if (!disposed) movie.metadataChanged()
+          if (disposed) return
+          // Still without an ID: hand over to the batched Snapshot lookup.
+          if (movie._nrnOwnerIdStatus !== 'accepted') snapshot?.enqueue(movie)
+          movie.metadataChanged()
         })
       }
       function request(list) {
@@ -102,7 +111,7 @@
         }
       }
       const api = {getData,request,dispose() {
-        disposed = true;abort.abort();responses.clear();attempted.clear();idAttempted.clear()
+        disposed = true;abort.abort();responses.clear();attempted.clear();idAttempted.clear();snapshot?.dispose()
         api.onRecovered = null
         for (const movie of movies._idToMovie.values()) { movie._nrnOwnerNamePending = false;movie._nrnOwnerIdPending = false }
       }}

@@ -109,3 +109,13 @@ test('owner ID supplement: dispose aborts and late answers are ignored',async()=
  h.service.dispose();h.pending[0].reply({id:'sm2',ownerId:77});await tick();
  assert.equal(h.m.contributor.type,'unknown');assert.equal(h.m._nrnOwnerIdPending,false);
 });
+test('owner ID supplement: videos nicoad cannot resolve are handed to the snapshot batch',async()=>{
+ const h=await idSetup();const queued=[];
+ const code=await readFile(new URL('../src/data/owner-name-source.js',import.meta.url),'utf8');
+ const service=vm.runInContext(code+';OwnerNameSource',vm.createContext({...h,URL,AbortController,setTimeout,clearTimeout,performance,
+  Network:h.Network,ThumbInfoListener:h.ThumbInfoListener,MetadataReadiness:h.MetadataReadiness,OwnerEvidence:h.OwnerEvidence,
+  fetch:(url,{signal})=>new Promise((resolve,reject)=>{h.pending.push({status:code=>resolve({ok:false,status:code,url,text:async()=>''})});signal.addEventListener('abort',()=>reject(Error('abort')));})}))
+  .create(h.movies,undefined,{snapshot:{enqueue:m=>{queued.push(m.id);return true;},dispose(){}}});
+ service.request([h.m]);await tick();h.pending.at(-1).status(404);await tick();
+ assert.deepEqual(queued,['sm2']);assert.equal(h.m._nrnOwnerIdStatus,'absent');service.dispose();h.service.dispose();
+});
