@@ -20,8 +20,12 @@
           Math.trunc(Number(c.sessionDetailCacheMaxEntries.value)) || 1500))
       }
 
+      // BRUSH-021: an entry stamped in the future (clock change, corrupt data)
+      // would otherwise never expire; treat it like an expired entry.
+      var futureSlackMs = 60 * 1000
       var isExpired = function(entry) {
         return !entry || !Number.isFinite(Number(entry.cachedAt)) || Number(entry.cachedAt) <= 0
+          || Number(entry.cachedAt) > Date.now() + futureSlackMs
           || Date.now() - Number(entry.cachedAt) > ttlMinutes * 60 * 1000
       }
 

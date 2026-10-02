@@ -54,3 +54,18 @@ test('generated: pre-field-status cache is invalidated instead of treating absen
  const h=await harness(output,JSON.stringify({schema:2,entries:[['sm1',{cachedAt:1000000,contributor:{type:'user',id:12,name:''}}]]}));
  assert.equal(h.factory(config()).size,0);
 });
+// BRUSH-021: schema 3 stays; entries stamped in the future no longer live forever.
+test('generated: entries stamped in the future are treated as expired, small clock skew is tolerated',async()=>{
+ const h=await harness(output),c=h.factory(config(1440));
+ c.set('skew',{cachedAt:h.now()+30000});c.set('future',{cachedAt:h.now()+3600000});c.set('now',{cachedAt:h.now()});
+ assert.equal(c.has('skew'),true);assert.equal(c.has('future'),false);assert.equal(c.has('now'),true);
+ c.flush();assert.deepEqual(JSON.parse(h.raw()).entries.map(e=>e[0]).sort(),['now','skew']);
+ const stored=JSON.stringify({schema:3,entries:[['far',{cachedAt:1000000+86400000}],['ok',{cachedAt:1000000}]]});
+ const reload=await harness(output,stored),r=reload.factory(config(1440));
+ assert.equal(r.size,1);assert.equal(r.has('ok'),true);assert.equal(r.diagnostics().stats.expired,1);
+});
+test('generated: the cache keeps schema 3 and its storage key; NG settings never pass through it',async()=>{
+ const h=await harness(output),c=h.factory(config());c.set('sm1',{id:'sm1',cachedAt:h.now(),metadata:{tags:'known'},tags:[]});c.flush();
+ const saved=JSON.parse(h.raw());assert.equal(saved.schema,3);assert.equal(c.diagnostics().storageKey,key);
+ assert.doesNotMatch(h.raw(),/ngUserIds|ngChannelIds|advancedNgRules/);
+});
