@@ -56,3 +56,56 @@ test('queue wait is inside the deadline; slow supplemental metadata cannot hold 
  assert.ok(all.every(m=>m.metadataSettled));assert.ok(all.every(m=>m.metadata.ownerName==='unknown'));
  assert.equal(h.calls.length,4,'expired queued work never starts a new transport');h.service.dispose();
 });
+
+// BRUSH-009: nicoad ownerId supplement for videos whose detail answer had no owner.
+async function idSetup(videoId='sm2'){
+ const pending=[];
+ const fetch=(url,{signal,credentials})=>new Promise((resolve,reject)=>{
+  assert.equal(credentials,'omit');
+  const respond=(status,data)=>resolve({ok:status>=200&&status<300,status,url,text:async()=>JSON.stringify({meta:{status},data})});
+  pending.push({url,reply:data=>respond(200,data),status:code=>respond(code,null),fail:()=>reject(Error('network'))});
+  signal.addEventListener('abort',()=>reject(Error('abort')));
+ });
+ const h=await setup({fetch});const movie=new h.Movie(videoId,'missing-owner');h.movies.setIfAbsent([movie]);
+ h.ThumbInfoListener.forCompleted(h.movies)({id:videoId,contributor:null,description:'',tags:[]});
+ return {...h,m:movie,pending};
+}
+test('owner ID supplement: missing owner is filled from nicoad ownerId and feeds ID NG',async()=>{
+ const h=await idSetup();h.config.ngUserIds.add(77);assert.equal(h.m.ownerResolution.status,'missing');
+ h.service.request([h.m]);h.service.request([h.m]);assert.equal(h.m.metadataSettled,false);await tick();
+ assert.equal(h.pending.length,1);assert.match(h.pending[0].url,/\/v1\/contents\/video\/sm2$/);
+ h.pending[0].reply({id:'sm2',ownerId:77,ownerName:'kept name'});await tick();
+ assert.equal(h.m.contributor.id,77);assert.equal(h.m.contributor.type,'user');assert.equal(h.m.ng,true);
+ assert.equal(h.m.ownerResolution.status,'supplemented');assert.equal(h.m.ownerResolution.source,'nicoad');
+ assert.equal(h.m._nrnOwnerNameSource,'nicoad');assert.equal(h.m._nrnOwnerIdStatus,'accepted');assert.equal(h.m.metadataSettled,true);
+ assert.equal(h.MetadataReadiness.sourceOf(h.m,'ownerId').source,'nicoad');h.service.dispose();
+});
+test('owner ID supplement: video ID mismatch, missing ownerId and invalid IDs are rejected',async()=>{
+ for(const data of [{id:'sm9',ownerId:77},{id:'sm2'},{id:'sm2',ownerId:0},{id:'sm2',ownerId:'ch77'},{id:'sm2',ownerId:'12x'}]){
+  const h=await idSetup();h.service.request([h.m]);await tick();h.pending[0].reply(data);await tick();
+  assert.equal(h.m.contributor.type,'unknown',JSON.stringify(data));assert.equal(h.m.ownerResolution.status,'missing');
+  assert.equal(h.AdvancedNgRules?h.AdvancedNgRules.evaluateNode(h.m,{kind:'condition',field:'userId',operator:'notExists'}):false,false);
+  h.service.dispose();
+ }
+});
+test('owner ID supplement: 404 and failures keep the owner unknown and are distinguished',async()=>{
+ const a=await idSetup();a.service.request([a.m]);await tick();a.pending[0].status(404);await tick();
+ assert.equal(a.m._nrnOwnerIdStatus,'absent');assert.equal(a.m.ownerResolution.status,'missing');assert.equal(a.m.metadataSettled,true);
+ const b=await idSetup();b.service.request([b.m]);await tick();b.pending[0].status(503);await tick();assert.equal(b.m._nrnOwnerIdStatus,'failed');
+ const c=await idSetup();c.service.request([c.m]);await tick();c.pending[0].fail();await tick();assert.equal(c.m._nrnOwnerIdStatus,'failed');
+ for(const h of [a,b,c]){assert.equal(h.m.metadata.ownerId,'unknown');h.service.request([h.m]);await tick();assert.equal(h.pending.length,1,'not retried in the same scope');h.service.dispose();}
+});
+test('owner ID supplement: only sm/nm videos whose detail answer had no owner are looked up',async()=>{
+ const so=await idSetup('so5');so.service.request([so.m]);await tick();assert.equal(so.pending.length,0,'channel-style IDs are skipped');
+ const h=await idSetup();const known=h.movie;h.service.request([known]);await tick();
+ assert.equal(known._nrnOwnerIdStatus,undefined,'search-known owner is not looked up by ID (a name lookup may still run)');
+ const fresh=new h.Movie('sm3','not yet answered');h.movies.setIfAbsent([fresh]);h.service.request([fresh]);await tick();
+ assert.equal(h.pending.filter(p=>/sm3$/.test(p.url)).length,0,'unanswered or failed detail does not trigger an ID lookup');
+ h.ThumbInfoListener.forErrorOccurred(h.movies)({id:'sm3',error:{type:'NETWORK'}});h.service.request([fresh]);await tick();
+ assert.equal(h.pending.filter(p=>/sm3$/.test(p.url)).length,0);h.service.dispose();so.service.dispose();
+});
+test('owner ID supplement: dispose aborts and late answers are ignored',async()=>{
+ const h=await idSetup();h.service.request([h.m]);await tick();assert.equal(h.pending.length,1);
+ h.service.dispose();h.pending[0].reply({id:'sm2',ownerId:77});await tick();
+ assert.equal(h.m.contributor.type,'unknown');assert.equal(h.m._nrnOwnerIdPending,false);
+});

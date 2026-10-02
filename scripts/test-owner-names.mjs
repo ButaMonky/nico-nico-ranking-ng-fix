@@ -120,8 +120,13 @@ try {
  await page.evaluate(html=>{history.pushState({},'','/tag/next');document.getElementById('results').innerHTML=html;},card);
  await page.waitForFunction(()=>__nrnDiagnostics.snapshot().current?.sequence===2);
  await page.waitForFunction(()=>testModel.movies.get('sm12345678')?.thumbInfoDone);
- assert.equal(await page.evaluate(()=>testModel.movies.get('sm12345678').metadata.ownerId),'unknown');
- assert.equal(await page.evaluate(()=>testModel.movies.get('sm12345678').metadata.ownerName),'unknown');
+ // BRUSH-009: the route's own nicoad ID lookup may fill the owner; the stale meta must not.
+ const spaOwner=await page.evaluate(()=>{const m=testModel.movies.get('sm12345678');
+  return {id:m.metadata.ownerId,name:m.metadata.ownerName,resolution:m.ownerResolution.source,idSource:m.metadataSource.ownerId?.source??null};});
+ assert.notEqual(spaOwner.resolution,'search','stale initial meta must not supply the identity');
+ assert.notEqual(spaOwner.idSource,'search');
+ if(spaOwner.id==='known')assert.deepEqual([spaOwner.resolution,spaOwner.idSource],['nicoad','nicoad'],'only the fresh supplement may fill it');
+ else assert.equal(spaOwner.name,'unknown');
  await page.reload();await page.evaluate(()=>sessionStorage.clear());await install(false,true);
  assert.deepEqual(await page.evaluate(()=>[detailCalls,ownerCalls]),[0,1],'owner-only display needs no detail request');
  await page.evaluate(()=>__nrnSessionDetailCacheService.flush());await page.reload();await install(false,true);

@@ -156,7 +156,7 @@
       },
       get thumbInfoDone() { return this._thumbInfoDone },
       get metadataSettled() {
-        return !this._nrnOwnerNamePending && (this.thumbInfoDone || MetadataReadiness.ready(this,this._metadataConfig))
+        return !this._nrnOwnerNamePending && !this._nrnOwnerIdPending && (this.thumbInfoDone || MetadataReadiness.ready(this,this._metadataConfig))
       },
       requestDetails(descriptionOnly) {
         if (descriptionOnly ? this._descriptionRequested : this._detailsRequested) return

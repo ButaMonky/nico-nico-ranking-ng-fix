@@ -3,8 +3,9 @@
   var OwnerNameSource = (function() {
     let sequence = 0
     function create(movies,diagnostics) {
-      const scope = 'owner-name-' + ++sequence, responses = new Map(), attempted = new Set()
+      const scope = 'owner-name-' + ++sequence, responses = new Map(), attempted = new Set(), idAttempted = new Set()
       const abort = new AbortController(), apply = ThumbInfoListener.forOwnerName(movies)
+      const applySupplement = ThumbInfoListener.forSupplement(movies)
       let disposed = false, extraRequests = 0
       function getData(id,kind = 'adsDecoration') {
         if (disposed || !/^(sm|so|nm)[0-9]+$/.test(id)) return Promise.resolve(null)
@@ -23,7 +24,12 @@
           const url = 'https://api.nicoad.nicovideo.jp/v1/contents/video/' + id
           const res = await Network.fetchResponse(url,{credentials:'omit',signal:controller.signal},8000,{run:diagnostics,kind})
           if (disposed || expired) return null
-          if (!res.ok) throw new Error('owner content HTTP failure')
+          if (!res.ok) {
+            // Keep the status: 404 means nicoad has no record, not a failed request.
+            const error = new Error('owner content HTTP failure')
+            error.status = res.status
+            throw error
+          }
           try {
             if (res.url && res.url !== url) throw new Error('unexpected content URL')
             const json = await res.json(), data = json?.data
@@ -44,8 +50,35 @@
         responses.set(id,promise)
         return promise
       }
+      // BRUSH-009: owner ID supplement for user-uploaded videos whose detail
+      // answer had no owner (ownerResolution 'missing'). data.id is the video
+      // ID and is checked by getData; only data.ownerId becomes the user ID.
+      // A failure or 404 leaves the owner unknown; nothing is read as absence.
+      function requestOwnerId(movie) {
+        if (movie.ownerResolution?.status !== 'missing' || movie._nrnOwnerIdPending) return
+        if (!/^(sm|nm)[0-9]+$/.test(movie.id) || idAttempted.has(movie.id)) return
+        if (movie.ng && !movie._detailsRequested) return
+        if (!responses.has(movie.id) && extraRequests >= 64) { movie._nrnOwnerIdStatus = 'budget'; return }
+        if (!responses.has(movie.id)) extraRequests++
+        idAttempted.add(movie.id)
+        movie._nrnOwnerIdPending = true
+        movie._nrnOwnerIdStatus = 'pending'
+        movie.metadataChanged()
+        getData(movie.id,'ownerId').then(result => {
+          if (disposed) return
+          const data = result?.data
+          const name = typeof data?.ownerName === 'string' && data.ownerName.trim() ? data.ownerName : null
+          const accepted = Boolean(data && data.id === movie.id && data.ownerId != null
+            && applySupplement(movie.id,{type:'user',id:String(data.ownerId),name},'nicoad',result.fetchedAt))
+          movie._nrnOwnerIdStatus = accepted ? 'accepted' : 'rejected'
+        },error => { if (!disposed) movie._nrnOwnerIdStatus = error?.status === 404 ? 'absent' : 'failed' }).finally(() => {
+          movie._nrnOwnerIdPending = false
+          if (!disposed) movie.metadataChanged()
+        })
+      }
       function request(list) {
         if (disposed) return
+        for (const movie of list) requestOwnerId(movie)
         for (const movie of list) {
           if (movie.metadata.ownerName === 'known' || movie._nrnOwnerNamePending) continue
           if (movie.ng && !movie._detailsRequested) continue
@@ -69,9 +102,9 @@
         }
       }
       const api = {getData,request,dispose() {
-        disposed = true;abort.abort();responses.clear();attempted.clear()
+        disposed = true;abort.abort();responses.clear();attempted.clear();idAttempted.clear()
         api.onRecovered = null
-        for (const movie of movies._idToMovie.values()) movie._nrnOwnerNamePending = false
+        for (const movie of movies._idToMovie.values()) { movie._nrnOwnerNamePending = false;movie._nrnOwnerIdPending = false }
       }}
       return api
     }
