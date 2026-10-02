@@ -53,3 +53,17 @@ test('rule editor: the hand-made test sample treats blank numbers as unknown, no
  assert.deepEqual({...A.fieldOrigin(sample,'likeCount')},{state:'unknown',source:null});
  sample.likeCount=-1;assert.equal(A.evaluateState(sample,cond('likeCount','exists')),null);
 });
+// BRUSH-036: the test panel tells match, no match, pending (not fetched) and pending (failed) apart.
+test('rule editor: verdict separates match, no match, pending-unknown and pending-failed',()=>{
+ const {RuleEditor:R}=load();
+ const base={id:'sm1',title:'ゲーム実況',description:'',thumbInfoDone:true,error:{type:'NO_ERROR'},tags:[{name:'ゲーム',lock:false}],contributor:{type:'user',id:1,name:'n'}};
+ const tag=cond('tag','contains','ゲーム'),likes=cond('likeCount','gte','10');
+ assert.equal(R.verdict({...base},tag).outcome,'match');
+ assert.equal(R.verdict({...base},cond('tag','contains','x')).outcome,'noMatch');
+ assert.equal(R.verdict({...base,thumbInfoDone:false},tag).outcome,'unknown');
+ assert.equal(R.verdict({...base,error:{type:'NETWORK'}},tag).outcome,'failed');
+ assert.equal(R.verdict({...base,likeCount:null},likes).outcome,'unknown');
+ assert.equal(R.verdict({...base,error:{type:'NETWORK'},likeCount:null},{kind:'group',op:'AND',not:false,children:[tag,likes]}).outcome,'failed','any failed input makes the pending reason "failed"');
+ assert.equal(R.verdict({...base,error:{type:'NETWORK'}},{kind:'group',op:'OR',not:false,children:[cond('title','contains','実況'),tag]}).outcome,'match','a decided OR is not pending');
+ assert.deepEqual({...R.outcomeText},{match:'一致',noMatch:'不一致',unknown:'判定保留（未取得）',failed:'判定保留（取得失敗）'});
+});

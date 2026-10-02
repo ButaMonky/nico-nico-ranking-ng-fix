@@ -51,11 +51,29 @@ try {
  assert.match(await frame.locator('.re-test-results').textContent(),/このルールには一致しません/);
  await likes.fill('');await likes.press('Tab');
  assert.match(await frame.locator('.re-test-results').textContent(),/判定保留/);
+ // BRUSH-036: outcome badge and wording.
+ assert.equal(await frame.locator('.re-outcome').getAttribute('data-outcome'),'unknown');
+ assert.match(await frame.locator('.re-test-results').textContent(),/判定保留（未取得）/);
+ assert.match(await frame.locator('.re-test-results').textContent(),/保留（未取得） — いいね数/);
+ await frame.getByLabel('条件の項目',{exact:true}).first().selectOption('tag');
+ await frame.getByLabel('条件の比較方法',{exact:true}).first().selectOption('contains');
+ await frame.getByLabel('条件の値',{exact:true}).first().fill('ゲーム');await frame.getByLabel('条件の値',{exact:true}).first().press('Tab');
+ await frame.getByLabel('試す詳細情報',{exact:true}).selectOption('failed');
+ assert.equal(await frame.locator('.re-outcome').getAttribute('data-outcome'),'failed');
+ assert.match(await frame.locator('.re-test-results').textContent(),/判定保留（取得失敗）/);
+ await frame.getByLabel('試す詳細情報',{exact:true}).selectOption('ready');
+ assert.equal(await frame.locator('.re-outcome').getAttribute('data-outcome'),'match');
+ assert.match(await frame.locator('.re-outcome').textContent(),/^一致：/);
+ assert.match(await frame.locator('.re-group select').first().textContent(),/すべて一致（AND）/);
+ assert.ok(await frame.getByLabel('このまとまりを除外条件にする（NOT・条件を反転）',{exact:true}).count()>=1);
+ await frame.getByRole('button',{name:'元に戻す',exact:true}).click();await frame.getByRole('button',{name:'元に戻す',exact:true}).click();await frame.getByRole('button',{name:'元に戻す',exact:true}).click();
+ assert.equal(await frame.getByLabel('条件の項目',{exact:true}).first().inputValue(),'likeCount');
+ assert.equal(await frame.getByLabel('条件の値',{exact:true}).first().inputValue(),'5');
  // Apply writes the condition in the existing rule JSON shape.
  await frame.locator('.re-detail').getByLabel('このルールを使う',{exact:true}).check();
  await frame.getByRole('button',{name:'変更を適用',exact:true}).click();
  const saved=await page.evaluate(()=>JSON.parse(config.advancedNgRulesJson.value)[0].expression.children[0]);
  assert.deepEqual(saved,{kind:'condition',field:'likeCount',operator:'lt',value:'5',not:false});
  assert.deepEqual(errors,[]);
- console.log('Rule editor numeric PASS: numeric group, strict integer validation, honest unknown help, blank=unknown sample, JSON shape. Offline only.');
+ console.log('Rule editor numeric PASS: numeric group, strict integer validation, honest unknown help, blank=unknown sample, match/no-match/pending-unknown/pending-failed outcomes, AND/OR/NOT wording, undo, JSON shape. Offline only.');
 } finally {await browser.close();}

@@ -61,6 +61,17 @@
       const base = {gt:'指定した値より大きい（>）', gte:'指定した値以上（≥）', lt:'指定した値より小さい（<）', lte:'指定した値以下（≤）', eq:'指定した値と等しい（=）', neq:'指定した値と等しくない（≠）'}[operator]
       return base ? base + '場合に一致します。値は0以上の整数' + (field === 'durationSeconds' ? '（秒）' : '') + 'です。' + pending : ''
     }
+    // BRUSH-036: four outcomes for the test panel. An undecided result says
+    // whether data is still missing or failed to load; nothing is a guess.
+    const verdict = (movie, expression) => {
+      const trace = [], result = AdvancedNgRules.evaluateState(movie, expression, trace, 0)
+      const failed = result === null && trace.some(t => t.kind === 'condition' && t.result === null && t.state === 'failed')
+      const outcome = result === true ? 'match' : result === false ? 'noMatch' : failed ? 'failed' : 'unknown'
+      return {result, outcome, trace}
+    }
+    const outcomeText = {match:'一致', noMatch:'不一致', unknown:'判定保留（未取得）', failed:'判定保留（取得失敗）'}
+    const rowText = t => t.result === true ? '一致' : t.result === false ? '不一致'
+      : t.kind !== 'condition' ? '保留' : t.state === 'failed' ? '保留（取得失敗）' : '保留（未取得）'
     const describe = (node, friendly) => {
       if (node.kind === 'condition') {
         const text = AdvancedNgRules.FIELD_META[node.field].label + '：' + friendly(node.field,node.operator)
@@ -150,7 +161,7 @@
         const label=AdvancedNgRules.FIELD_META[key].label
         testFields.append(labeled(label+'（空欄＝不明）',input('試す'+label,'',v=>{sample[key]=v.trim()===''?null:AdvancedNgRules.numericThreshold(v);runPreview()},'number')))
       }
-      testFields.append(labeled('詳細情報',select('試す詳細情報',[['ready','取得済み'],['pending','未取得（判定保留を確認）']],'ready',v=>{sample.thumbInfoDone=v==='ready';runPreview()})))
+      testFields.append(labeled('詳細情報',select('試す詳細情報',[['ready','取得済み'],['pending','未取得（判定保留を確認）'],['failed','取得失敗（判定保留を確認）']],'ready',v=>{sample.thumbInfoDone=v!=='pending';sample.error={type:v==='failed'?'NETWORK':'NO_ERROR'};runPreview()})))
       testFields.append(labeled('動画ID',input('試す動画ID',sample.id,v=>{sample.id=v;runPreview()})))
       testFields.append(labeled('説明文',input('試す説明文','',v=>{sample.description=v;runPreview()})))
       simulator.append(el('p','選択中のルールだけを試します。ルールの休止・全体OFFに関係なく条件を評価します。他のNG設定での非表示や自動取得は再現しません。広告条件は手入力では情報不足になります。','hint'),sourceSelect,loadSamples,testFields,button('判定を更新',()=>runPreview()),testResults)
@@ -164,11 +175,12 @@
         if(validate([rule]).length){testResults.append(el('p','入力を修正してから試してください。'));return}
         const movie=sampleMode==='manual'?sample:liveSamples[Number(sampleMode)]
         if(!movie)return
-        const trace=[], result=AdvancedNgRules.evaluateState(movie,rule.expression,trace,0)
-        testResults.append(el('strong',result===true?'このルールに一致 → NG対象':result===false?'このルールには一致しません':'情報不足 → 判定保留',result===true?'re-match':''))
+        const {outcome,trace}=verdict(movie,rule.expression)
+        const headline={match:'このルールに一致 → NG対象',noMatch:'このルールには一致しません',unknown:'情報不足 → 判定保留（未取得の情報があります）',failed:'情報不足 → 判定保留（取得に失敗した情報があります）'}[outcome]
+        const head=el('strong',outcomeText[outcome]+'：'+headline,'re-outcome re-'+outcome+(outcome==='match'?' re-match':''));head.dataset.outcome=outcome;testResults.append(head)
         for(const t of trace) {
-          const text=t.kind==='condition' ? t.fieldLabel+' '+friendly(t.field,t.operator)+(AdvancedNgRules.OP_META[t.operator].needsValue?'「'+t.expected+'」':'')+' / 実際の値：'+(t.actual?.__notReady?(t.state==='failed'?'取得失敗':'未取得'):t.actual==null?'情報なし':String(t.actual)) : (t.op==='AND'?'すべての条件':'どれかの条件')
-          const row=el('div',(t.result===null?'保留':t.result?'一致':'不一致')+' — '+text+(t.not?'（反対にした結果）':''),'re-trace')
+          const text=t.kind==='condition' ? t.fieldLabel+' '+friendly(t.field,t.operator)+(AdvancedNgRules.OP_META[t.operator].needsValue?'「'+t.expected+'」':'')+' / 実際の値：'+(t.actual?.__notReady?(t.state==='failed'?'取得失敗':'未取得'):t.actual==null?'情報なし':String(t.actual)) : (t.op==='AND'?'すべての条件（AND・すべて一致）':'どれかの条件（OR・いずれか一致）')
+          const row=el('div',rowText(t)+' — '+text+(t.not?'（反対にした結果）':''),'re-trace')
           row.style.marginInlineStart=Math.min(t.depth,4)*12+'px';testResults.append(row)
         }
       }
@@ -207,9 +219,9 @@
         const box=el('div',null,node.kind==='group'?'re-group':'re-condition')
         if(node.kind==='group') {
           const toolbar=el('div',null,'re-tools')
-          toolbar.append(select('条件の組み合わせ', [['AND','すべてに当てはまる'],['OR','どれか1つ以上に当てはまる']],node.op,v=>change(()=>{node.op=v})))
+          toolbar.append(select('条件の組み合わせ', [['AND','すべて一致（AND）'],['OR','いずれか一致（OR）']],node.op,v=>change(()=>{node.op=v})))
           const invert=el('input');invert.type='checkbox';invert.checked=node.not;invert.addEventListener('change',()=>change(()=>{node.not=invert.checked}))
-          toolbar.append(labeled('このまとまりを除外条件にする',invert));box.append(toolbar)
+          toolbar.append(labeled('このまとまりを除外条件にする（NOT・条件を反転）',invert));box.append(toolbar)
           box.append(el('p',node.not?'下の条件に当てはまる動画を、このまとまりでは対象外にします。':node.op==='AND'?'下の条件が全部そろった動画だけが対象です。':'下の条件が1つでも合う動画が対象です。','hint'))
           node.children.forEach((child,i)=>{if(i)box.append(el('div',node.op==='AND'?'かつ':'または','re-join'));box.append(renderNode(child,node,i,depth+1))})
           const addCondition=button('＋ 条件',()=>change(()=>node.children.push(condition())))
@@ -262,5 +274,5 @@
       .re-editor button:focus-visible,.re-editor input:focus-visible,.re-editor select:focus-visible,.re-editor summary:focus-visible{outline:3px solid var(--accent);outline-offset:2px}
       @media(max-width:720px){.re-layout{grid-template-columns:1fr}.re-list{max-height:180px}.re-condition,.re-test-fields{grid-template-columns:1fr}.re-group{padding:7px}.re-condition{padding:8px}.re-editor button{min-height:36px}}
     `
-    return {mount,validate,describe}
+    return {mount,validate,describe,verdict,outcomeText}
   })()
