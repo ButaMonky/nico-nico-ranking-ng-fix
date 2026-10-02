@@ -13,7 +13,7 @@
         }
 
         rebalanceOverflow()
-        if (visibleTotalCount() >= targetCount()) {
+        if (visibleTotalCount() >= targetCount() && !hasEarlierCandidate()) {
           setPhase('completed', '目標件数に到達')
           if (!completionReported) {
             completionReported = true
@@ -73,7 +73,7 @@
             : detailBatchSize
 
           var fetchMs = 0
-          if (candidatePool.length < detailBatchSize) {
+          if (!hasEarlierCandidate() && candidatePool.length < detailBatchSize) {
             setPhase('fetching',
               '候補を補充中（必要 ' + detailBatchSize + '件 / プール ' + candidatePool.length + '件）')
             fetchMs = await fetchMoreCandidates(desiredPool)
@@ -194,6 +194,7 @@
             fallbackReason = 'API実行エラー: ' + (e && e.message ? e.message : e)
             candidatePool = []
             candidatePoolSeen.clear()
+            candidateFilter.clear()
             lastFetchedHadNext = null
             nextPageToFetch = page._currentPageNumber + 1
             console.warn(LOG, 'APIから従来方式へfallbackして続行します')
@@ -208,7 +209,7 @@
           updateStatus()
 
           if (!gaveUp && model.config.autoFillEnabled.value) {
-            if (visibleTotalCount() >= targetCount()) {
+            if (visibleTotalCount() >= targetCount() && !hasEarlierCandidate()) {
               setPhase('completed', '目標件数に到達')
               if (!completionReported) {
                 completionReported = true

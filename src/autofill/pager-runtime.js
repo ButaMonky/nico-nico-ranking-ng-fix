@@ -236,6 +236,7 @@
           if (model.config.autoFillPagerMode.value === 'off') { restorePagerUi(); return }
           const displayed = new Set(uniqueVisibleRoots(page.movieRoots).map(root => root.movieId))
           const completed = useSnapshot ? [] : journey.update(knownLastPage, function(id) {
+            if (candidateFilter.isRejected(id)) return true
             const movie = model.movies.get(id)
             return movie && movie.metadataSettled && movie.error?.type === 'NO_ERROR' && (movie.ng || displayed.has(id))
           })

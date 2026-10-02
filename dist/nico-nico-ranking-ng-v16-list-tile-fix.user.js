@@ -1830,6 +1830,61 @@
       OP_META:OP_META
     }
   })()
+  // Pre-DOM decisions may use only fields that a later detail cannot replace.
+  // Search owner/tag evidence is deliberately left unknown here.
+  var CandidateFilter = (function() {
+    function reason(item, config) {
+      if (!item || typeof item.id !== 'string' || !/^(sm|so|nm)[0-9]+$/.test(item.id)) return null
+      if (config?.ngMovies?.set.has(item.id)) return 'movieId'
+      if (typeof item.title !== 'string') return null
+      const title = item.title.toUpperCase()
+      for (const text of config?.ngTitles?.set || []) {
+        if (typeof text === 'string' && text && title.includes(text)) return 'title'
+      }
+      if (!config?.advancedNgRulesEnabled?.value) return null
+      const movie = {id:item.id, title:item.title, thumbInfoDone:false,
+        metadata:Object.fromEntries(MetadataReadiness.fields.map(field=>[field,'unknown']))}
+      return AdvancedNgRules.match(movie,true,config.advancedNgRulesJson.value,false).length ? 'advanced' : null
+    }
+    function create(config, capacity = 2048) {
+      const limit = Number.isSafeInteger(capacity) && capacity > 0 ? Math.min(capacity,10000) : 2048
+      const parked = new Map(), ordinals = new WeakMap()
+      let sequence = 0, rejectedTotal = 0, releasedTotal = 0, capacityFallback = 0
+      function order(item) {
+        if (!ordinals.has(item)) ordinals.set(item,++sequence)
+        return ordinals.get(item)
+      }
+      const sort = items => [...items].sort((a,b)=>order(a)-order(b))
+      function partition(items) {
+        const passed = []
+        let rejected = 0
+        for (const item of items) {
+          order(item)
+          const match = reason(item,config)
+          if (match && (parked.has(item.id) || parked.size < limit)) {
+            if (!parked.has(item.id)) parked.set(item.id,item)
+            rejected++; rejectedTotal++
+          } else {
+            if (match) capacityFallback++
+            passed.push(item)
+          }
+        }
+        return {passed,rejected}
+      }
+      function release() {
+        const result = []
+        for (const [id,item] of parked) if (!reason(item,config)) {
+          parked.delete(id); result.push(item); releasedTotal++
+        }
+        return sort(result)
+      }
+      return {order,sort,partition,release,
+        isRejected:id=>parked.has(id) && Boolean(reason(parked.get(id),config)),
+        clear:()=>parked.clear(),
+        snapshot:()=>({retained:parked.size,rejectedTotal,releasedTotal,capacityFallback,limit})}
+    }
+    return {reason,create}
+  })()
   var Movie = (function(_super) {
     var Movie = function(id, title) {
       _super.call(this)
@@ -11156,6 +11211,8 @@ var CardActionData = (function () {
       var totalAcceptedFromAdded = 0
       var candidatePool = []
       var candidatePoolSeen = new Set()
+      var candidateFilter = CandidateFilter.create(model.config)
+      var totalCheapPrefilteredNg = 0
       var nextPageToFetch = page._currentPageNumber + 1
       var fetching = false
       var initialized = false
@@ -11308,11 +11365,22 @@ var CardActionData = (function () {
         })
       }
 
+      var injectedOrder = function(root) {
+        var raw = root.elem.dataset.nrnCandidateOrder
+        return raw && Number.isSafeInteger(Number(raw)) ? Number(raw) : Infinity
+      }
+      var hasEarlierCandidate = function() {
+        if (!candidatePool.length) return false
+        var displayed = uniqueVisibleRoots(connectedInjectedRoots())
+        return displayed.length > 0 && candidateFilter.order(candidatePool[0]) < injectedOrder(displayed[displayed.length - 1])
+      }
       var connectedInjectedRoots = function() {
         return page.movieRoots.filter(function(r) {
           return r.elem && r.elem.isConnected
               && r.elem.dataset.nrnAutofill === 'true'
               && r.movieId
+        }).sort(function(a,b) {
+          return injectedOrder(a) - injectedOrder(b)
         })
       }
 
@@ -12268,6 +12336,7 @@ var CardActionData = (function () {
           fallbackReason = 'API/DOM一致率 ' + Math.round(overlapRate * 100) + '%'
           candidatePool = []
           candidatePoolSeen.clear()
+          candidateFilter.clear()
           snapshotOffset = Math.max(0, page._currentPageNumber * 32)
           console.warn(LOG,
             'API結果と現在ページの一致率が低いため、正確性優先で従来方式へfallbackします。',
@@ -12548,6 +12617,7 @@ var CardActionData = (function () {
           if (model.config.autoFillPagerMode.value === 'off') { restorePagerUi(); return }
           const displayed = new Set(uniqueVisibleRoots(page.movieRoots).map(root => root.movieId))
           const completed = useSnapshot ? [] : journey.update(knownLastPage, function(id) {
+            if (candidateFilter.isRejected(id)) return true
             const movie = model.movies.get(id)
             return movie && movie.metadataSettled && movie.error?.type === 'NO_ERROR' && (movie.ng || displayed.has(id))
           })
@@ -12819,6 +12889,9 @@ var CardActionData = (function () {
               fresh = passed
             }
 
+            var cheap = candidateFilter.partition(fresh)
+            totalCheapPrefilteredNg += cheap.rejected
+            fresh = cheap.passed
             logCandidateTable('API取得 offset=' + result.offset, fresh)
             fresh.forEach(function(item) { candidatePool.push(item) })
 
@@ -12939,8 +13012,10 @@ var CardActionData = (function () {
 
             journey.record(pageNumber, items)
             var filtered = filterFreshItems(items)
-            logCandidateTable('ページ ' + pageNumber + ' 候補', filtered.freshItems)
-            filtered.freshItems.forEach(function(item) { candidatePool.push(item) })
+            var cheap = candidateFilter.partition(filtered.freshItems)
+            totalCheapPrefilteredNg += cheap.rejected
+            logCandidateTable('ページ ' + pageNumber + ' 候補', cheap.passed)
+            cheap.passed.forEach(function(item) { candidatePool.push(item) })
 
             if (!items.length) break
           }
@@ -13163,6 +13238,12 @@ var CardActionData = (function () {
 
         var parsedResults = items.map(function(item) {
           var tile = page._createInjectedTile(item)
+          var ordinal = candidateFilter.order(item)
+          tile.dataset.nrnCandidateOrder = String(ordinal)
+          var later = connectedInjectedRoots().find(function(root) {
+            return root.elem.parentNode === tile.parentNode && injectedOrder(root) > ordinal
+          })
+          if (later) tile.parentNode.insertBefore(tile,later.elem)
           addedIds.push(item.id)
           itemById.set(item.id, item)
           knownMovieIds.add(item.id)
@@ -13376,7 +13457,7 @@ var CardActionData = (function () {
         }
 
         rebalanceOverflow()
-        if (visibleTotalCount() >= targetCount()) {
+        if (visibleTotalCount() >= targetCount() && !hasEarlierCandidate()) {
           setPhase('completed', '目標件数に到達')
           if (!completionReported) {
             completionReported = true
@@ -13436,7 +13517,7 @@ var CardActionData = (function () {
             : detailBatchSize
 
           var fetchMs = 0
-          if (candidatePool.length < detailBatchSize) {
+          if (!hasEarlierCandidate() && candidatePool.length < detailBatchSize) {
             setPhase('fetching',
               '候補を補充中（必要 ' + detailBatchSize + '件 / プール ' + candidatePool.length + '件）')
             fetchMs = await fetchMoreCandidates(desiredPool)
@@ -13557,6 +13638,7 @@ var CardActionData = (function () {
             fallbackReason = 'API実行エラー: ' + (e && e.message ? e.message : e)
             candidatePool = []
             candidatePoolSeen.clear()
+            candidateFilter.clear()
             lastFetchedHadNext = null
             nextPageToFetch = page._currentPageNumber + 1
             console.warn(LOG, 'APIから従来方式へfallbackして続行します')
@@ -13571,7 +13653,7 @@ var CardActionData = (function () {
           updateStatus()
 
           if (!gaveUp && model.config.autoFillEnabled.value) {
-            if (visibleTotalCount() >= targetCount()) {
+            if (visibleTotalCount() >= targetCount() && !hasEarlierCandidate()) {
               setPhase('completed', '目標件数に到達')
               if (!completionReported) {
                 completionReported = true
@@ -14414,6 +14496,27 @@ var CardActionData = (function () {
             runDeveloperSuite('初期化完了').catch(function(e) { console.error(LOG, '開発者診断失敗:', e) })
           }, 300)
         }
+      }
+
+      var restorePrefilteredCandidates = function() {
+        if (page._disposed) return
+        var inPool = new Set(candidatePool.map(function(item) { return item.id }))
+        var replay = candidateFilter.release().filter(function(item) {
+          return !inPool.has(item.id) && !isMovieAlreadyOnPage(item.id)
+        })
+        if (!replay.length) return
+        candidatePool = candidateFilter.sort(candidatePool.concat(replay))
+        gaveUp = false
+        stopReason = ''
+        completionReported = false
+        noProgressStreak = 0
+        if (initialized) {
+          updatePagerUi('prefilter criteria changed')
+          maybeFetchMore()
+        }
+      }
+      for (var key of ['ngMovies','ngTitles','advancedNgRulesEnabled','advancedNgRulesJson']) {
+        model.config[key].on('changed',restorePrefilteredCandidates)
       }
 
       model.movieViewModes.on('movieViewModeChanged', function() {

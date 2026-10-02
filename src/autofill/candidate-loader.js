@@ -51,6 +51,9 @@
               fresh = passed
             }
 
+            var cheap = candidateFilter.partition(fresh)
+            totalCheapPrefilteredNg += cheap.rejected
+            fresh = cheap.passed
             logCandidateTable('API取得 offset=' + result.offset, fresh)
             fresh.forEach(function(item) { candidatePool.push(item) })
 
@@ -171,8 +174,10 @@
 
             journey.record(pageNumber, items)
             var filtered = filterFreshItems(items)
-            logCandidateTable('ページ ' + pageNumber + ' 候補', filtered.freshItems)
-            filtered.freshItems.forEach(function(item) { candidatePool.push(item) })
+            var cheap = candidateFilter.partition(filtered.freshItems)
+            totalCheapPrefilteredNg += cheap.rejected
+            logCandidateTable('ページ ' + pageNumber + ' 候補', cheap.passed)
+            cheap.passed.forEach(function(item) { candidatePool.push(item) })
 
             if (!items.length) break
           }

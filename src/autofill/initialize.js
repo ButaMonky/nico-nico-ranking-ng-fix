@@ -247,6 +247,27 @@
         }
       }
 
+      var restorePrefilteredCandidates = function() {
+        if (page._disposed) return
+        var inPool = new Set(candidatePool.map(function(item) { return item.id }))
+        var replay = candidateFilter.release().filter(function(item) {
+          return !inPool.has(item.id) && !isMovieAlreadyOnPage(item.id)
+        })
+        if (!replay.length) return
+        candidatePool = candidateFilter.sort(candidatePool.concat(replay))
+        gaveUp = false
+        stopReason = ''
+        completionReported = false
+        noProgressStreak = 0
+        if (initialized) {
+          updatePagerUi('prefilter criteria changed')
+          maybeFetchMore()
+        }
+      }
+      for (var key of ['ngMovies','ngTitles','advancedNgRulesEnabled','advancedNgRulesJson']) {
+        model.config[key].on('changed',restorePrefilteredCandidates)
+      }
+
       model.movieViewModes.on('movieViewModeChanged', function() {
         if (!initialized) return
         rebalanceOverflow()

@@ -77,7 +77,18 @@ try{
    result.elapsedMs=performance.now()-started;result.cache=cache;
    assert.equal(result.state.phase,'completed',name+': '+JSON.stringify(result));assert.equal(result.state.visible,data.target,name);
    assert.deepEqual(result.state.ids,data.expectedIds,name+' must retain the original filtered order');assert.equal(result.wire.otherRequests,0,name);
-   assert.deepEqual(errors,[],name);pair.push(result);await page.evaluate(()=>window.__nrnSessionDetailCacheService?.flush());
+   assert.deepEqual(errors,[],name);
+   if(args.includes('--exercise-settings')){
+    assert.equal(name,'title90','settings replay fixture is title90 only');
+    const allowedIds=Array.from({length:12},(_,i)=>'sm'+(i+1));
+    await page.evaluate(()=>window.__nrnBenchModel.config.ngTitles.clear());
+    await page.waitForFunction(ids=>{const s=window.__nrnBenchState();return !s.fetching&&s.phase==='completed'&&JSON.stringify(s.ids)===JSON.stringify(ids);},allowedIds,{timeout:10000});
+    const restored=await page.evaluate(()=>window.__nrnBenchState().ids);
+    await page.evaluate(()=>window.__nrnBenchModel.config.ngTitles.add('DROP'));
+    await page.waitForFunction(ids=>{const s=window.__nrnBenchState();return !s.fetching&&s.phase==='completed'&&JSON.stringify(s.ids)===JSON.stringify(ids);},data.expectedIds,{timeout:10000});
+    result.settingsReplay={allowedIds:restored,filteredIds:await page.evaluate(()=>window.__nrnBenchState().ids)};
+   }
+   pair.push(result);await page.evaluate(()=>window.__nrnSessionDetailCacheService?.flush());
   }
   assert.ok(pair[1].wire.detailRequests<=pair[0].wire.detailRequests,name+' warm cache cannot increase requests');
   results.push({name,fixtureHash:createHash('sha256').update(JSON.stringify({items:data.items,settings:data.settings})).digest('hex'),runs:pair});

@@ -419,6 +419,7 @@
           fallbackReason = 'API/DOM一致率 ' + Math.round(overlapRate * 100) + '%'
           candidatePool = []
           candidatePoolSeen.clear()
+          candidateFilter.clear()
           snapshotOffset = Math.max(0, page._currentPageNumber * 32)
           console.warn(LOG,
             'API結果と現在ページの一致率が低いため、正確性優先で従来方式へfallbackします。',

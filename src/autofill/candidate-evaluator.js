@@ -213,6 +213,12 @@
 
         var parsedResults = items.map(function(item) {
           var tile = page._createInjectedTile(item)
+          var ordinal = candidateFilter.order(item)
+          tile.dataset.nrnCandidateOrder = String(ordinal)
+          var later = connectedInjectedRoots().find(function(root) {
+            return root.elem.parentNode === tile.parentNode && injectedOrder(root) > ordinal
+          })
+          if (later) tile.parentNode.insertBefore(tile,later.elem)
           addedIds.push(item.id)
           itemById.set(item.id, item)
           knownMovieIds.add(item.id)

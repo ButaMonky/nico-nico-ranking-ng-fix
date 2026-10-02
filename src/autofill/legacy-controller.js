@@ -473,6 +473,8 @@
       var totalAcceptedFromAdded = 0
       var candidatePool = []
       var candidatePoolSeen = new Set()
+      var candidateFilter = CandidateFilter.create(model.config)
+      var totalCheapPrefilteredNg = 0
       var nextPageToFetch = page._currentPageNumber + 1
       var fetching = false
       var initialized = false
@@ -625,11 +627,22 @@
         })
       }
 
+      var injectedOrder = function(root) {
+        var raw = root.elem.dataset.nrnCandidateOrder
+        return raw && Number.isSafeInteger(Number(raw)) ? Number(raw) : Infinity
+      }
+      var hasEarlierCandidate = function() {
+        if (!candidatePool.length) return false
+        var displayed = uniqueVisibleRoots(connectedInjectedRoots())
+        return displayed.length > 0 && candidateFilter.order(candidatePool[0]) < injectedOrder(displayed[displayed.length - 1])
+      }
       var connectedInjectedRoots = function() {
         return page.movieRoots.filter(function(r) {
           return r.elem && r.elem.isConnected
               && r.elem.dataset.nrnAutofill === 'true'
               && r.movieId
+        }).sort(function(a,b) {
+          return injectedOrder(a) - injectedOrder(b)
         })
       }
 
