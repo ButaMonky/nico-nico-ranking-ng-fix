@@ -468,3 +468,27 @@ test('progressive demand: detail requests consult the pure SourcePlan instead of
  h.request();assert.ok(planned>0);assert.equal(h.calls.length,0);
  h.MetadataReadiness.required=required;h.request.dispose();
 });
+
+// Page aggregates can depend on a video which is itself already NG.
+test('aggregate demand: a hidden original video still supplies identity for other videos page counts',async()=>{
+ const h=await setup();h.config.ngTitles.add('synthetic');h.config.ngTags.add('unrelated');
+ h.config.advancedNgRulesEnabled.value=true;h.config.advancedNgRulesJson.value=JSON.stringify([{expression:condition('pageContributorCount','gte',3)}]);
+ const need=h.MetadataReadiness.required(h.movie,h.config);assert.equal(need.has('ownerId'),true);assert.equal(need.has('ownerType'),true);assert.equal(need.has('tags'),false);
+ h.request();assert.equal(h.calls.length,1);h.request.dispose();
+});
+test('aggregate demand: missing identities can be supplemented even when that video is title-NG',async()=>{
+ const h=await setup();h.config.ngTitles.add('synthetic');h.detail(payload('sm1',null));
+ h.config.advancedNgRulesEnabled.value=true;h.config.advancedNgRulesJson.value=JSON.stringify([{expression:condition('pageContributorCount','gte',3)}]);
+ const demand=h.MetadataReadiness.ownerDemand(h.movie,h.config);assert.equal(demand.id,true);assert.equal(demand.name,false);
+ h.request.dispose();
+});
+test('aggregate demand: a per-video decisive OR cannot erase another videos aggregate dependency',async()=>{
+ const h=await setup();h.config.advancedNgRulesEnabled.value=true;
+ h.config.advancedNgRulesJson.value=JSON.stringify([{expression:group('OR',[condition('title','contains','synthetic'),condition('pageContributorCount','gte',3)])}]);
+ assert.equal(h.MetadataReadiness.required(h.movie,h.config).has('ownerId'),true);h.request();assert.equal(h.calls.length,1);h.request.dispose();
+});
+test('aggregate demand: disabled aggregate rules do not introduce hidden-video traffic',async()=>{
+ const h=await setup();h.config.ngTitles.add('synthetic');h.config.advancedNgRulesEnabled.value=true;
+ h.config.advancedNgRulesJson.value=JSON.stringify([{enabled:false,expression:condition('pageContributorCount','gte',3)}]);
+ h.request();assert.equal(h.calls.length,0);assert.equal(h.MetadataReadiness.ownerDemand(h.movie,h.config).id,false);h.request.dispose();
+});

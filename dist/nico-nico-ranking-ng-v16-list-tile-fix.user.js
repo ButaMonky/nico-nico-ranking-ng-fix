@@ -1210,6 +1210,14 @@
       }
       return parsedRuleCache.get(key)
     }
+    // Aggregate rules need identities from other videos too, including hidden
+    // rows. Per-video short-circuiting must not remove that global dependency.
+    function pageOwnerDemand(config) {
+      if (!config?.advancedNgRulesEnabled?.value) return false
+      const uses = node => Boolean(node && ((node.kind === 'condition' && node.field === 'pageContributorCount')
+        || node.children?.some(uses)))
+      return parsedRules(config.advancedNgRulesJson.value).some(rule => uses(rule.expression))
+    }
     function progressive(movie, config) {
       const need = new Set()
       if (!config?.advancedNgRulesEnabled?.value) return {matched:false,need}
@@ -1236,6 +1244,7 @@
       const rulePlan = progressive(movie,config)
       const blocked = Boolean(movie?.ngId || movie?.ngTitle || rulePlan.matched)
       const need = blocked ? new Set() : new Set(['ownerId','ownerType'])
+      if (pageOwnerDemand(config)) { need.add('ownerId'); need.add('ownerType') }
       if (!config) return need
       if (!blocked) {
         if (config.ngUserNames.set.size) need.add('ownerName')
@@ -1256,11 +1265,11 @@
     function ownerDemand(movie, config) {
       if (!config) return {id:true, name:true}
       const rulePlan = progressive(movie,config)
-      if ((movie?.ngId || movie?.ngTitle || rulePlan.matched) && !movie?._detailsRequested) return {id:false,name:false}
+      if ((movie?.ngId || movie?.ngTitle || rulePlan.matched) && !movie?._detailsRequested) return {id:pageOwnerDemand(config),name:false}
       const rules = rulePlan.need
       const name = config.ngUserNames.set.size > 0 || rules.has('ownerName') || Boolean(config.selfAdWarningEnabled.value)
         || Boolean(movie?._detailsRequested) || !config.movieInfoTogglable.value
-      const id = name || config.ngUserIds.set.size > 0 || config.ngChannelIds.set.size > 0 || rules.has('ownerId')
+      const id = name || pageOwnerDemand(config) || config.ngUserIds.set.size > 0 || config.ngChannelIds.set.size > 0 || rules.has('ownerId')
         || config.visibleContributorType.value !== 'all' || !config.unknownContributorMovieVisible.value
       return {id, name}
     }
