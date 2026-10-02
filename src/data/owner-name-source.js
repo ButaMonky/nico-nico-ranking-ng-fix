@@ -41,7 +41,9 @@
             return {data:{id:data.id,ownerId:data.ownerId,ownerName:data.ownerName,ownerIcon:data.ownerIcon,
               targetUrl:data.targetUrl,decoration:data.decoration,totalPoint:data.totalPoint},fetchedAt:Date.now()}
           } catch (error) { diagnostics?.validationFailure(kind,'run','invalid'); throw error }
-        })
+        // BRUSH-019: a lookup that expires or is cancelled (SPA dispose) while
+        // still queued is dropped by the broker and never starts.
+        },{signal:controller.signal})
         const promise = Promise.race([transport,deadline]).finally(() => {
           clearTimeout(timer);abort.signal.removeEventListener('abort',cancel)
         }).then(result => {

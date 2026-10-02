@@ -101,3 +101,47 @@ test('source context: player URL cannot change search descriptor or page navigat
  const c=auto.indexOf('      var currentPageNumber = function()'),d=auto.indexOf('      var firstUnfetchedPageAfterCurrent',c);
  assert.equal(vm.runInContext(auto.slice(c,d)+';currentPageNumber()',ctx),11);
 });
+
+// BRUSH-019: request broker (Network.createQueue) — dedupe, concurrency, cancel-before-start.
+const tick=()=>new Promise(r=>setImmediate(r));
+function held(){const runs=[];const task=name=>()=>new Promise(resolve=>runs.push({name,resolve}));return {runs,task};}
+test('broker: callers sharing a key share one request; the 2-argument form is unchanged',async()=>{
+ const q=loadNetwork().createQueue(2),{runs,task}=held();
+ const a=q('k',task('first')),b=q('k',task('second'));
+ assert.equal(a,b);await tick();assert.deepEqual(runs.map(r=>r.name),['first']);
+ runs[0].resolve(7);assert.deepEqual(await Promise.all([a,b]),[7,7]);
+ await tick();const c=q('k',task('third'));await tick();assert.equal(runs.length,2,'a finished key can be requested again');runs[1].resolve(8);assert.equal(await c,8);
+});
+test('broker: never runs more than the limit at once',async()=>{
+ const q=loadNetwork().createQueue(2),{runs,task}=held();
+ const all=[1,2,3,4,5].map(i=>q('k'+i,task(i)));await tick();
+ assert.equal(runs.length,2);assert.deepEqual({...q.stats()},{active:2,queued:3});
+ runs[0].resolve();await tick();await tick();assert.equal(runs.length,3);
+ for(const r of runs.slice(1))r.resolve();await tick();await tick();runs.slice(3).forEach(r=>r.resolve());await tick();await tick();
+ runs.slice(4).forEach(r=>r.resolve());await Promise.all(all);assert.equal(runs.length,5);assert.deepEqual({...q.stats()},{active:0,queued:0});
+});
+test('broker: a queued request whose caller aborted never starts and frees its key',async()=>{
+ const q=loadNetwork().createQueue(1),{runs,task}=held();
+ q('busy',task('busy'));const controller=new AbortController();
+ const queued=q('k',task('queued'),{signal:controller.signal});await tick();
+ controller.abort('spa-dispose');
+ await assert.rejects(queued,error=>error.name==='AbortError'&&error.reason==='spa-dispose');
+ assert.deepEqual({...q.stats()},{active:1,queued:0});
+ const fresh=q('k',task('fresh'));runs[0].resolve();await tick();await tick();
+ assert.deepEqual(runs.map(r=>r.name),['busy','fresh'],'the aborted task never ran');runs[1].resolve('ok');assert.equal(await fresh,'ok');
+ const pre=new AbortController();pre.abort();await assert.rejects(q('dead',task('dead'),{signal:pre.signal}));
+ await tick();assert.equal(runs.some(r=>r.name==='dead'),false,'an already aborted signal never starts a task');
+});
+test('broker: a shared queued request survives while any caller still wants it',async()=>{
+ const q=loadNetwork().createQueue(1),{runs,task}=held();q('busy',task('busy'));
+ const first=new AbortController(),second=new AbortController();
+ const a=q('k',task('k'),{signal:first.signal}),b=q('k',task('k'),{signal:second.signal}),c=q('j',task('j'),{signal:first.signal}),d=q('j',task('j'));
+ first.abort();await tick();assert.deepEqual({...q.stats()},{active:1,queued:2},'second caller of k and the signal-less caller of j keep them');
+ second.abort();await assert.rejects(a);await assert.rejects(b);
+ runs[0].resolve();await tick();await tick();assert.deepEqual(runs.map(r=>r.name),['busy','j']);runs[1].resolve(1);assert.equal(await c,1);assert.equal(await d,1);
+});
+test('broker: aborting after start leaves the running task to its own signal',async()=>{
+ const q=loadNetwork().createQueue(1),{runs,task}=held(),controller=new AbortController();
+ const running=q('k',task('k'),{signal:controller.signal});await tick();controller.abort();
+ assert.equal(runs.length,1);runs[0].resolve('done');assert.equal(await running,'done');
+});

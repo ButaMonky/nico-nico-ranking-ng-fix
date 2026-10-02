@@ -163,3 +163,18 @@ test('owner demand: readiness reports what the owner is needed for',async()=>{
  assert.deepEqual(D(),{id:true,name:true});h.config.advancedNgRulesEnabled.value=false;
  m.requestDetails();assert.deepEqual(D(),{id:true,name:true},'opening details shows the owner');h.service.dispose();
 });
+// BRUSH-019: the broker drops queued nicoad lookups of a disposed route; one
+// video's owner ID, owner name and decoration share a single request.
+test('broker: SPA dispose removes queued lookups before they start; one request per video',async()=>{
+ const h=await setup();
+ const lookups=[1,2,3,4,5,6].map(i=>h.service.getData('sm'+i).catch(()=>null));
+ assert.equal(h.service.getData('sm1'),h.service.getData('sm1'),'id, name and decoration lookups share one promise');
+ await new Promise(r=>setImmediate(r));
+ assert.equal(h.calls.length,4);assert.deepEqual({...h.Network.ads.stats()},{active:4,queued:2});
+ h.service.dispose();await Promise.all(lookups);await new Promise(r=>setImmediate(r));
+ assert.equal(h.Network.ads.stats().queued,0,'queued lookups are gone, not waiting for a slot');
+ assert.equal(h.calls.length,4,'no queued lookup started after dispose');
+ const next=await setup(),fresh=next.service.getData('sm1').catch(()=>null);await new Promise(r=>setImmediate(r));
+ assert.equal(next.calls.length,1,'a new route gets its own request');
+ next.service.dispose();await fresh;
+});
