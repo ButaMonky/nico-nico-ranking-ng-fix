@@ -15,6 +15,8 @@
     const fieldGroups = [
       ['内容', ['title','tag','lockedTag','description','movieId']],
       ['個数', ['lockedTagCount','tagCount','pageContributorCount']],
+      // BRUSH-037: search-page numbers. Unknown numbers are never treated as 0.
+      ['再生・反応数', ['viewCount','likeCount','commentCount','mylistCount','durationSeconds']],
       ['投稿者', ['contributorName','userId','channelId','contributorId']],
       ['広告', ['selfAdIdMatch','selfAdNameMatch']]
     ]
@@ -32,6 +34,12 @@
         if (!AdvancedNgRules.OP_META[node.operator].needsValue) return
         const value = String(node.value ?? '').trim()
         if (!value) { errors.push(path + '：値を入力してください。'); return }
+        // Counts and seconds: digits only. '1e3', '1.5', '-1' are not rounded.
+        if (meta.metadata) {
+          if (AdvancedNgRules.numericThreshold(node.value) === null)
+            errors.push(path + '：0以上の整数を数字だけで入力してください（小数・負の数・1e3 のような書き方は使えません）。')
+          return
+        }
         if (meta.type === 'number' || meta.type === 'numberOrMissing') {
           const n = Number(value)
           if (!Number.isSafeInteger(n) || n < (meta.type === 'numberOrMissing' || node.field === 'pageContributorCount' ? 1 : 0))
@@ -41,6 +49,17 @@
       }
       rules.forEach((rule, i) => walk(rule.expression, 'ルール' + (i + 1) + '「' + rule.name + '」', 0))
       return errors
+    }
+    // BRUSH-037: honest help for search-page numbers (unknown is not 0).
+    const numericHelp = (field, operator) => {
+      const meta = AdvancedNgRules.FIELD_META[field]
+      if (!meta || !meta.metadata) return ''
+      const unit = field === 'durationSeconds' ? '秒数' : '数'
+      const pending = '検索結果に' + unit + 'が無い動画は0とみなさず「判定保留」にします（NGにも表示対象確定にもなりません）。'
+      if (operator === 'exists') return unit + 'を取得できている場合に一致します（0も「ある」です）。' + pending
+      if (operator === 'notExists') return '取得できなかった' + unit + 'は判定保留として扱うため、この比較だけで一致することはありません。'
+      const base = {gt:'指定した値より大きい（>）', gte:'指定した値以上（≥）', lt:'指定した値より小さい（<）', lte:'指定した値以下（≤）', eq:'指定した値と等しい（=）', neq:'指定した値と等しくない（≠）'}[operator]
+      return base ? base + '場合に一致します。値は0以上の整数' + (field === 'durationSeconds' ? '（秒）' : '') + 'です。' + pending : ''
     }
     const describe = (node, friendly) => {
       if (node.kind === 'condition') {
@@ -61,7 +80,8 @@
       let past = [], future = [], selected = 0, search = ''
       let liveSamples = [], sampleMode = 'manual'
       const sample = {id:'sm12345678', title:'ゲーム実況 第1回', description:'', thumbInfoDone:true,
-        error:{type:'NO_ERROR'}, tags:[{name:'ゲーム',lock:true}], contributor:{type:'user',id:12345,name:'投稿者'}, pageContributorCount:1}
+        error:{type:'NO_ERROR'}, tags:[{name:'ゲーム',lock:true}], contributor:{type:'user',id:12345,name:'投稿者'}, pageContributorCount:1,
+        viewCount:null, likeCount:null, commentCount:null, mylistCount:null, durationSeconds:null}
       const el = (tag, text, cls) => { const e = doc.createElement(tag); if (text != null) e.textContent = text; if (cls) e.className = cls; return e }
       const button = (text, fn, cls) => { const e = el('button',text,cls); e.type='button'; e.addEventListener('click',fn); return e }
       const labeled = (text, input) => { const label=el('label',null,'re-label'); label.append(el('span',text),input); return label }
@@ -125,6 +145,11 @@
       testFields.append(labeled('投稿者の種類',select('試す投稿者の種類',[['user','ユーザー'],['channel','チャンネル'],['unknown','情報なし']],'user',v=>{sample.contributor.type=v;runPreview()})))
       testFields.append(labeled('投稿者ID',input('試す投稿者ID',12345,v=>{sample.contributor.id=v===''?null:Number(v);runPreview()},'number')))
       testFields.append(labeled('元の1ページ内の同じ投稿者の動画数（空欄＝不明）',input('試すページ内動画数',1,v=>{sample.pageContributorCount=v===''?null:Number(v);runPreview()},'number')))
+      // BRUSH-037: blank = not on the search page (unknown, not 0). Invalid input stays unknown too.
+      for(const key of ['viewCount','likeCount','commentCount','mylistCount','durationSeconds']){
+        const label=AdvancedNgRules.FIELD_META[key].label
+        testFields.append(labeled(label+'（空欄＝不明）',input('試す'+label,'',v=>{sample[key]=v.trim()===''?null:AdvancedNgRules.numericThreshold(v);runPreview()},'number')))
+      }
       testFields.append(labeled('詳細情報',select('試す詳細情報',[['ready','取得済み'],['pending','未取得（判定保留を確認）']],'ready',v=>{sample.thumbInfoDone=v==='ready';runPreview()})))
       testFields.append(labeled('動画ID',input('試す動画ID',sample.id,v=>{sample.id=v;runPreview()})))
       testFields.append(labeled('説明文',input('試す説明文','',v=>{sample.description=v;runPreview()})))
@@ -200,10 +225,10 @@
           if(AdvancedNgRules.OP_META[node.operator].needsValue) {
             const numeric=['number','numberOrMissing'].includes(AdvancedNgRules.FIELD_META[node.field].type)
             const value=input('条件の値',node.value??'',v=>change(()=>{node.value=v},false),numeric?'number':'text')
-            value.placeholder=numeric?'数を入力':'例：実況';if(numeric){value.step='1';value.min=AdvancedNgRules.FIELD_META[node.field].type==='numberOrMissing'||node.field==='pageContributorCount'?'1':'0'}
+            value.placeholder=numeric?(node.field==='durationSeconds'?'秒数を入力':'数を入力'):'例：実況';if(numeric){value.step='1';value.min=AdvancedNgRules.FIELD_META[node.field].type==='numberOrMissing'||node.field==='pageContributorCount'?'1':'0'}
             box.append(labeled('値',value))
           }
-          const help=dialog._operatorHelpText(node.field,node.operator)+(node.field==='pageContributorCount'?' 広告を除く元の1ページごとに数えます。投稿者不明があるページは保留します。':'')
+          const help=numericHelp(node.field,node.operator)||(dialog._operatorHelpText(node.field,node.operator)+(node.field==='pageContributorCount'?' 広告を除く元の1ページごとに数えます。投稿者不明があるページは保留します。':''))
           box.append(el('p',help,'hint re-wide'))
           const options=el('details',null,'re-wide');options.open=!!node.not;options.append(el('summary','応用：判定を反対にする'))
           const invert=el('input');invert.type='checkbox';invert.checked=node.not;invert.addEventListener('change',()=>change(()=>{node.not=invert.checked}));options.append(labeled('この条件に当てはまらない（情報不足は保留）',invert));box.append(options)

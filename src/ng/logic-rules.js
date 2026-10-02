@@ -226,7 +226,9 @@
       // These fields are not in MetadataReadiness.ruleFields on purpose: no
       // detail request can supply them, so they never block settlement.
       if (FIELD_META[field] && FIELD_META[field].metadata) {
-        var known = movie.metadata && movie.metadata[field] === 'known'
+        // A plain object without metadata (the rule editor's hand-made sample)
+        // states its numbers directly; null / blank there means unknown.
+        var known = movie.metadata ? movie.metadata[field] === 'known' : true
         var count = movie[field]
         return known && Number.isSafeInteger(count) && count >= 0 ? count : {__notReady:true}
       }
@@ -270,8 +272,9 @@
       if (field === 'pageContributorCount') return Number.isFinite(movie.pageContributorCount)
         ? {state:'known', source:'page'} : {state:'unknown', source:null}
       if (FIELD_META[field] && FIELD_META[field].metadata) {
-        if (!movie.metadata || movie.metadata[field] !== 'known' || !Number.isSafeInteger(movie[field]) || movie[field] < 0)
+        if ((movie.metadata && movie.metadata[field] !== 'known') || !Number.isSafeInteger(movie[field]) || movie[field] < 0)
           return {state:'unknown', source:null}
+        if (!movie.metadata) return {state:'known', source:null}
         var observed = MetadataReadiness.sourceOf(movie, field)
         return {state:'known', source:observed ? observed.source : null}
       }
