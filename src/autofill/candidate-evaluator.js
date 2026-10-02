@@ -28,20 +28,22 @@
       }
 
       var chooseDetailBatchSize = function(shortage) {
-        var baseRate = lastAcceptanceRate
-        if (baseRate == null && originalMovieIds.size) {
-          baseRate = Math.max(0.05, visibleOriginalCount() / originalMovieIds.size)
-        }
-        if (baseRate == null) baseRate = 0.35
-        baseRate = Math.max(0.08, Math.min(0.90, baseRate))
-
-        // 必要数 / 直近採用率 に20%余裕。
-        // ただし一度に大量のGetThumbInfoを投げない。
-        var estimated = Math.ceil(shortage / baseRate * 1.20)
-        var minimum = Math.max(shortage, Math.min(24, shortage + 8))
+        if (typeof shortage !== 'number' || !Number.isFinite(shortage) || shortage <= 0) return 0
+        var need = Math.ceil(shortage)
         var configuredMax = Math.max(
           8, Math.min(100, Math.trunc(Number(model.config.autoFillDetailBatchMax.value)) || 48))
-        return Math.max(Math.min(minimum, configuredMax), Math.min(configuredMax, estimated))
+        var baseRate = lastAcceptanceRate
+        if (!Number.isFinite(baseRate)) {
+          if (originalMovieIds.size) {
+            var eligible = [...originalMovieIds].map(function(id) { return model.movies.get(id) })
+              .filter(function(movie) { return movie && !CandidateFilter.reason({id:movie.id,title:movie.title},model.config) })
+            // Cheap rejects never enter the detail pool: do not count them
+            // again when estimating acceptance of the remaining candidates.
+            baseRate = eligible.length ? visibleOriginalCount() / eligible.length : 1
+          } else baseRate = 0.35
+        }
+        baseRate = Math.max(0.05,Math.min(1,baseRate))
+        return Math.max(1,Math.min(configuredMax,Math.ceil(need / baseRate)))
       }
 
       var cacheKeyForMovie = function(id) {

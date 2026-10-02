@@ -65,7 +65,7 @@
 
         try {
           var shortage = targetCount() - visibleTotalCount()
-          var detailBatchSize = chooseDetailBatchSize(shortage)
+          var detailBatchSize = chooseDetailBatchSize(Math.max(shortage,hasEarlierCandidate() ? 1 : 0))
 
           // APIは候補だけ多めに保持してよいが、詳細判定は必要量だけ。
           var desiredPool = useSnapshot
@@ -99,7 +99,7 @@
           shortage = targetCount() - visibleTotalCount()
           detailBatchSize = Math.min(
             candidatePool.length,
-            chooseDetailBatchSize(shortage)
+            chooseDetailBatchSize(Math.max(shortage,hasEarlierCandidate() ? 1 : 0))
           )
 
           var batch = candidatePool.splice(0, detailBatchSize)

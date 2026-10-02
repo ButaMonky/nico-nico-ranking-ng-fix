@@ -249,6 +249,7 @@
 
       var restorePrefilteredCandidates = function() {
         if (page._disposed) return
+        lastAcceptanceRate = null
         var inPool = new Set(candidatePool.map(function(item) { return item.id }))
         var replay = candidateFilter.release().filter(function(item) {
           return !inPool.has(item.id) && !isMovieAlreadyOnPage(item.id)
