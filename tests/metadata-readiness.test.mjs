@@ -270,3 +270,17 @@ test('like count: a cache restore keeps the search value and detail fields separ
  assert.strictEqual(h.movie.likeCount,0);assert.equal(h.MetadataReadiness.sourceOf(h.movie,'likeCount').source,'search');
  assert.equal(h.MetadataReadiness.sourceOf(h.movie,'tags').source,'cache');
 });
+// BRUSH-007: other search values share the like-count rules.
+test('search values: counts, duration and registration time become known per field',async()=>{
+ const h=await setup(),at=Date.now()-500,ms=Date.parse('2026-09-19T17:56:13Z');
+ const accepted=h.movie.observeSearchFields({viewCount:0,commentCount:12,mylistCount:'3',durationSeconds:-1,registeredAtMs:ms,unknownField:5},'search',at);
+ assert.deepEqual([...accepted],['viewCount','commentCount','registeredAtMs']);
+ assert.strictEqual(h.movie.viewCount,0);assert.strictEqual(h.movie.commentCount,12);assert.strictEqual(h.movie.registeredAtMs,ms);
+ assert.equal(h.movie.mylistCount,null);assert.equal(h.movie.metadata.mylistCount,'unknown');
+ assert.equal(h.movie.durationSeconds,null);assert.equal(h.movie.metadata.durationSeconds,'unknown');
+ assert.equal('unknownField' in h.movie,false);assert.equal(h.MetadataReadiness.sourceOf(h.movie,'viewCount').source,'search');
+ h.movie.observeSearchFields({viewCount:null,commentCount:undefined});assert.strictEqual(h.movie.viewCount,0);assert.strictEqual(h.movie.commentCount,12);
+ h.fail({id:'sm1',error:{type:'NETWORK'}});
+ for(const f of h.MetadataReadiness.searchFields)assert.notEqual(h.movie.metadata[f],'failed',f);
+ assert.deepEqual([...h.MetadataReadiness.detailFields],['ownerId','ownerType','ownerName','ownerVisibility','tags','lockedTags','description']);
+});

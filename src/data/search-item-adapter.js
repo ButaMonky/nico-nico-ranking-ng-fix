@@ -1,10 +1,13 @@
 
   // Pure adapter for search items in meta[name="server-response"]
   // (data.response.$getSearchVideoV2.data.items[]). It copies only fields
-  // whose presence and meaning are confirmed in saved responses: id, owner and
-  // count.like. Unknown fields are dropped; nothing is fetched or rendered.
+  // whose path and meaning are backed by saved captures or shipped code
+  // (see _ai-sync completed BRUSH-005/007). Unknown fields are dropped;
+  // nothing is fetched or rendered.
   var SearchItemAdapter = (function() {
     const videoIdPattern = /^(sm|so|nm)[0-9]+$/
+    // Search-sourced metadata fields, in the order callers apply them.
+    const fields = ['likeCount','viewCount','commentCount','mylistCount','durationSeconds','registeredAtMs']
     // A count is known only when it is a non-negative safe integer number.
     // Missing, null, strings, negatives, fractions and non-finite values stay
     // unknown (null). Never coerce them to 0: 0 is a real count.
@@ -12,13 +15,32 @@
       // JSON "-0" is a zero count; normalize the sign.
       return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value + 0 : null
     }
+    // ISO 8601 with an explicit offset only; anything else stays unknown
+    // instead of being read in the browser's local time zone.
+    const isoPattern = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})$/
+    function timestamp(value) {
+      if (typeof value !== 'string' || !isoPattern.test(value)) return null
+      const ms = Date.parse(value)
+      return Number.isFinite(ms) ? ms : null
+    }
+    // Validates one value of a search field; used by the movie model too.
+    function valueOf(field, value) {
+      if (field === 'registeredAtMs') return Number.isFinite(value) ? value : null
+      return fields.includes(field) ? count(value) : null
+    }
     function normalize(item) {
       if (!item || typeof item !== 'object' || typeof item.id !== 'string' || !videoIdPattern.test(item.id)) return null
       return {
         videoId:item.id,
         // OwnerEvidence keeps the strict user/channel identity checks.
         owner:OwnerEvidence.normalize(item.owner),
-        likeCount:count(item.count?.like)
+        likeCount:count(item.count?.like),
+        viewCount:count(item.count?.view),
+        commentCount:count(item.count?.comment),
+        mylistCount:count(item.count?.mylist),
+        // Seconds: the shipped card renders it with formatSecondsAsDuration.
+        durationSeconds:count(item.duration),
+        registeredAtMs:timestamp(item.registeredAt)
       }
     }
     // For callers that must not fail a whole page because of one item.
@@ -59,27 +81,33 @@
       const normalized = root ? injected.get(root) : null
       return normalized && normalized.videoId === videoId && root.dataset?.decorationVideoId === videoId ? normalized : null
     }
-    // videoId -> likeCount for known counts. Rows of one video that disagree
-    // leave it out (unknown); null rows never hide a known row.
-    function likeCounts(items) {
-      const counts = new Map(), conflicts = new Set()
+    // videoId -> {field: value} of known search values. Per field, rows of one
+    // video that disagree leave that field out (unknown); null never hides a value.
+    function valuesById(items) {
+      const out = new Map(), conflicts = new Map()
       for (const item of items || []) {
-        if (!item || item.likeCount === null || conflicts.has(item.videoId)) continue
-        if (counts.has(item.videoId) && counts.get(item.videoId) !== item.likeCount) {
-          counts.delete(item.videoId);conflicts.add(item.videoId);continue
+        if (!item?.videoId) continue
+        const values = out.get(item.videoId) || {}, bad = conflicts.get(item.videoId) || new Set()
+        for (const field of fields) {
+          const value = item[field]
+          if (value === null || value === undefined || bad.has(field)) continue
+          if (field in values && values[field] !== value) { delete values[field];bad.add(field);continue }
+          values[field] = value
         }
-        counts.set(item.videoId,item.likeCount)
+        out.set(item.videoId,values);conflicts.set(item.videoId,bad)
       }
-      return counts
+      return out
     }
-    // The like count for one parsed card row: its own injected item first,
-    // then the initial document (only when the card is that same video).
-    function likeFor(row, initialLikes) {
+    // Search values for one parsed card row: the card's own injected item
+    // first, then the initial document (only when the card is that same video).
+    function valuesFor(row, initialValues) {
       const id = row?.movie?.id, root = row?.rootElem
-      if (!id || root?.dataset?.decorationVideoId !== id) return null
+      if (!id || root?.dataset?.decorationVideoId !== id) return {}
       const injectedItem = fromRoot(root,id)
-      if (injectedItem) return injectedItem.likeCount
-      return initialLikes?.has(id) ? initialLikes.get(id) : null
+      const source = injectedItem || initialValues?.get(id) || {}
+      const values = {}
+      for (const field of fields) if (source[field] !== null && source[field] !== undefined) values[field] = source[field]
+      return values
     }
-    return {normalize, tryNormalize, count, itemsOf, readDocument, register, fromRoot, likeCounts, likeFor}
+    return {fields, normalize, tryNormalize, count, timestamp, valueOf, itemsOf, readDocument, register, fromRoot, valuesById, valuesFor}
   })()

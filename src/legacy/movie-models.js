@@ -13,7 +13,8 @@
       this._thumbInfoDone = false
       this.metadata = Object.fromEntries(MetadataReadiness.fields.map(field => [field,'unknown']))
       this.metadataSource = {}
-      this.likeCount = null
+      // Search page values (BRUSH-006/007): null until a valid value is observed.
+      for (const field of MetadataReadiness.searchFields) this[field] = null
       this.owner = null
       this._ng = false
       this.ngByLockedTagCount = false
@@ -174,17 +175,27 @@
         }
         this._refreshNicoadMatches()
       },
-      // Records an observed like count. Only a valid count (0 included) is
-      // accepted; an unknown observation never erases a known value.
-      observeLikeCount(value, source = 'search', observedAt = Date.now()) {
-        const count = SearchItemAdapter.count(value)
-        if (count === null || !MetadataReadiness.sources.has(source)) return false
-        const changed = this.likeCount !== count || this.metadata.likeCount !== 'known'
-        this.likeCount = count
-        this.metadata.likeCount = 'known'
-        MetadataReadiness.noteSource(this,'likeCount',source,observedAt)
+      // Records observed search values ({likeCount, viewCount, ...}). Only
+      // valid values are accepted (0 included); an unknown observation never
+      // erases a known value. Returns the fields that were accepted.
+      observeSearchFields(values, source = 'search', observedAt = Date.now()) {
+        const accepted = []
+        if (!values || !MetadataReadiness.sources.has(source)) return accepted
+        let changed = false
+        for (const field of MetadataReadiness.searchFields) {
+          const value = SearchItemAdapter.valueOf(field, values[field])
+          if (value === null) continue
+          if (this[field] !== value || this.metadata[field] !== 'known') changed = true
+          this[field] = value
+          this.metadata[field] = 'known'
+          MetadataReadiness.noteSource(this,field,source,observedAt)
+          accepted.push(field)
+        }
         if (changed) this.metadataChanged()
-        return true
+        return accepted
+      },
+      observeLikeCount(value, source = 'search', observedAt = Date.now()) {
+        return this.observeSearchFields({likeCount:value},source,observedAt).length > 0
       },
       metadataChanged() {
         this._updateAdvancedRule()

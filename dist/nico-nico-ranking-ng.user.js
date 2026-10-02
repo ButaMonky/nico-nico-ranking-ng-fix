@@ -1076,10 +1076,11 @@
   // ============================================================
   // Field knowledge is independent from the completion of a detail request.
   var MetadataReadiness = (function() {
-    const fields = ['ownerId','ownerType','ownerName','ownerVisibility','tags','lockedTags','description','likeCount']
     // Fields a detail (getthumbinfo) response can supply. A failed detail
-    // request says nothing about the others (likeCount comes from page data).
-    const detailFields = fields.filter(field => field !== 'likeCount')
+    // request says nothing about the others, which come from search page data.
+    const detailFields = ['ownerId','ownerType','ownerName','ownerVisibility','tags','lockedTags','description']
+    const searchFields = ['likeCount','viewCount','commentCount','mylistCount','durationSeconds','registeredAtMs']
+    const fields = [...detailFields, ...searchFields]
     const ruleFields = {
       contributorId:'ownerId', userId:'ownerId', channelId:'ownerId', contributorName:'ownerName',
       tag:'tags', tagCount:'tags', lockedTag:'lockedTags', lockedTagCount:'lockedTags', description:'description',
@@ -1153,7 +1154,7 @@
       if (status === 'failed' && record.failureKind) return {...record}
       return null
     }
-    return {fields,detailFields,ruleFields,settings,required,ready,sources,noteSource,noteFailure,clearSource,sourceOf}
+    return {fields,detailFields,searchFields,ruleFields,settings,required,ready,sources,noteSource,noteFailure,clearSource,sourceOf}
   })()
 
   // Pure planner: decides which source should supply each missing field.
@@ -1171,8 +1172,13 @@
       tags:['cache','detail'],
       lockedTags:['cache','detail'],
       description:['cache','detail'],
-      // Search page data only (count.like); no detail or index source is used.
-      likeCount:['search']
+      // Search page data only; no detail or index source is used for these.
+      likeCount:['search'],
+      viewCount:['search'],
+      commentCount:['search'],
+      mylistCount:['search'],
+      durationSeconds:['search'],
+      registeredAtMs:['search']
     }
     const freeSources = new Set(['search','cache'])
     const allSources = ['search','cache','nicoad','snapshot','detail']
@@ -1672,7 +1678,8 @@
       this._thumbInfoDone = false
       this.metadata = Object.fromEntries(MetadataReadiness.fields.map(field => [field,'unknown']))
       this.metadataSource = {}
-      this.likeCount = null
+      // Search page values (BRUSH-006/007): null until a valid value is observed.
+      for (const field of MetadataReadiness.searchFields) this[field] = null
       this.owner = null
       this._ng = false
       this.ngByLockedTagCount = false
@@ -1833,17 +1840,27 @@
         }
         this._refreshNicoadMatches()
       },
-      // Records an observed like count. Only a valid count (0 included) is
-      // accepted; an unknown observation never erases a known value.
-      observeLikeCount(value, source = 'search', observedAt = Date.now()) {
-        const count = SearchItemAdapter.count(value)
-        if (count === null || !MetadataReadiness.sources.has(source)) return false
-        const changed = this.likeCount !== count || this.metadata.likeCount !== 'known'
-        this.likeCount = count
-        this.metadata.likeCount = 'known'
-        MetadataReadiness.noteSource(this,'likeCount',source,observedAt)
+      // Records observed search values ({likeCount, viewCount, ...}). Only
+      // valid values are accepted (0 included); an unknown observation never
+      // erases a known value. Returns the fields that were accepted.
+      observeSearchFields(values, source = 'search', observedAt = Date.now()) {
+        const accepted = []
+        if (!values || !MetadataReadiness.sources.has(source)) return accepted
+        let changed = false
+        for (const field of MetadataReadiness.searchFields) {
+          const value = SearchItemAdapter.valueOf(field, values[field])
+          if (value === null) continue
+          if (this[field] !== value || this.metadata[field] !== 'known') changed = true
+          this[field] = value
+          this.metadata[field] = 'known'
+          MetadataReadiness.noteSource(this,field,source,observedAt)
+          accepted.push(field)
+        }
         if (changed) this.metadataChanged()
-        return true
+        return accepted
+      },
+      observeLikeCount(value, source = 'search', observedAt = Date.now()) {
+        return this.observeSearchFields({likeCount:value},source,observedAt).length > 0
       },
       metadataChanged() {
         this._updateAdvancedRule()
@@ -2027,10 +2044,13 @@
 
   // Pure adapter for search items in meta[name="server-response"]
   // (data.response.$getSearchVideoV2.data.items[]). It copies only fields
-  // whose presence and meaning are confirmed in saved responses: id, owner and
-  // count.like. Unknown fields are dropped; nothing is fetched or rendered.
+  // whose path and meaning are backed by saved captures or shipped code
+  // (see _ai-sync completed BRUSH-005/007). Unknown fields are dropped;
+  // nothing is fetched or rendered.
   var SearchItemAdapter = (function() {
     const videoIdPattern = /^(sm|so|nm)[0-9]+$/
+    // Search-sourced metadata fields, in the order callers apply them.
+    const fields = ['likeCount','viewCount','commentCount','mylistCount','durationSeconds','registeredAtMs']
     // A count is known only when it is a non-negative safe integer number.
     // Missing, null, strings, negatives, fractions and non-finite values stay
     // unknown (null). Never coerce them to 0: 0 is a real count.
@@ -2038,13 +2058,32 @@
       // JSON "-0" is a zero count; normalize the sign.
       return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value + 0 : null
     }
+    // ISO 8601 with an explicit offset only; anything else stays unknown
+    // instead of being read in the browser's local time zone.
+    const isoPattern = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})$/
+    function timestamp(value) {
+      if (typeof value !== 'string' || !isoPattern.test(value)) return null
+      const ms = Date.parse(value)
+      return Number.isFinite(ms) ? ms : null
+    }
+    // Validates one value of a search field; used by the movie model too.
+    function valueOf(field, value) {
+      if (field === 'registeredAtMs') return Number.isFinite(value) ? value : null
+      return fields.includes(field) ? count(value) : null
+    }
     function normalize(item) {
       if (!item || typeof item !== 'object' || typeof item.id !== 'string' || !videoIdPattern.test(item.id)) return null
       return {
         videoId:item.id,
         // OwnerEvidence keeps the strict user/channel identity checks.
         owner:OwnerEvidence.normalize(item.owner),
-        likeCount:count(item.count?.like)
+        likeCount:count(item.count?.like),
+        viewCount:count(item.count?.view),
+        commentCount:count(item.count?.comment),
+        mylistCount:count(item.count?.mylist),
+        // Seconds: the shipped card renders it with formatSecondsAsDuration.
+        durationSeconds:count(item.duration),
+        registeredAtMs:timestamp(item.registeredAt)
       }
     }
     // For callers that must not fail a whole page because of one item.
@@ -2085,29 +2124,35 @@
       const normalized = root ? injected.get(root) : null
       return normalized && normalized.videoId === videoId && root.dataset?.decorationVideoId === videoId ? normalized : null
     }
-    // videoId -> likeCount for known counts. Rows of one video that disagree
-    // leave it out (unknown); null rows never hide a known row.
-    function likeCounts(items) {
-      const counts = new Map(), conflicts = new Set()
+    // videoId -> {field: value} of known search values. Per field, rows of one
+    // video that disagree leave that field out (unknown); null never hides a value.
+    function valuesById(items) {
+      const out = new Map(), conflicts = new Map()
       for (const item of items || []) {
-        if (!item || item.likeCount === null || conflicts.has(item.videoId)) continue
-        if (counts.has(item.videoId) && counts.get(item.videoId) !== item.likeCount) {
-          counts.delete(item.videoId);conflicts.add(item.videoId);continue
+        if (!item?.videoId) continue
+        const values = out.get(item.videoId) || {}, bad = conflicts.get(item.videoId) || new Set()
+        for (const field of fields) {
+          const value = item[field]
+          if (value === null || value === undefined || bad.has(field)) continue
+          if (field in values && values[field] !== value) { delete values[field];bad.add(field);continue }
+          values[field] = value
         }
-        counts.set(item.videoId,item.likeCount)
+        out.set(item.videoId,values);conflicts.set(item.videoId,bad)
       }
-      return counts
+      return out
     }
-    // The like count for one parsed card row: its own injected item first,
-    // then the initial document (only when the card is that same video).
-    function likeFor(row, initialLikes) {
+    // Search values for one parsed card row: the card's own injected item
+    // first, then the initial document (only when the card is that same video).
+    function valuesFor(row, initialValues) {
       const id = row?.movie?.id, root = row?.rootElem
-      if (!id || root?.dataset?.decorationVideoId !== id) return null
+      if (!id || root?.dataset?.decorationVideoId !== id) return {}
       const injectedItem = fromRoot(root,id)
-      if (injectedItem) return injectedItem.likeCount
-      return initialLikes?.has(id) ? initialLikes.get(id) : null
+      const source = injectedItem || initialValues?.get(id) || {}
+      const values = {}
+      for (const field of fields) if (source[field] !== null && source[field] !== undefined) values[field] = source[field]
+      return values
     }
-    return {normalize, tryNormalize, count, itemsOf, readDocument, register, fromRoot, likeCounts, likeFor}
+    return {fields, normalize, tryNormalize, count, timestamp, valueOf, itemsOf, readDocument, register, fromRoot, valuesById, valuesFor}
   })()
   var ThumbInfoListener = (function() {
     var createTagBuilder = function(config) {
@@ -9684,8 +9729,8 @@ var CardActionData = (function () {
           for (var row of resultsOfParsing) {
             if (row.rootElem.dataset.decorationVideoId === row.movie.id) applySearchOwner(row.movie.id,this.initialOwners?.get(row.movie.id))
             applySearchOwner(row.movie.id, OwnerEvidence.fromRow(row))
-            // Search data like counts (BRUSH-006); unknown stays unknown, 0 is a count.
-            movies.get(row.movie.id).observeLikeCount(SearchItemAdapter.likeFor(row,this.initialLikes),'search')
+            // Search page values (BRUSH-006/007); unknown stays unknown, 0 is a value.
+            movies.get(row.movie.id).observeSearchFields(SearchItemAdapter.valuesFor(row,this.initialSearchValues),'search')
             var count = Number(row.rootElem.dataset.nrnPageContributorCount)
             if (Number.isFinite(count) && count > 0) movies.get(row.movie.id).setPageContributorCount(count)
           }
@@ -14070,7 +14115,7 @@ var CardActionData = (function () {
       try {
         const initialSourceUrl = initialDocumentUrl
         let initialOwners = OwnerEvidence.initialDocument(document)
-        let initialLikes = SearchItemAdapter.likeCounts(SearchItemAdapter.readDocument(document).items)
+        let initialSearchValues = SearchItemAdapter.valuesById(SearchItemAdapter.readDocument(document).items)
         const config = new Config(gmGetValue(), gmSetValue())
         await config.sync()
         if (typeof nrnSetConsoleConfig === 'function') nrnSetConsoleConfig(config)
@@ -14119,9 +14164,9 @@ var CardActionData = (function () {
             if (config.useGetThumbInfo.value) setPendingMoviesInvisible()
             model = createModel(config)
             model.initialOwners = initialSourceUrl === location.href ? initialOwners : null
-            model.initialLikes = initialSourceUrl === location.href ? initialLikes : null
+            model.initialSearchValues = initialSourceUrl === location.href ? initialSearchValues : null
             initialOwners = null
-            initialLikes = null
+            initialSearchValues = null
             page._diagnostics = model.diagnostics
             page._ownerNames = model.ownerNames
             page._cardActions = CardActions.create(page,config)

@@ -2,7 +2,7 @@
       try {
         const initialSourceUrl = initialDocumentUrl
         let initialOwners = OwnerEvidence.initialDocument(document)
-        let initialLikes = SearchItemAdapter.likeCounts(SearchItemAdapter.readDocument(document).items)
+        let initialSearchValues = SearchItemAdapter.valuesById(SearchItemAdapter.readDocument(document).items)
         const config = new Config(gmGetValue(), gmSetValue())
         await config.sync()
         if (typeof nrnSetConsoleConfig === 'function') nrnSetConsoleConfig(config)
@@ -51,9 +51,9 @@
             if (config.useGetThumbInfo.value) setPendingMoviesInvisible()
             model = createModel(config)
             model.initialOwners = initialSourceUrl === location.href ? initialOwners : null
-            model.initialLikes = initialSourceUrl === location.href ? initialLikes : null
+            model.initialSearchValues = initialSourceUrl === location.href ? initialSearchValues : null
             initialOwners = null
-            initialLikes = null
+            initialSearchValues = null
             page._diagnostics = model.diagnostics
             page._ownerNames = model.ownerNames
             page._cardActions = CardActions.create(page,config)

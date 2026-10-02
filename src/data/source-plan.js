@@ -14,8 +14,13 @@
       tags:['cache','detail'],
       lockedTags:['cache','detail'],
       description:['cache','detail'],
-      // Search page data only (count.like); no detail or index source is used.
-      likeCount:['search']
+      // Search page data only; no detail or index source is used for these.
+      likeCount:['search'],
+      viewCount:['search'],
+      commentCount:['search'],
+      mylistCount:['search'],
+      durationSeconds:['search'],
+      registeredAtMs:['search']
     }
     const freeSources = new Set(['search','cache'])
     const allSources = ['search','cache','nicoad','snapshot','detail']

@@ -15,8 +15,9 @@ test('search item adapter: normal item keeps only confirmed fields',()=>{
  const item={id:'sm9',title:'synthetic',owner:{type:'user',id:12,name:' synthetic-owner ',visibility:'visible'},
   count:{like:5,view:100,comment:3,mylist:1},duration:60,registeredAt:'2026-01-01T00:00:00+09:00',unknownField:{nested:true}};
  const result=plain(A.normalize(item));
- assert.deepEqual(result,{videoId:'sm9',owner:{type:'user',id:12,name:'synthetic-owner',visibility:'visible'},likeCount:5});
- assert.deepEqual(Object.keys(result).sort(),['likeCount','owner','videoId'],'unconfirmed and unknown fields are not copied');
+ assert.deepEqual(result,{videoId:'sm9',owner:{type:'user',id:12,name:'synthetic-owner',visibility:'visible'},likeCount:5,
+  viewCount:100,commentCount:3,mylistCount:1,durationSeconds:60,registeredAtMs:Date.parse('2026-01-01T00:00:00+09:00')});
+ assert.deepEqual(Object.keys(result).sort(),['commentCount','durationSeconds','likeCount','mylistCount','owner','registeredAtMs','videoId','viewCount'],'unconfirmed and unknown fields are not copied');
  assert.equal(item.count.like,5,'input is not mutated');
 });
 test('search item adapter: missing or contradictory owners are null, likes are still read',()=>{
@@ -103,19 +104,31 @@ test('fetched pages: injected roots only return the item of the same video',()=>
  assert.equal(A.fromRoot(root,'sm2'),null);root.dataset.decorationVideoId='sm9';assert.equal(A.fromRoot(root,'sm1'),null,'card reused for another video');
  assert.equal(A.tryNormalize({id:'sm1',get owner(){throw new Error('broken');}}),null);
 });
-// BRUSH-006: like counts per video and per card row.
-test('like counts: known values per video, conflicts and nulls stay unknown',()=>{
- const items=[{id:'sm1',count:{like:0}},{id:'sm1',count:{like:0}},{id:'sm2',count:{like:5}},{id:'sm2',count:{like:6}},
+// BRUSH-006/007: search values per video and per card row.
+test('search values: known values per video, per-field conflicts and nulls stay unknown',()=>{
+ const items=[{id:'sm1',count:{like:0}},{id:'sm1',count:{like:0}},{id:'sm2',count:{like:5,view:9}},{id:'sm2',count:{like:6,view:9}},
   {id:'sm2',count:{like:5}},{id:'sm3'},{id:'sm4',count:{like:null}},{id:'sm4',count:{like:8}},{id:'sm5',count:{like:'9'}}].map(A.normalize);
- assert.deepEqual(plain([...A.likeCounts(items)]),[['sm1',0],['sm4',8]]);
- assert.equal(A.likeCounts(null).size,0);
+ assert.deepEqual(plain([...A.valuesById(items)]),[['sm1',{likeCount:0}],['sm2',{viewCount:9}],['sm3',{}],['sm4',{likeCount:8}],['sm5',{}]]);
+ assert.equal(A.valuesById(null).size,0);
 });
-test('like counts: a card row uses its own injected item, then the initial document for the same video',()=>{
- const initial=new Map([['sm1',0],['sm2',4]]);
- const injectedRoot={dataset:{decorationVideoId:'sm2'}};A.register(injectedRoot,A.normalize({id:'sm2',count:{}}));
- assert.strictEqual(A.likeFor({movie:{id:'sm1'},rootElem:{dataset:{decorationVideoId:'sm1'}}},initial),0);
- assert.strictEqual(A.likeFor({movie:{id:'sm2'},rootElem:injectedRoot},initial),null,'injected item without likes is not filled from another source');
- assert.strictEqual(A.likeFor({movie:{id:'sm1'},rootElem:{dataset:{decorationVideoId:'sm9'}}},initial),null,'mismatched card');
- assert.strictEqual(A.likeFor({movie:{id:'sm3'},rootElem:{dataset:{decorationVideoId:'sm3'}}},initial),null);
- assert.strictEqual(A.likeFor({movie:{id:'sm1'},rootElem:{dataset:{decorationVideoId:'sm1'}}},null),null,'SPA route without initial data');
+test('search values: a card row uses its own injected item, then the initial document for the same video',()=>{
+ const initial=new Map([['sm1',{likeCount:0,viewCount:3}],['sm2',{likeCount:4}]]);
+ const injectedRoot={dataset:{decorationVideoId:'sm2'}};A.register(injectedRoot,A.normalize({id:'sm2',count:{view:1}}));
+ assert.deepEqual(plain(A.valuesFor({movie:{id:'sm1'},rootElem:{dataset:{decorationVideoId:'sm1'}}},initial)),{likeCount:0,viewCount:3});
+ assert.deepEqual(plain(A.valuesFor({movie:{id:'sm2'},rootElem:injectedRoot},initial)),{viewCount:1},'injected item is not mixed with another source');
+ assert.deepEqual(plain(A.valuesFor({movie:{id:'sm1'},rootElem:{dataset:{decorationVideoId:'sm9'}}},initial)),{},'mismatched card');
+ assert.deepEqual(plain(A.valuesFor({movie:{id:'sm3'},rootElem:{dataset:{decorationVideoId:'sm3'}}},initial)),{});
+ assert.deepEqual(plain(A.valuesFor({movie:{id:'sm1'},rootElem:{dataset:{decorationVideoId:'sm1'}}},null)),{},'SPA route without initial data');
+});
+test('search values: counts, duration and registration time keep 0 apart from unknown',()=>{
+ const n=item=>plain(A.normalize({id:'sm1',...item}));
+ assert.deepEqual(n({count:{view:0,comment:0,mylist:0},duration:0}),{videoId:'sm1',owner:null,likeCount:null,viewCount:0,commentCount:0,mylistCount:0,durationSeconds:0,registeredAtMs:null});
+ for(const bad of [null,undefined,'5',-1,1.5,NaN,Infinity])
+  for(const key of ['view','comment','mylist'])assert.strictEqual(A.normalize({id:'sm1',count:{[key]:bad}})[key+'Count'],null,key+String(bad));
+ for(const bad of [null,'60',-1,1.5,Infinity])assert.strictEqual(A.normalize({id:'sm1',duration:bad}).durationSeconds,null,String(bad));
+ for(const value of ['2026-09-20T02:56:13+09:00','2026-09-19T17:56:13Z','2026-09-20T02:56:13.500+0900'])
+  assert.ok(Number.isFinite(A.normalize({id:'sm1',registeredAt:value}).registeredAtMs),value);
+ assert.strictEqual(A.normalize({id:'sm1',registeredAt:'2026-09-20T02:56:13+09:00'}).registeredAtMs,Date.parse('2026-09-19T17:56:13Z'));
+ for(const bad of ['2026-09-20 02:56:13','2026-09-20T02:56:13','2026/09/20',1758300000000,'',null,'2026-13-40T99:99+09:00'])
+  assert.strictEqual(A.normalize({id:'sm1',registeredAt:bad}).registeredAtMs,null,String(bad));
 });

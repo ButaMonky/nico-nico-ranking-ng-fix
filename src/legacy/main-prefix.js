@@ -168,8 +168,8 @@
           for (var row of resultsOfParsing) {
             if (row.rootElem.dataset.decorationVideoId === row.movie.id) applySearchOwner(row.movie.id,this.initialOwners?.get(row.movie.id))
             applySearchOwner(row.movie.id, OwnerEvidence.fromRow(row))
-            // Search data like counts (BRUSH-006); unknown stays unknown, 0 is a count.
-            movies.get(row.movie.id).observeLikeCount(SearchItemAdapter.likeFor(row,this.initialLikes),'search')
+            // Search page values (BRUSH-006/007); unknown stays unknown, 0 is a value.
+            movies.get(row.movie.id).observeSearchFields(SearchItemAdapter.valuesFor(row,this.initialSearchValues),'search')
             var count = Number(row.rootElem.dataset.nrnPageContributorCount)
             if (Number.isFinite(count) && count > 0) movies.get(row.movie.id).setPageContributorCount(count)
           }
