@@ -1,8 +1,9 @@
 import test from 'node:test';
+import {readAutoFillSource} from '../scripts/lib/autofill-source.mjs';
 import assert from 'node:assert/strict';
 import vm from 'node:vm';
 import {readFile} from 'node:fs/promises';
-const auto=await readFile(new URL('../src/autofill/legacy-controller.js',import.meta.url),'utf8');
+const auto=await readAutoFillSource();
 const adapter=await readFile(new URL('../src/data/search-item-adapter.js',import.meta.url),'utf8');
 const quiet=new Proxy({}, {get:()=>()=>{}});
 async function fetchItems(data) {

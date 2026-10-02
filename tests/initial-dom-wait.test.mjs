@@ -1,8 +1,9 @@
 import test from 'node:test';
+import {readAutoFillSource} from '../scripts/lib/autofill-source.mjs';
 import assert from 'node:assert/strict';
 import vm from 'node:vm';
 import {readFile} from 'node:fs/promises';
-const source=await readFile(new URL('../src/autofill/legacy-controller.js',import.meta.url),'utf8');
+const source=await readAutoFillSource();
 const start=source.indexOf('      var waitForInitialRoots ='),end=source.indexOf('      var waitForThumbInfo =',start);
 const element=id=>({dataset:{decorationVideoId:id},contains(other){return this===other},closest(){return null}});
 async function run({raw,expected,candidates}){
