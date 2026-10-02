@@ -384,3 +384,40 @@ test('owner NG: removing an NG user ID releases a supplemented owner',async()=>{
  const h=await setup();ownerSources.nicoad(h);h.config.ngUserIds.add(12);assert.equal(h.movie.ng,true);
  h.config.ngUserIds.remove([12]);assert.equal(h.movie.ng,false);
 });
+// BRUSH-018: trace entries say how settled a value is and where it came from.
+const traceOf=(h,node)=>{const trace=[];const result=h.AdvancedNgRules.evaluateState(h.movie,node,trace,0);return {result,trace:JSON.parse(JSON.stringify(trace))};};
+test('NG trace: known values report state and source; existing keys are unchanged',async()=>{
+ const h=await setup();h.search('sm1',{type:'user',id:12,name:'s'});
+ const {result,trace:[entry]}=traceOf(h,condition('userId','eq',12));
+ assert.equal(result,true);
+ for(const key of ['depth','kind','field','fieldLabel','operator','operatorLabel','expected','actual','not','result'])assert.ok(key in entry,key);
+ assert.equal(entry.state,'known');assert.equal(entry.source,'search');assert.equal(entry.actual,12);assert.equal('failureKind' in entry,false);
+ assert.deepEqual([traceOf(h,condition('title','contains','syn')).trace[0].source,traceOf(h,condition('movieId','eq','sm1')).trace[0].source],['page','page']);
+ h.detail(payload('sm1',{type:'user',id:12,name:'d'}));
+ assert.equal(traceOf(h,condition('tag','notExists')).trace[0].source,'detail');
+ assert.equal(traceOf(h,condition('userId','eq',12)).trace[0].source,'detail');
+ const n=await setup();ownerSources.nicoad(n);assert.equal(traceOf(n,condition('userId','eq',12)).trace[0].source,'nicoad');
+ const s=await setup();ownerSources.snapshot(s);assert.equal(traceOf(s,condition('contributorId','exists')).trace[0].source,'snapshot');
+});
+test('NG trace: undecided values say whether they are still unknown or failed',async()=>{
+ const h=await setup();h.search('sm1',{type:'user',id:12,name:'s'});
+ let {result,trace:[entry]}=traceOf(h,group('AND',[condition('tag','contains','x')],true));
+ assert.equal(result,null);assert.equal(entry.state,'unknown');assert.equal(entry.source,null);assert.equal(entry.result,null);
+ assert.equal(entry.actual.__notReady,true,'the rule editor still recognises a pending value');
+ h.fail({id:'sm1',error:{type:'TIMEOUT'}});
+ ({result,trace:[entry]}=traceOf(h,condition('tag','notExists')));
+ assert.equal(result,null);assert.equal(entry.state,'failed');assert.equal(entry.failureKind,'TIMEOUT');
+ assert.equal(traceOf(h,condition('userId','eq',12)).trace[0].state,'known','known owner survives a failed detail');
+ const p=await setup();assert.deepEqual({...p.AdvancedNgRules.fieldOrigin(p.movie,'pageContributorCount')},{state:'unknown',source:null});
+ assert.equal(p.AdvancedNgRules.fieldOrigin(p.movie,'selfAdIdMatch').state,'unknown');
+});
+test('NG trace: explain lists matching, non-matching, undecided and disabled rules',async()=>{
+ const h=await setup();h.search('sm1',{type:'user',id:12,name:'s'});
+ const rules=JSON.stringify([{id:'a',name:'hit',expression:condition('userId','eq',12)},{id:'b',name:'miss',expression:condition('userId','eq',99)},
+  {id:'c',name:'wait',expression:group('AND',[condition('userId','eq',12),condition('tag','contains','x')])},
+  {id:'d',name:'off',enabled:false,expression:condition('userId','eq',12)}]);
+ const report=JSON.parse(JSON.stringify(h.AdvancedNgRules.explain(h.movie,rules)));
+ assert.deepEqual(report.map(r=>[r.id,r.enabled,r.result,r.waitingFor]),[['a',true,true,[]],['b',true,false,[]],['c',true,null,['tag']],['d',false,null,[]]]);
+ assert.equal(report[2].trace.find(t=>t.field==='tag').state,'unknown');
+ assert.deepEqual([...h.AdvancedNgRules.match(h.movie,true,rules).map(r=>r.id)],['a'],'match() is unchanged');
+});

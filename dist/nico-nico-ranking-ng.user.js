@@ -1542,6 +1542,32 @@
       return null
     }
 
+    // BRUSH-018: developer trace only. state: known | unknown | failed;
+    // source: page | search | detail | cache | nicoad | snapshot | null.
+    // Never fed to anonymous diagnostics (values may contain IDs and names).
+    var fieldOrigin = function(movie, field) {
+      if (field === 'movieId' || field === 'title') return {state:'known', source:'page'}
+      if (field === 'pageContributorCount') return Number.isFinite(movie.pageContributorCount)
+        ? {state:'known', source:'page'} : {state:'unknown', source:null}
+      var requiredField = MetadataReadiness.ruleFields[field]
+      if (requiredField && !movie.metadata) {
+        var done = movie.thumbInfoDone && !(movie.error && movie.error.type !== 'NO_ERROR')
+        return done ? {state:'known', source:'detail'}
+          : {state:movie.thumbInfoDone ? 'failed' : 'unknown', source:null}
+      }
+      if (requiredField) {
+        var status = movie.metadata[requiredField], record = MetadataReadiness.sourceOf(movie, requiredField)
+        if (status === 'failed') return {state:'failed', source:null, failureKind:record ? record.failureKind : null}
+        if (status !== 'known') return {state:'unknown', source:null}
+        if (field !== 'selfAdIdMatch' && field !== 'selfAdNameMatch') return {state:'known', source:record ? record.source : null}
+      }
+      if (field === 'selfAdIdMatch' || field === 'selfAdNameMatch') {
+        if (movie.nicoadSelfAdChecked) return {state:'known', source:'nicoad'}
+        return movie.nicoadSelfAdError ? {state:'failed', source:null, failureKind:'nicoad'} : {state:'unknown', source:null}
+      }
+      return {state:'known', source:null}
+    }
+
     var existsValue = function(v) {
       if (v && typeof v === 'object' && v.__notReady) return false
       if (Array.isArray(v)) return v.length > 0
@@ -1614,7 +1640,9 @@
             expected:node.value,
             actual:Array.isArray(actual) ? actual.join(', ') : actual,
             not:Boolean(node.not),
-            result:result
+            result:result,
+            // BRUSH-018: where the value came from and how settled it is.
+            ...fieldOrigin(movie, node.field)
           })
         }
         return result
@@ -1670,6 +1698,20 @@
       }).filter(Boolean)
     }
 
+    // BRUSH-018: every rule with its three-valued result, for developers asking
+    // why a movie is, is not, or is not yet NG. result: true | false | null
+    // (null = undecided / waiting for data); disabled rules report null.
+    var explain = function(movie, rawRules) {
+      return parse(rawRules).map(function(rule) {
+        var trace = []
+        var result = rule.enabled ? evaluateState(movie, rule.expression, trace, 0) : null
+        return {id:rule.id, name:rule.name, enabled:rule.enabled, result:result,
+          waitingFor:trace.filter(function(t) { return t.kind === 'condition' && t.result === null && t.state !== 'known' })
+            .map(function(t) { return t.field }).filter(function(f, i, all) { return all.indexOf(f) === i }),
+          trace:trace}
+      })
+    }
+
     var expressionText = function(node) {
       if (!node) return '(空)'
       if (node.kind === 'condition') {
@@ -1720,6 +1762,8 @@
       match:match,
       evaluateNode:evaluateNode,
       evaluateState:evaluateState,
+      explain:explain,
+      fieldOrigin:fieldOrigin,
       expressionText:expressionText,
       makeGroup:makeGroup,
       makeCondition:makeCondition,
@@ -3866,7 +3910,7 @@
         const trace=[], result=AdvancedNgRules.evaluateState(movie,rule.expression,trace,0)
         testResults.append(el('strong',result===true?'このルールに一致 → NG対象':result===false?'このルールには一致しません':'情報不足 → 判定保留',result===true?'re-match':''))
         for(const t of trace) {
-          const text=t.kind==='condition' ? t.fieldLabel+' '+friendly(t.field,t.operator)+(AdvancedNgRules.OP_META[t.operator].needsValue?'「'+t.expected+'」':'')+' / 実際の値：'+(t.actual?.__notReady?'未取得':t.actual==null?'情報なし':String(t.actual)) : (t.op==='AND'?'すべての条件':'どれかの条件')
+          const text=t.kind==='condition' ? t.fieldLabel+' '+friendly(t.field,t.operator)+(AdvancedNgRules.OP_META[t.operator].needsValue?'「'+t.expected+'」':'')+' / 実際の値：'+(t.actual?.__notReady?(t.state==='failed'?'取得失敗':'未取得'):t.actual==null?'情報なし':String(t.actual)) : (t.op==='AND'?'すべての条件':'どれかの条件')
           const row=el('div',(t.result===null?'保留':t.result?'一致':'不一致')+' — '+text+(t.not?'（反対にした結果）':''),'re-trace')
           row.style.marginInlineStart=Math.min(t.depth,4)*12+'px';testResults.append(row)
         }
