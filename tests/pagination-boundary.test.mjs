@@ -67,3 +67,35 @@ test('generated: continuous playback retains fetched page context without guessi
  assert.equal(result.items[0].__nrnPlaylist,playlist);
  assert.equal((await parsePage([{id:'sm1'}])).items[0].__nrnPlaylist,null);
 });
+
+// BRUSH-027: transport failure must not consume a physical results page.
+test('paging integrity: retry after 503 requests the same page without counting a failed fetch',async()=>{
+ const h=await poolHarness([Object.assign(Error('temporary'),{status:503}),{items:[{id:'sm2'}],hasNextPage:false,maxPage:2}]);
+ await assert.rejects(h.run(1),/temporary/);assert.equal(h.ctx.nextPageToFetch,2);assert.equal(h.ctx.fetchedExtraPages,0);
+ await h.run(1);assert.deepEqual(h.calls,[2,2]);assert.equal(h.ctx.candidatePool.length,1);
+});
+test('paging integrity: malformed item lists leave the cursor and successful-unit counters untouched',async()=>{
+ const h=await poolHarness([{items:null},{items:[{id:'sm2'}],hasNextPage:false,maxPage:2}]);
+ await assert.rejects(h.run(1));assert.equal(h.ctx.nextPageToFetch,2);assert.equal(h.ctx.fetchedExtraPages,0);
+ assert.equal(h.ctx.fetchedPageNumbers.size,0);await h.run(1);assert.deepEqual(h.calls,[2,2]);
+});
+test('paging integrity: short nonterminal pages continue, and updated totals do not erase candidates',async()=>{
+ const h=await poolHarness([{items:[{id:'sm2'}],hasNextPage:true,maxPage:3},{items:[{id:'sm3'}],hasNextPage:true,maxPage:4},{items:[{id:'sm4'}],hasNextPage:false,maxPage:4}]);
+ await h.run(20);assert.deepEqual(h.calls,[2,3,4]);assert.equal(h.ctx.knownLastPage,4);assert.equal(h.ctx.candidatePool.length,3);
+});
+test('paging integrity: duplicate-only pages yield after a bounded window without claiming end-of-results',async()=>{
+ const responses=Array.from({length:9},()=>({items:[{id:'sm2'}],hasNextPage:true,maxPage:null}));
+ const h=await poolHarness(responses);h.ctx.filterFreshItems=()=>({freshItems:[]});
+ await h.run(48);assert.equal(h.calls.length,8);assert.equal(h.ctx.lastFetchedHadNext,true);assert.equal(h.ctx.knownLastPage,null);
+ h.ctx.filterFreshItems=items=>({freshItems:items});await h.run(1);assert.equal(h.calls.at(-1),10);assert.equal(h.ctx.candidatePool.length,1);
+});
+test('paging integrity: Snapshot filtered-only units have the same per-call request budget',async()=>{
+ const h=await poolHarness(Array.from({length:9},()=>({items:[{id:'sm2'}],hasNextPage:true})));
+ Object.assign(h.ctx,{useSnapshot:true,snapshotValidated:true,snapshotOffset:0,requestedMode:'hybrid',snapshotFetchOffset:h.ctx.page.fetchPageItems});
+ h.ctx.filterFreshItems=()=>({freshItems:[]});await h.run(48);
+ assert.equal(h.calls.length,8);assert.equal(h.ctx.snapshotOffset,800);assert.equal(h.ctx.lastFetchedHadNext,true);
+});
+test('paging integrity: disposal during a pending page leaves its cursor and candidates unchanged',async()=>{
+ const h=await poolHarness([]);h.ctx.page.fetchPageItems=async()=>{h.ctx.page._disposed=true;return {items:[{id:'sm2'}],hasNextPage:true};};
+ await h.run(1);assert.equal(h.ctx.nextPageToFetch,2);assert.equal(h.ctx.fetchedExtraPages,0);assert.equal(h.ctx.candidatePool.length,0);
+});

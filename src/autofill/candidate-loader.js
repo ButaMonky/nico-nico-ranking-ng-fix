@@ -4,9 +4,12 @@
       var fetchMoreCandidates = async function(minNeeded) {
         if (page._disposed) return
         var fetchStart = performance.now()
+        var issuedThisCall = 0
+        var sourceWindowLimit = 8
         var mayRequest = function() {
           var limit = Number(model.config.autoFillMaxExtraPages.value) || 0
-          return model.config.autoFillEnabled.value && (limit <= 0 || fetchedExtraPages < limit)
+          return !page._disposed && issuedThisCall < sourceWindowLimit
+            && model.config.autoFillEnabled.value && (limit <= 0 || fetchedExtraPages < limit)
         }
 
         if (useSnapshot) {
@@ -16,6 +19,7 @@
 
           while (candidatePool.length < minNeeded && lastFetchedHadNext !== false) {
             if (!mayRequest()) break
+            issuedThisCall++
             var result = await snapshotFetchOffset(snapshotOffset)
             if (page._disposed) return
             snapshotOffset += 100
@@ -62,7 +66,7 @@
         } else {
           while (candidatePool.length < minNeeded && lastFetchedHadNext !== false) {
             if (!mayRequest()) break
-            var pageNumber = nextPageToFetch++
+            var pageNumber = nextPageToFetch
 
             // 現在ページUIから終端が分かっている場合は、存在しないページへ通信しない。
             if (knownLastPage != null && pageNumber > knownLastPage) {
@@ -90,6 +94,7 @@
 
             var result
             try {
+              issuedThisCall++
               result = await page.fetchPageItems(pageNumber, {
                 scope: 'RUN',
                 requestId: 'RUN-autofill-p' + pageNumber
@@ -115,11 +120,12 @@
               throw e
             }
 
+            if (!result || !Array.isArray(result.items)) throw new Error('取得ページの動画一覧が不正です')
+            nextPageToFetch = pageNumber + 1
             fetchedExtraPages++
             fetchedPageNumbers.add(pageNumber)
 
             var resultMaxPage = Number(result.maxPage)
-            if (!Array.isArray(result.items)) throw new Error('取得ページの動画一覧が不正です')
             if (!result.items.length) {
               // An empty/out-of-range response is not another consumed results page.
               fetchedExtraPages--
