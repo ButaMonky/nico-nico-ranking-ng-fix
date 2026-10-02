@@ -284,3 +284,47 @@ test('search values: counts, duration and registration time become known per fie
  for(const f of h.MetadataReadiness.searchFields)assert.notEqual(h.movie.metadata[f],'failed',f);
  assert.deepEqual([...h.MetadataReadiness.detailFields],['ownerId','ownerType','ownerName','ownerVisibility','tags','lockedTags','description']);
 });
+// BRUSH-013: getthumbinfo is only for fields a detail response alone supplies.
+const rulesOn=(h,...expressions)=>{h.config.advancedNgRulesEnabled.value=true;
+ h.config.advancedNgRulesJson.value=JSON.stringify(expressions.map(expression=>({expression})));};
+test('thumbinfo demand: search-page values never demand a detail request',async()=>{
+ const h=await setup(),M=h.MetadataReadiness;
+ for(const f of M.searchFields)assert.equal(Object.values(M.ruleFields).includes(f),false,f);
+ // Everything that can demand a field is switched on: search fields still are not demanded.
+ h.config.ngUserIds.add(1);h.config.ngChannelIds.add(2);h.config.ngUserNames.add('x');h.config.ngTags.add('t');h.config.ngLockedTags.add('l');
+ h.config.ngLockedTagCountEnabled.value=true;h.config.selfAdWarningEnabled.value=true;h.config.movieInfoTogglable.value=false;h.config.descriptionTogglable.value=false;
+ rulesOn(h,...Object.keys(h.MetadataReadiness.ruleFields).map(f=>condition(f)));h.movie.requestDetails();
+ const need=M.required(h.movie,h.config);
+ for(const f of M.searchFields)assert.equal(need.has(f),false,f);
+ // Known owner, all search values known or unknown: no request either way.
+ for(const values of [{},{likeCount:0,viewCount:1,commentCount:2,mylistCount:3,durationSeconds:4,registeredAtMs:Date.parse('2026-01-01T00:00:00Z')}]){
+  const g=await setup();g.config.ngUserIds.add(99);g.search('sm1',{type:'user',id:12,name:'synthetic'});
+  g.movie.observeSearchFields(values,'search');g.request();g.request();assert.equal(g.calls.length,0,JSON.stringify(values));
+ }
+});
+test('thumbinfo demand: owner, title, movie ID and page-count rules need no request once the owner is known',async()=>{
+ const rules=[condition('userId','eq',12),condition('channelId','notExists'),condition('contributorId','exists'),condition('contributorName','contains','syn'),
+  condition('title','contains','x'),condition('movieId','eq','sm1'),condition('pageContributorCount','gte',2),
+  group('AND',[condition('title','contains','x'),condition('userId','neq',5)],true)];
+ for(const rule of rules){
+  const h=await setup();rulesOn(h,rule);h.search('sm1',{type:'user',id:12,name:'synthetic'});
+  h.request();h.request();assert.equal(h.calls.length,0,JSON.stringify(rule));
+ }
+});
+test('thumbinfo demand: tag, locked tag, locked tag count and description each send exactly one request',async()=>{
+ for(const rule of [condition('tag','contains','t'),condition('lockedTag','exists'),condition('lockedTagCount','gte',1),condition('tagCount','lt',3),
+  condition('description','contains','d'),group('OR',[condition('title','contains','x'),condition('tag','exists')])]){
+  const h=await setup();rulesOn(h,rule);h.search('sm1',{type:'user',id:12,name:'synthetic'});
+  h.request();h.request();assert.equal(h.calls.length,1,JSON.stringify(rule));h.request.dispose();
+ }
+});
+test('thumbinfo demand: a recent detail result is reused instead of a second request',async()=>{
+ const h=await setup();rulesOn(h,condition('tag','exists'));h.search('sm1',{type:'user',id:12,name:'synthetic'});
+ h.request();assert.equal(h.calls.length,1);h.detail(payload('sm1',{type:'user',id:12,name:'synthetic'}));
+ h.request();h.request();assert.equal(h.calls.length,1);assert.equal(h.movie.metadata.tags,'known');
+});
+test('thumbinfo demand: a failed detail is not re-requested by the same requester',async()=>{
+ const h=await setup();rulesOn(h,condition('tag','exists'));h.search('sm1',{type:'user',id:12,name:'synthetic'});
+ h.request();h.fail({id:'sm1',error:{type:'NETWORK'}});h.request();h.request();
+ assert.equal(h.calls.length,1);assert.equal(h.movie.metadata.tags,'failed');
+});
