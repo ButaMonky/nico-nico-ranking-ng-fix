@@ -8,7 +8,7 @@ function harness(action){
  const c={page:{_disposed:false,_currentPageNumber:1},runLifetime:new AbortController(),AbortController,
   initialized:true,fetching:false,gaveUp:false,completionReported:false,refillController:null,
   model:{config:{autoFillEnabled:{value:true},autoFillMaxExtraPages:{value:0}}},
-  candidatePool:[],lastFetchedHadNext:true,fetchedExtraPages:0,noProgressStreak:0,useSnapshot:false,LOG:'fixture',
+  candidatePool:[],candidatePoolSeen:new Set(),lastFetchedHadNext:true,fetchedExtraPages:0,noProgressStreak:0,useSnapshot:false,LOG:'fixture',
   performance,console:new Proxy({}, {get:()=>()=>{}}),rebalanceOverflow(){},updateStatus(){},updatePagerUi(){},logSnapshot(){},
   visibleTotalCount:()=>visible,targetCount:()=>2,hasEarlierCandidate:()=>false,chooseDetailBatchSize:()=>1,
   setPhase:p=>{events.phase=p;},setTimeout:()=>events.scheduled++,
@@ -37,4 +37,17 @@ test('early stop: route cancellation settles the refill without reporting an err
   assert.ok(signal);c.page._disposed=true;c.runLifetime.abort();assert.equal(signal.aborted,true);
   throw Object.assign(Error('cancelled'),{name:'AbortError'});
  });await h.run();assert.equal(h.c.gaveUp,false);assert.equal(h.events.evaluate,0);assert.equal(h.c.candidatePool.length,1);
+});
+
+// BRUSH-027b: rejecting newly scanned videos is meaningful source progress.
+test('refill progress: unique NG-only windows do not trigger the empty-pool stop',async()=>{
+ const h=harness(async c=>{c.candidatePool.length=0;c.candidatePoolSeen.add('sm'+(c.candidatePoolSeen.size+1));});
+ h.c.noProgressStreak=4;
+ for(let i=0;i<7;i++){await h.run();assert.equal(h.c.gaveUp,false);assert.equal(h.c.noProgressStreak,0);}
+ assert.equal(h.events.fetch,7);assert.equal(h.events.evaluate,0);assert.equal(h.c.lastFetchedHadNext,true);
+});
+test('refill progress: duplicate-only windows still stop at the explicit no-progress budget',async()=>{
+ const h=harness(async c=>{c.candidatePool.length=0;});h.c.noProgressStreak=4;await h.run();
+ assert.equal(h.c.noProgressStreak,5);assert.equal(h.c.gaveUp,true);assert.equal(h.events.phase,'stopped');
+ assert.equal(h.c.lastFetchedHadNext,true,'client budget must not claim the source has ended');
 });

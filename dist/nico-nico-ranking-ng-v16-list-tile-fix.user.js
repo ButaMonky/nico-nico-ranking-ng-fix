@@ -13614,6 +13614,7 @@ var CardActionData = (function () {
             : detailBatchSize
 
           var fetchMs = 0
+          var seenBeforeFetch = candidatePoolSeen.size
           if (!hasEarlierCandidate() && candidatePool.length < detailBatchSize) {
             setPhase('fetching',
               '候補を補充中（必要 ' + detailBatchSize + '件 / プール ' + candidatePool.length + '件）')
@@ -13633,6 +13634,9 @@ var CardActionData = (function () {
               setPhase('stopped', stopReason)
               return
             }
+            // New unique videos rejected by NG still advance the search.
+            // Raw duplicate responses alone must not reset this safeguard.
+            if (candidatePoolSeen.size > seenBeforeFetch) { noProgressStreak = 0; return }
             noProgressStreak++
             if (noProgressStreak >= 5) {
               gaveUp = true
