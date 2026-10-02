@@ -53,6 +53,28 @@
         label:'動画ID', type:'text',
         operators:['contains','notContains','eq','neq']
       },
+      // BRUSH-016: counts and duration observed from search / server data.
+      // 0 is a known value; a missing value stays undecided (never 0).
+      likeCount: {
+        label:'いいね数', type:'number', metadata:true,
+        operators:['gt','gte','lt','lte','eq','neq','exists','notExists']
+      },
+      viewCount: {
+        label:'再生数', type:'number', metadata:true,
+        operators:['gt','gte','lt','lte','eq','neq','exists','notExists']
+      },
+      commentCount: {
+        label:'コメント数', type:'number', metadata:true,
+        operators:['gt','gte','lt','lte','eq','neq','exists','notExists']
+      },
+      mylistCount: {
+        label:'マイリスト数', type:'number', metadata:true,
+        operators:['gt','gte','lt','lte','eq','neq','exists','notExists']
+      },
+      durationSeconds: {
+        label:'動画時間（秒）', type:'number', metadata:true,
+        operators:['gt','gte','lt','lte','eq','neq','exists','notExists']
+      },
       selfAdIdMatch: {
         label:'広告：投稿者IDと広告者ID', type:'booleanFlag',
         operators:['isTrue','isFalse']
@@ -199,6 +221,15 @@
       if (field === 'title') return movie.title || ''
       if (field === 'pageContributorCount') return Number.isFinite(movie.pageContributorCount)
         ? movie.pageContributorCount : {__notReady:true}
+      // BRUSH-016: search-only numeric metadata. Only a 'known' status with a
+      // non-negative safe integer is a value; anything else stays undecided.
+      // These fields are not in MetadataReadiness.ruleFields on purpose: no
+      // detail request can supply them, so they never block settlement.
+      if (FIELD_META[field] && FIELD_META[field].metadata) {
+        var known = movie.metadata && movie.metadata[field] === 'known'
+        var count = movie[field]
+        return known && Number.isSafeInteger(count) && count >= 0 ? count : {__notReady:true}
+      }
 
       // Partial metadata must not become an empty value under NOT / notExists.
       var requiredField = MetadataReadiness.ruleFields[field]
@@ -238,6 +269,12 @@
       if (field === 'movieId' || field === 'title') return {state:'known', source:'page'}
       if (field === 'pageContributorCount') return Number.isFinite(movie.pageContributorCount)
         ? {state:'known', source:'page'} : {state:'unknown', source:null}
+      if (FIELD_META[field] && FIELD_META[field].metadata) {
+        if (!movie.metadata || movie.metadata[field] !== 'known' || !Number.isSafeInteger(movie[field]) || movie[field] < 0)
+          return {state:'unknown', source:null}
+        var observed = MetadataReadiness.sourceOf(movie, field)
+        return {state:'known', source:observed ? observed.source : null}
+      }
       var requiredField = MetadataReadiness.ruleFields[field]
       if (requiredField && !movie.metadata) {
         var done = movie.thumbInfoDone && !(movie.error && movie.error.type !== 'NO_ERROR')
@@ -255,6 +292,17 @@
         return movie.nicoadSelfAdError ? {state:'failed', source:null, failureKind:'nicoad'} : {state:'unknown', source:null}
       }
       return {state:'known', source:null}
+    }
+
+    // Non-negative safe integer written as a number or plain digits; nothing is
+    // rounded or reinterpreted ('1.5', '1e3', '-1', 'Infinity' are rejected).
+    var numericThreshold = function(value) {
+      if (typeof value === 'number') return Number.isSafeInteger(value) && value >= 0 ? value : null
+      if (typeof value !== 'string') return null
+      var text = value.trim()
+      if (!/^[0-9]+$/.test(text)) return null
+      var n = Number(text)
+      return Number.isSafeInteger(n) ? n : null
     }
 
     var existsValue = function(v) {
@@ -316,7 +364,12 @@
         if (!meta) return null
         var actual = fieldValue(movie, node.field)
         var pending = Boolean(actual && actual.__notReady)
-        var raw = pending ? null : compare(actual, node.operator, node.value, meta.type)
+        // BRUSH-016: a numeric metadata threshold must be a non-negative
+        // integer as written. An unusable threshold leaves the condition
+        // undecided, so NOT cannot turn it into a match.
+        var badThreshold = Boolean(meta.metadata && OP_META[node.operator] && OP_META[node.operator].needsValue
+          && numericThreshold(node.value) === null)
+        var raw = pending || badThreshold ? null : compare(actual, node.operator, node.value, meta.type)
         var result = raw === null ? null : (node.not ? !raw : raw)
         if (trace) {
           trace.push({
@@ -453,6 +506,7 @@
       evaluateState:evaluateState,
       explain:explain,
       fieldOrigin:fieldOrigin,
+      numericThreshold:numericThreshold,
       expressionText:expressionText,
       makeGroup:makeGroup,
       makeCondition:makeCondition,
