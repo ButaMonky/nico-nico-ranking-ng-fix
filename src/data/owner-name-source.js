@@ -38,7 +38,7 @@
             if (json?.meta?.status != null && json.meta.status !== 200) throw new Error('content status failure')
             if (!data || data.id !== id) throw new Error('content identity mismatch')
             // Never keep raw response objects or unrelated fields in our cache.
-            return {data:{id:data.id,ownerId:data.ownerId,ownerName:data.ownerName,
+            return {data:{id:data.id,ownerId:data.ownerId,ownerName:data.ownerName,ownerIcon:data.ownerIcon,
               targetUrl:data.targetUrl,decoration:data.decoration,totalPoint:data.totalPoint},fetchedAt:Date.now()}
           } catch (error) { diagnostics?.validationFailure(kind,'run','invalid'); throw error }
         })
@@ -93,7 +93,8 @@
           const data = result?.data
           const name = typeof data?.ownerName === 'string' && data.ownerName.trim() ? data.ownerName : null
           const accepted = Boolean(data && data.id === movie.id && data.ownerId != null
-            && applySupplement(movie.id,{type:'user',id:String(data.ownerId),name},'nicoad',result.fetchedAt))
+            && applySupplement(movie.id,{type:'user',id:String(data.ownerId),name,
+              ...(typeof data.ownerIcon === 'string' && data.ownerIcon ? {iconUrl:data.ownerIcon} : {})},'nicoad',result.fetchedAt))
           movie._nrnOwnerIdStatus = accepted ? 'accepted' : 'rejected'
         },error => { if (!disposed) movie._nrnOwnerIdStatus = error?.status === 404 ? 'absent' : 'failed' }).finally(() => {
           movie._nrnOwnerIdPending = false

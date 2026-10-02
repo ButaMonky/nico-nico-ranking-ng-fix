@@ -2034,7 +2034,10 @@
       const name = typeof owner.name === 'string' ? owner.name.trim() : null
       const visibility = owner.visibility === 'hidden' || owner.ownerType === 'hidden'
         ? 'hidden' : owner.visibility === 'visible' ? 'visible' : null
-      return {type,id,name,visibility}
+      // BRUSH-012B: an explicit icon URL from the same record travels with the
+      // owner as a display candidate only (validated by OwnerIcon when shown).
+      const icon = typeof owner.iconUrl === 'string' && owner.iconUrl ? {iconUrl:owner.iconUrl} : {}
+      return {type,id,name,visibility,...icon}
     }
     function fromUrl(value, base) {
       try {
@@ -2261,6 +2264,7 @@
         if (owner.name === null && search.name !== null) name = 'search'
         if (owner.visibility == null && search.visibility != null) visibility = 'search'
         owner = {...owner,name:owner.name ?? search.name,visibility:owner.visibility ?? search.visibility}
+        if (!owner.iconUrl && search.iconUrl) owner.iconUrl = search.iconUrl
       }
       const nameSupplement = input?.nameSupplement
       if (owner?.name === null && nameSupplement && same(owner,nameSupplement)) {
@@ -2277,6 +2281,7 @@
           visibility = owner.visibility != null ? extra.source : null
         } else if (same(owner,extra.owner)) {
           if (owner.name === null && extra.owner.name != null) { owner = {...owner,name:extra.owner.name};name = extra.source }
+          if (!owner.iconUrl && extra.owner.iconUrl) owner = {...owner,iconUrl:extra.owner.iconUrl}
         } else conflict = true
       }
       const status = identity === 'detail' || identity === 'search' ? 'known'
@@ -2394,6 +2399,90 @@
       return {enqueue, flush, dispose}
     }
     return {endpoint, batchSize, url, parse, create}
+  })()
+
+  // BRUSH-012B: owner icon candidates in one priority order. An icon is only
+  // a display candidate: a 404, a blank image or a successful CDN load says
+  // nothing about whether the account exists, was deleted or used this icon.
+  // Setting <img src> is an image GET; cards use loading="lazy" so off-screen
+  // owners are not fetched ahead of time.
+  var OwnerIcon = (function() {
+    const blank = 'https://secure-dcdn.cdn.nimg.jp/nicoaccount/usericon/defaults/blank.jpg'
+    // A broken URL is skipped for a short while, then may be tried again.
+    const failureTtl = 30000, maxFailures = 512
+    const failures = new Map()
+    // https on a nimg.jp host only; http is upgraded; the query string is kept.
+    function valid(value) {
+      if (typeof value !== 'string' || !value) return null
+      try {
+        const url = new URL(value.replace(/^http:\/\//,'https://'))
+        if (url.protocol !== 'https:' || url.username || url.password || url.port) return null
+        return /(^|\.)nimg\.jp$/.test(url.hostname) ? url.href : null
+      } catch (_) { return null }
+    }
+    const isDefault = url => /\/usericon\/defaults\/blank\.jpg(?:[?#]|$)/.test(url)
+    // CDN URL from the canonical decimal user ID (no Number arithmetic).
+    function cdn(owner) {
+      if (owner?.type !== 'user') return null
+      const id = OwnerId.canonical(owner.id), bucket = OwnerId.bucket(owner.id)
+      return id && bucket ? 'https://secure-dcdn.cdn.nimg.jp/nicoaccount/usericon/' + bucket + '/' + id + '.jpg' : null
+    }
+    // Ordered, de-duplicated: native page icon -> API icon -> CDN -> default.
+    // Default images found in native/API data do not stop a CDN attempt.
+    function candidates({native = null, api = null, owner = null} = {}) {
+      const list = [], seen = new Set()
+      const add = (value, source) => {
+        const url = valid(value)
+        if (url && !seen.has(url)) { seen.add(url);list.push({url, source}) }
+      }
+      for (const [value, source] of [[native,'native'],[api,'api']]) {
+        const url = valid(value)
+        if (url && !isDefault(url)) add(url, source)
+      }
+      add(cdn(owner),'cdn')
+      add(blank,'default')
+      return list
+    }
+    function recentlyFailed(url, now) {
+      const at = failures.get(url)
+      if (at === undefined) return false
+      if (now - at >= failureTtl) { failures.delete(url);return false }
+      return true
+    }
+    function noteFailure(url, now) {
+      failures.delete(url);failures.set(url,now)
+      while (failures.size > maxFailures) failures.delete(failures.keys().next().value)
+    }
+    // Shows the first candidate that has not failed recently; each error moves
+    // on once, so the chain ends after at most list.length attempts with a
+    // local fallback (no image request). A card removed from the page stops.
+    function apply(image, list, clock = Date.now) {
+      let index = -1
+      const finish = () => {
+        image.onerror = null
+        image.removeAttribute('src')
+        image.style.visibility = 'hidden'
+        image.dataset.nrnIconSource = 'local'
+        image.dataset.nrnIconState = 'local-fallback'
+      }
+      const next = () => {
+        index++
+        while (index < list.length && recentlyFailed(list[index].url, clock())) index++
+        if (index >= list.length) return finish()
+        image.style.visibility = ''
+        image.dataset.nrnIconSource = list[index].source
+        image.dataset.nrnIconState = 'loading'
+        image.src = list[index].url
+      }
+      image.onload = () => { image.dataset.nrnIconState = 'loaded' }
+      image.onerror = () => {
+        if (list[index]) noteFailure(list[index].url, clock())
+        if (!image.isConnected) { image.onerror = null;return }
+        next()
+      }
+      next()
+    }
+    return {blank, failureTtl, valid, isDefault, cdn, candidates, apply, _failures:failures}
   })()
   var ThumbInfoListener = (function() {
     var createTagBuilder = function(config) {
@@ -2517,7 +2606,8 @@
             movie._nrnSearchOwnerConflict = true
           } else {
             movie._nrnSearchContributor = previous ? {...owner,
-              name:previous.name || (owner.name ?? previous.name),visibility:previous.visibility ?? owner.visibility} : owner
+              name:previous.name || (owner.name ?? previous.name),visibility:previous.visibility ?? owner.visibility,
+              ...(owner.iconUrl || previous.iconUrl ? {iconUrl:owner.iconUrl || previous.iconUrl} : {})} : owner
             movie._nrnSearchObservedAt = Date.now()
           }
           selectOwner(movie,getContributorBy)
@@ -8435,7 +8525,6 @@ div:has(> div > a[data-anchor-page="ranking_genre"][href^="/watch/"] > div > p),
   // Composition root / application startup
   // ========================================================================
   var CardEnhancements = (function() {
-    const blankIcon = 'https://img.nicoprofile.nimg.jp/usericon/defaults/blank.jpg'
     function highlight(node, terms) {
       if (!node) return
       const text = node.textContent, upper = text.toUpperCase()
@@ -8504,9 +8593,10 @@ div:has(> div > a[data-anchor-page="ranking_genre"][href^="/watch/"] > div > p),
       const image = doc.createElement('img')
       image.alt = ''; image.loading = 'lazy'; image.decoding = 'async'; image.fetchPriority = 'low'
       image.className = 'bdr_full ov_hidden contain_content_size w_x3 min-w_x3 h_x3'
-      image.src = native?.querySelector('img')?.src || (owner?.type === 'user' && Number(owner.id) > 0
-        ? 'https://secure-dcdn.cdn.nimg.jp/nicoaccount/usericon/' + Math.floor(owner.id / 10000) + '/' + owner.id + '.jpg' : blankIcon)
-      image.addEventListener('error', () => { if (image.src !== blankIcon) image.src = blankIcon }, {once:true})
+      // BRUSH-012B: native page icon -> API ownerIcon -> CDN -> default -> local.
+      const apiOwner = movie?.owner
+      const api = identity && apiOwner && OwnerEvidence.same(identity, OwnerEvidence.normalize(apiOwner)) ? apiOwner.iconUrl : null
+      OwnerIcon.apply(image, OwnerIcon.candidates({native: native?.querySelector('img')?.src, api, owner}))
       const name = doc.createElement('p'); name.className = 'fw_bold lc_1 nrn-owner-name'
       name.textContent = knownName || (movie?._nrnOwnerNamePending ? '投稿者名を確認中' : '投稿者名不明')
       if (!owner || !knownName) link.classList.add('nrn-owner-unavailable')
@@ -8553,7 +8643,7 @@ div:has(> div > a[data-anchor-page="ranking_genre"][href^="/watch/"] > div > p),
           nativeOwner.title = movie._nrnOwnerNameSource === 'nicoad'
             ? '広告情報に残る投稿者名（現在の名前とは異なる場合があります）' : ''
         }
-        const signature = JSON.stringify([owner?.type, owner?.id, owner?.name, owner?.ngName,movie._nrnOwnerNamePending,movie._nrnOwnerNameSource])
+        const signature = JSON.stringify([owner?.type, owner?.id, owner?.name, owner?.ngName,movie._nrnOwnerNamePending,movie._nrnOwnerNameSource,movie.owner?.iconUrl])
         const nativeName = OwnerEvidence.nativeName(nativeOwner?.querySelector('p')?.textContent || nativeOwner?.textContent)
         const needsCompact = movie.metadata.ownerName === 'known' && owner?.name && owner.type !== 'unknown'
           && (!nativeOwner || (OwnerEvidence.same(OwnerEvidence.normalize(owner),OwnerEvidence.fromUrl(nativeOwner.href)) && nativeName !== owner.name))
@@ -8679,7 +8769,7 @@ a.nrn-parsed[data-anchor-detail="nicoad"] > .nrn-movie-info-toggle { background:
             if (json?.meta?.status != null && json.meta.status !== 200) throw new Error('content status failure')
             if (!data || data.id !== id) throw new Error('content identity mismatch')
             // Never keep raw response objects or unrelated fields in our cache.
-            return {data:{id:data.id,ownerId:data.ownerId,ownerName:data.ownerName,
+            return {data:{id:data.id,ownerId:data.ownerId,ownerName:data.ownerName,ownerIcon:data.ownerIcon,
               targetUrl:data.targetUrl,decoration:data.decoration,totalPoint:data.totalPoint},fetchedAt:Date.now()}
           } catch (error) { diagnostics?.validationFailure(kind,'run','invalid'); throw error }
         })
@@ -8734,7 +8824,8 @@ a.nrn-parsed[data-anchor-detail="nicoad"] > .nrn-movie-info-toggle { background:
           const data = result?.data
           const name = typeof data?.ownerName === 'string' && data.ownerName.trim() ? data.ownerName : null
           const accepted = Boolean(data && data.id === movie.id && data.ownerId != null
-            && applySupplement(movie.id,{type:'user',id:String(data.ownerId),name},'nicoad',result.fetchedAt))
+            && applySupplement(movie.id,{type:'user',id:String(data.ownerId),name,
+              ...(typeof data.ownerIcon === 'string' && data.ownerIcon ? {iconUrl:data.ownerIcon} : {})},'nicoad',result.fetchedAt))
           movie._nrnOwnerIdStatus = accepted ? 'accepted' : 'rejected'
         },error => { if (!disposed) movie._nrnOwnerIdStatus = error?.status === 404 ? 'absent' : 'failed' }).finally(() => {
           movie._nrnOwnerIdPending = false

@@ -37,6 +37,7 @@
         if (owner.name === null && search.name !== null) name = 'search'
         if (owner.visibility == null && search.visibility != null) visibility = 'search'
         owner = {...owner,name:owner.name ?? search.name,visibility:owner.visibility ?? search.visibility}
+        if (!owner.iconUrl && search.iconUrl) owner.iconUrl = search.iconUrl
       }
       const nameSupplement = input?.nameSupplement
       if (owner?.name === null && nameSupplement && same(owner,nameSupplement)) {
@@ -53,6 +54,7 @@
           visibility = owner.visibility != null ? extra.source : null
         } else if (same(owner,extra.owner)) {
           if (owner.name === null && extra.owner.name != null) { owner = {...owner,name:extra.owner.name};name = extra.source }
+          if (!owner.iconUrl && extra.owner.iconUrl) owner = {...owner,iconUrl:extra.owner.iconUrl}
         } else conflict = true
       }
       const status = identity === 'detail' || identity === 'search' ? 'known'

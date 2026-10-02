@@ -120,7 +120,8 @@
             movie._nrnSearchOwnerConflict = true
           } else {
             movie._nrnSearchContributor = previous ? {...owner,
-              name:previous.name || (owner.name ?? previous.name),visibility:previous.visibility ?? owner.visibility} : owner
+              name:previous.name || (owner.name ?? previous.name),visibility:previous.visibility ?? owner.visibility,
+              ...(owner.iconUrl || previous.iconUrl ? {iconUrl:owner.iconUrl || previous.iconUrl} : {})} : owner
             movie._nrnSearchObservedAt = Date.now()
           }
           selectOwner(movie,getContributorBy)

@@ -18,7 +18,10 @@
       const name = typeof owner.name === 'string' ? owner.name.trim() : null
       const visibility = owner.visibility === 'hidden' || owner.ownerType === 'hidden'
         ? 'hidden' : owner.visibility === 'visible' ? 'visible' : null
-      return {type,id,name,visibility}
+      // BRUSH-012B: an explicit icon URL from the same record travels with the
+      // owner as a display candidate only (validated by OwnerIcon when shown).
+      const icon = typeof owner.iconUrl === 'string' && owner.iconUrl ? {iconUrl:owner.iconUrl} : {}
+      return {type,id,name,visibility,...icon}
     }
     function fromUrl(value, base) {
       try {

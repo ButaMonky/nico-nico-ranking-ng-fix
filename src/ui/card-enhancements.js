@@ -1,5 +1,4 @@
   var CardEnhancements = (function() {
-    const blankIcon = 'https://img.nicoprofile.nimg.jp/usericon/defaults/blank.jpg'
     function highlight(node, terms) {
       if (!node) return
       const text = node.textContent, upper = text.toUpperCase()
@@ -68,9 +67,10 @@
       const image = doc.createElement('img')
       image.alt = ''; image.loading = 'lazy'; image.decoding = 'async'; image.fetchPriority = 'low'
       image.className = 'bdr_full ov_hidden contain_content_size w_x3 min-w_x3 h_x3'
-      image.src = native?.querySelector('img')?.src || (owner?.type === 'user' && Number(owner.id) > 0
-        ? 'https://secure-dcdn.cdn.nimg.jp/nicoaccount/usericon/' + Math.floor(owner.id / 10000) + '/' + owner.id + '.jpg' : blankIcon)
-      image.addEventListener('error', () => { if (image.src !== blankIcon) image.src = blankIcon }, {once:true})
+      // BRUSH-012B: native page icon -> API ownerIcon -> CDN -> default -> local.
+      const apiOwner = movie?.owner
+      const api = identity && apiOwner && OwnerEvidence.same(identity, OwnerEvidence.normalize(apiOwner)) ? apiOwner.iconUrl : null
+      OwnerIcon.apply(image, OwnerIcon.candidates({native: native?.querySelector('img')?.src, api, owner}))
       const name = doc.createElement('p'); name.className = 'fw_bold lc_1 nrn-owner-name'
       name.textContent = knownName || (movie?._nrnOwnerNamePending ? '投稿者名を確認中' : '投稿者名不明')
       if (!owner || !knownName) link.classList.add('nrn-owner-unavailable')
@@ -117,7 +117,7 @@
           nativeOwner.title = movie._nrnOwnerNameSource === 'nicoad'
             ? '広告情報に残る投稿者名（現在の名前とは異なる場合があります）' : ''
         }
-        const signature = JSON.stringify([owner?.type, owner?.id, owner?.name, owner?.ngName,movie._nrnOwnerNamePending,movie._nrnOwnerNameSource])
+        const signature = JSON.stringify([owner?.type, owner?.id, owner?.name, owner?.ngName,movie._nrnOwnerNamePending,movie._nrnOwnerNameSource,movie.owner?.iconUrl])
         const nativeName = OwnerEvidence.nativeName(nativeOwner?.querySelector('p')?.textContent || nativeOwner?.textContent)
         const needsCompact = movie.metadata.ownerName === 'known' && owner?.name && owner.type !== 'unknown'
           && (!nativeOwner || (OwnerEvidence.same(OwnerEvidence.normalize(owner),OwnerEvidence.fromUrl(nativeOwner.href)) && nativeName !== owner.name))
