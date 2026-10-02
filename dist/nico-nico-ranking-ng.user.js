@@ -1127,7 +1127,7 @@
     // Provenance is an optional record kept beside movie.metadata. The status
     // strings stay authoritative: a record never promotes a field to known, and
     // a record that no longer matches its field status is not reported.
-    const sources = new Set(['search','detail','cache','nicoad'])
+    const sources = new Set(['search','detail','cache','nicoad','snapshot'])
     function provenanceMap(movie) {
       if (!movie.metadataSource) movie.metadataSource = {}
       return movie.metadataSource
@@ -1678,6 +1678,8 @@
       this._thumbInfoDone = false
       this.metadata = Object.fromEntries(MetadataReadiness.fields.map(field => [field,'unknown']))
       this.metadataSource = {}
+      // OwnerResolver outcome: {status: known|supplemented|missing|unresolved, source, conflict}.
+      this.ownerResolution = {status:'unresolved', source:null, conflict:false}
       // Search page values (BRUSH-006/007): null until a valid value is observed.
       for (const field of MetadataReadiness.searchFields) this[field] = null
       this.owner = null
@@ -2154,6 +2156,69 @@
     }
     return {fields, normalize, tryNormalize, count, timestamp, valueOf, itemsOf, readDocument, register, fromRoot, valuesById, valuesFor}
   })()
+
+  // One place that states and applies the owner (投稿者) priority. Pure: it
+  // never fetches; callers pass already-normalized OwnerEvidence owners.
+  //
+  // Priority (highest first) and where each tier comes from:
+  //   detail     getthumbinfo, live or restored from the session cache
+  //              (provenance 'detail' / 'cache')
+  //   search     page evidence merged by ThumbInfoListener.forSearch:
+  //              server-response (initial document / fetched pages),
+  //              native owner row, delayed native row (refreshSearchOwners)
+  //   supplement ID-only lookups for videos the tiers above left without an
+  //              owner: nicoad contents (BRUSH-009), snapshot (BRUSH-010)
+  //   unresolved nothing usable; never read as deleted / withdrawn / private
+  //
+  // A lower tier never replaces or contradicts a higher one. It may only fill
+  // a missing name or visibility of the same identity (same type and ID).
+  var OwnerResolver = (function() {
+    const priority = ['detail','search','supplement']
+    const supplementSources = new Set(['nicoad','snapshot'])
+    // Supplements are accepted only for user-uploaded videos and user owners.
+    function acceptsSupplement(videoId, owner, source) {
+      return Boolean(owner) && owner.type === 'user' && supplementSources.has(source)
+        && typeof videoId === 'string' && /^(sm|nm)[0-9]+$/.test(videoId)
+    }
+    // input: {videoId, detail, search, nameSupplement, supplement:{owner, source, at}, detailCompleted}
+    // nameSupplement: a nicoad name already checked by OwnerEvidence.nicoadName.
+    // Returns {owner, status, identity, name, visibility, conflict}; each source
+    // field is a tier/source name or null. status: known | supplemented | missing | unresolved.
+    function select(input) {
+      const same = OwnerEvidence.same
+      const {detail = null, search = null} = input || {}
+      let owner = detail || search
+      let identity = detail ? 'detail' : search ? 'search' : null
+      let name = owner?.name != null ? identity : null
+      let visibility = owner ? identity : null
+      if (owner && same(owner,search)) {
+        if (owner.name === null && search.name !== null) name = 'search'
+        if (owner.visibility == null && search.visibility != null) visibility = 'search'
+        owner = {...owner,name:owner.name ?? search.name,visibility:owner.visibility ?? search.visibility}
+      }
+      const nameSupplement = input?.nameSupplement
+      if (owner?.name === null && nameSupplement && same(owner,nameSupplement)) {
+        owner = {...owner,name:nameSupplement.name}
+        name = 'nicoad'
+      }
+      let conflict = false
+      const extra = input?.supplement
+      if (extra?.owner && acceptsSupplement(input.videoId,extra.owner,extra.source)) {
+        if (!owner) {
+          owner = extra.owner
+          identity = extra.source
+          name = owner.name != null ? extra.source : null
+          visibility = owner.visibility != null ? extra.source : null
+        } else if (same(owner,extra.owner)) {
+          if (owner.name === null && extra.owner.name != null) { owner = {...owner,name:extra.owner.name};name = extra.source }
+        } else conflict = true
+      }
+      const status = identity === 'detail' || identity === 'search' ? 'known'
+        : identity ? 'supplemented' : input?.detailCompleted ? 'missing' : 'unresolved'
+      return {owner:owner || null, status, identity, name, visibility, conflict}
+    }
+    return {priority, supplementSources, acceptsSupplement, select}
+  })()
   var ThumbInfoListener = (function() {
     var createTagBuilder = function(config) {
       var map = new Map()
@@ -2207,33 +2272,50 @@
       if (!builders.has(movies)) builders.set(movies,createContributorBuilder(movies.config))
       return builders.get(movies)
     }
+    // Priority and merge rules live in OwnerResolver; this applies the result.
     function selectOwner(movie, getContributorBy) {
-      let owner = movie._nrnDetailContributor || movie._nrnSearchContributor
-      movie._nrnContributorSource = movie._nrnDetailContributor ? 'detail' : owner ? 'search' : 'unknown'
-      movie._nrnOwnerNameSource = owner?.name != null ? movie._nrnContributorSource : 'unknown'
-      const search = movie._nrnSearchContributor
-      let visibilitySource = movie._nrnContributorSource
-      if (owner && OwnerEvidence.same(owner,search)) {
-        if (owner.name === null && search.name !== null) movie._nrnOwnerNameSource = 'search'
-        if (owner.visibility == null && search.visibility != null) visibilitySource = 'search'
-        owner = {...owner,name:owner.name ?? search.name,visibility:owner.visibility ?? search.visibility}
-      }
-      const supplement = movie._nrnOwnerNameSupplement
-      if (owner?.name === null && OwnerEvidence.nicoadName(movie.id,supplement,owner)) {
-        owner = {...owner,name:supplement.ownerName.trim()}
-        movie._nrnOwnerNameSource = 'nicoad'
-      }
-      const mark = source => source === 'search' ? {source,at:movie._nrnSearchObservedAt}
-        : source === 'nicoad' ? {source,at:supplement?.fetchedAt}
-        : source === 'detail' ? {source:movie._nrnDetailOwnerSource || 'detail',at:movie._nrnDetailOwnerAt} : null
-      movie.setOwnerKnowledge(owner || null,owner ? {ownerId:mark(movie._nrnContributorSource),
-        ownerType:mark(movie._nrnContributorSource),ownerName:mark(movie._nrnOwnerNameSource),
-        ownerVisibility:mark(visibilitySource)} : null)
+      const primary = movie._nrnDetailContributor || movie._nrnSearchContributor
+      const nameData = movie._nrnOwnerNameSupplement
+      const extra = movie._nrnOwnerSupplement
+      const result = OwnerResolver.select({videoId:movie.id, detail:movie._nrnDetailContributor || null,
+        search:movie._nrnSearchContributor || null, nameSupplement:OwnerEvidence.nicoadName(movie.id,nameData,primary),
+        supplement:extra || null, detailCompleted:Boolean(movie._nrnDetailAnswered)})
+      const owner = result.owner
+      movie._nrnContributorSource = result.identity || 'unknown'
+      movie._nrnOwnerNameSource = result.name || 'unknown'
+      movie.ownerResolution = {status:result.status, source:result.identity, conflict:result.conflict}
+      // Provenance: detail/search carry their own observation times; a
+      // supplement source uses the time of the lookup that supplied it.
+      const mark = (source, supplementAt) => !source ? null
+        : source === 'detail' ? {source:movie._nrnDetailOwnerSource || 'detail',at:movie._nrnDetailOwnerAt}
+        : source === 'search' ? {source,at:movie._nrnSearchObservedAt} : {source,at:supplementAt}
+      const nameAt = result.name === result.identity ? extra?.at : nameData?.fetchedAt
+      movie.setOwnerKnowledge(owner,owner ? {ownerId:mark(result.identity,extra?.at),
+        ownerType:mark(result.identity,extra?.at),ownerName:mark(result.name,nameAt),
+        ownerVisibility:mark(result.visibility,extra?.at)} : null)
       const selected = owner ? getContributorBy(owner,movie._nrnContributorSource) : Contributor.NULL
       if (movie.contributor !== selected) movie.contributor = selected
       movie.metadataChanged()
     }
     return {
+      // Entry point for ID supplements (nicoad: BRUSH-009, snapshot: BRUSH-010).
+      // No communication here. Accepted only for sm/nm videos with a user owner;
+      // it never replaces or contradicts detail/search owners. Returns boolean.
+      forSupplement(movies) {
+        const getContributorBy = builder(movies)
+        return function(id, evidence, source, observedAt = Date.now()) {
+          const movie = movies.get(id), owner = OwnerEvidence.normalize(evidence)
+          if (!movie || !OwnerResolver.acceptsSupplement(id,owner,source)) return false
+          if (!Number.isFinite(observedAt) || observedAt > Date.now()) return false
+          const primary = movie._nrnDetailContributor || movie._nrnSearchContributor
+          if (primary && !OwnerEvidence.same(primary,owner)) return false
+          const previous = movie._nrnOwnerSupplement
+          if (previous && !OwnerEvidence.same(previous.owner,owner)) return false
+          movie._nrnOwnerSupplement = {owner:previous ? {...owner,name:owner.name ?? previous.owner.name} : owner,source,at:observedAt}
+          selectOwner(movie,getContributorBy)
+          return true
+        }
+      },
       forOwnerName(movies) {
         const getContributorBy = builder(movies)
         return function(id,data,fetchedAt = Date.now()) {
@@ -2283,6 +2365,8 @@
             MetadataReadiness.noteSource(m,'tags',m._nrnDetailSource,m._nrnDetailFetchedAt)
             MetadataReadiness.noteSource(m,'lockedTags',m._nrnDetailSource,m._nrnDetailFetchedAt)
           }
+          // A successful detail answer (not a failure) can report a missing owner.
+          m._nrnDetailAnswered = true
           // Keep raw API/cache objects unchanged; search evidence belongs to this route's movie.
           const detailOwner = OwnerEvidence.normalize(thumbInfo.contributor)
           if (detailOwner) {

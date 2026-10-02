@@ -51,7 +51,7 @@
     // Provenance is an optional record kept beside movie.metadata. The status
     // strings stay authoritative: a record never promotes a field to known, and
     // a record that no longer matches its field status is not reported.
-    const sources = new Set(['search','detail','cache','nicoad'])
+    const sources = new Set(['search','detail','cache','nicoad','snapshot'])
     function provenanceMap(movie) {
       if (!movie.metadataSource) movie.metadataSource = {}
       return movie.metadataSource

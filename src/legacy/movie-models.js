@@ -13,6 +13,8 @@
       this._thumbInfoDone = false
       this.metadata = Object.fromEntries(MetadataReadiness.fields.map(field => [field,'unknown']))
       this.metadataSource = {}
+      // OwnerResolver outcome: {status: known|supplemented|missing|unresolved, source, conflict}.
+      this.ownerResolution = {status:'unresolved', source:null, conflict:false}
       // Search page values (BRUSH-006/007): null until a valid value is observed.
       for (const field of MetadataReadiness.searchFields) this[field] = null
       this.owner = null
