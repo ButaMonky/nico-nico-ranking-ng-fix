@@ -67,6 +67,7 @@ async function idSetup(videoId='sm2'){
   signal.addEventListener('abort',()=>reject(Error('abort')));
  });
  const h=await setup({fetch});const movie=new h.Movie(videoId,'missing-owner');h.movies.setIfAbsent([movie]);
+ h.config.ngUserIds.add(1);// BRUSH-011: an owner ID demand is required for any supplement lookup
  h.ThumbInfoListener.forCompleted(h.movies)({id:videoId,contributor:null,description:'',tags:[]});
  return {...h,m:movie,pending};
 }
@@ -110,7 +111,7 @@ test('owner ID supplement: dispose aborts and late answers are ignored',async()=
  assert.equal(h.m.contributor.type,'unknown');assert.equal(h.m._nrnOwnerIdPending,false);
 });
 test('owner ID supplement: videos nicoad cannot resolve are handed to the snapshot batch',async()=>{
- const h=await idSetup();const queued=[];
+ const h=await idSetup();const queued=[];h.config.ngUserNames.add('synthetic');// name demand -> nicoad first
  const code=await readFile(new URL('../src/data/owner-name-source.js',import.meta.url),'utf8');
  const service=vm.runInContext(code+';OwnerNameSource',vm.createContext({...h,URL,AbortController,setTimeout,clearTimeout,performance,
   Network:h.Network,ThumbInfoListener:h.ThumbInfoListener,MetadataReadiness:h.MetadataReadiness,OwnerEvidence:h.OwnerEvidence,
@@ -118,4 +119,47 @@ test('owner ID supplement: videos nicoad cannot resolve are handed to the snapsh
   .create(h.movies,undefined,{snapshot:{enqueue:m=>{queued.push(m.id);return true;},dispose(){}}});
  service.request([h.m]);await tick();h.pending.at(-1).status(404);await tick();
  assert.deepEqual(queued,['sm2']);assert.equal(h.m._nrnOwnerIdStatus,'absent');service.dispose();h.service.dispose();
+});
+// BRUSH-011: owner supplement only when something needs the owner.
+async function demandSetup(count=1,known=0){
+ const h=await idSetup();h.config.ngUserIds.clear();h.service.dispose();
+ const extra=[];for(let i=0;i<count;i++){const m=new h.Movie('sm'+(100+i),'x');h.movies.setIfAbsent([m]);extra.push(m);
+  if(i<known)h.ThumbInfoListener.forSearch(h.movies)(m.id,{type:'user',id:500+i,name:'page'});
+  else h.ThumbInfoListener.forCompleted(h.movies)({id:m.id,contributor:null,description:'',tags:[]});}
+ const snap={queued:[],callbacks:new Map(),enqueue(m,cb){if(m.ownerResolution.status!=='missing')return false;this.queued.push(m.id);if(cb)this.callbacks.set(m.id,cb);return true;},dispose(){}};
+ const code=await readFile(new URL('../src/data/owner-name-source.js',import.meta.url),'utf8');
+ const ctx=vm.createContext({URL,AbortController,setTimeout,clearTimeout,performance,Network:h.Network,ThumbInfoListener:h.ThumbInfoListener,
+  MetadataReadiness:h.MetadataReadiness,OwnerEvidence:h.OwnerEvidence,fetch:(url,{signal})=>new Promise((resolve,reject)=>{
+   h.pending.push({url,status:code=>resolve({ok:false,status:code,url,text:async()=>''})});signal.addEventListener('abort',()=>reject(Error('abort')));})});
+ const service=vm.runInContext(code+';OwnerNameSource',ctx).create(h.movies,undefined,{snapshot:snap});
+ return {...h,list:extra,snap,service,before:h.pending.length};
+}
+test('owner demand: no NG, visibility or name use means no supplement request at all',async()=>{
+ const h=await demandSetup(3);h.service.request(h.list);await tick();
+ assert.equal(h.pending.length,h.before);assert.deepEqual(h.snap.queued,[]);
+ for(const m of h.list){assert.equal(m._nrnOwnerIdStatus,'not-needed');assert.equal(m.metadataSettled,true);}
+ h.config.ngUserIds.add(9);h.service.request(h.list);await tick();
+ assert.deepEqual(h.snap.queued,h.list.map(m=>m.id),'a later NG setting re-plans the same videos');h.service.dispose();
+});
+test('owner demand: ID-only demand batches the unresolved videos and skips known owners',async()=>{
+ const h=await demandSetup(48,32);h.config.ngUserIds.add(9);h.service.request(h.list);await tick();
+ assert.equal(h.snap.queued.length,16,'only the 16 unresolved of 48 candidates');assert.equal(h.pending.length,h.before,'no per-video nicoad request');
+ const [first,second,third]=h.snap.queued.map(id=>h.movies.get(id));
+ h.snap.callbacks.get(first.id)('accepted');h.snap.callbacks.get(second.id)('channel');await tick();
+ assert.equal(h.pending.length,h.before,'resolved or channel results need no fallback');
+ h.snap.callbacks.get(third.id)('absent');await tick();
+ assert.equal(h.pending.length,h.before+1);assert.match(h.pending.at(-1).url,new RegExp(third.id+'$'),'nicoad only for what the batch missed');
+ h.pending.at(-1).status(404);await tick();assert.equal(h.snap.queued.length,16,'no second snapshot round');h.service.dispose();
+});
+test('owner demand: readiness reports what the owner is needed for',async()=>{
+ const h=await demandSetup(1);const m=h.list[0],D=()=>({...h.MetadataReadiness.ownerDemand(m,h.config)});
+ assert.deepEqual(D(),{id:false,name:false});
+ h.config.ngChannelIds.add(3);assert.deepEqual(D(),{id:true,name:false});h.config.ngChannelIds.clear();
+ h.config.visibleContributorType.value='user';assert.deepEqual(D(),{id:true,name:false});h.config.visibleContributorType.value='all';
+ h.config.unknownContributorMovieVisible.value=false;assert.deepEqual(D(),{id:true,name:false});h.config.unknownContributorMovieVisible.value=true;
+ h.config.advancedNgRulesEnabled.value=true;h.config.advancedNgRulesJson.value=JSON.stringify([{expression:{kind:'condition',field:'userId',operator:'eq',value:1}}]);
+ assert.deepEqual(D(),{id:true,name:false});
+ h.config.advancedNgRulesJson.value=JSON.stringify([{expression:{kind:'condition',field:'contributorName',operator:'contains',value:'x'}}]);
+ assert.deepEqual(D(),{id:true,name:true});h.config.advancedNgRulesEnabled.value=false;
+ m.requestDetails();assert.deepEqual(D(),{id:true,name:true},'opening details shows the owner');h.service.dispose();
 });

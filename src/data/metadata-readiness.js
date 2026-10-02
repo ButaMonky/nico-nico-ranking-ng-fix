@@ -45,6 +45,18 @@
       if (movie._detailsRequested || movie._descriptionRequested || !config.descriptionTogglable.value) need.add('description')
       return need
     }
+    // BRUSH-011: whether an owner the normal route could not find is worth an
+    // extra lookup. id: NG, visibility or rules depend on the identity.
+    // name: something also reads the account name (implies id).
+    function ownerDemand(movie, config) {
+      if (!config) return {id:true, name:true}
+      const rules = config.advancedNgRulesEnabled.value ? ruleRequirements(config.advancedNgRulesJson.value) : new Set()
+      const name = config.ngUserNames.set.size > 0 || rules.has('ownerName') || Boolean(config.selfAdWarningEnabled.value)
+        || Boolean(movie?._detailsRequested) || !config.movieInfoTogglable.value
+      const id = name || config.ngUserIds.set.size > 0 || config.ngChannelIds.set.size > 0 || rules.has('ownerId')
+        || config.visibleContributorType.value !== 'all' || !config.unknownContributorMovieVisible.value
+      return {id, name}
+    }
     function ready(movie, config) {
       return [...required(movie,config)].every(field => movie.metadata[field] === 'known')
     }
@@ -78,5 +90,5 @@
       if (status === 'failed' && record.failureKind) return {...record}
       return null
     }
-    return {fields,detailFields,searchFields,ruleFields,settings,required,ready,sources,noteSource,noteFailure,clearSource,sourceOf}
+    return {fields,detailFields,searchFields,ruleFields,settings,required,ownerDemand,ready,sources,noteSource,noteFailure,clearSource,sourceOf}
   })()

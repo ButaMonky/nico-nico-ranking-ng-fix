@@ -80,7 +80,10 @@ try {
   lateOwner.querySelector('p').textContent='';lateOwner.remove();window.requests=0;
   window.GM_getValue=(key,fallback)=>({autoFillEnabled:false,selfAdWarningEnabled:false,ngUserIds:'[12345]'}[key]??fallback);
   window.GM_setValue=()=>{};
-  window.GM_xmlhttpRequest=o=>{requests++;const t=setTimeout(()=>o.onload({status:200,responseText:'<nicovideo_thumb_response status="ok"><thumb><title>fixture</title><description/><tags><tag>test</tag></tags></thumb></nicovideo_thumb_response>'}),10);return {abort(){clearTimeout(t)}}};
+  // BRUSH-011: count detail requests only; an NG-driven Snapshot owner lookup is a separate GM request.
+  window.otherRequests=[];
+  window.GM_xmlhttpRequest=o=>{if(!/\/api\/getthumbinfo\//.test(o.url)){otherRequests.push(o.url);return {abort(){}}}
+   requests++;const t=setTimeout(()=>o.onload({status:200,responseText:'<nicovideo_thumb_response status="ok"><thumb><title>fixture</title><description/><tags><tag>test</tag></tags></thumb></nicovideo_thumb_response>'}),10);return {abort(){clearTimeout(t)}}};
  });
  await page.addScriptTag({content:source});
  await page.waitForFunction(()=>window.fixtureModel?.movies.get(lateId)?.thumbInfoDone);
@@ -91,6 +94,8 @@ try {
  await page.waitForFunction(()=>fixtureModel.movies.get(lateId).contributor.name==='late owner');
  await page.waitForFunction(()=>fixturePage.movieRoots[0].movieInfo.elem.querySelector('.nrn-owner-name')?.textContent==='late owner');
  assert.equal(await page.evaluate(()=>requests),1,'late ID and name do not fetch again');
+ assert.ok((await page.evaluate(()=>otherRequests)).every(url=>url.startsWith('https://snapshot.search.nicovideo.jp/api/v2/snapshot/video/contents/search?')),
+  'the only other GM request is the owner ID lookup started while the owner was missing');
  const stable=await page.evaluate(()=>ownerChanges);
  await page.evaluate(()=>{lateOwner.remove();ownerParent.append(lateOwner);for(let i=0;i<20;i++)lateOwner.querySelector('p').firstChild.data='late owner'});
  await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));

@@ -46,7 +46,7 @@
       return {status:'ok', owners, missing:ids.filter(id => !seen.has(id)), conflicts:[...conflicts]}
     }
     function create(movies, httpRequest, diagnostics) {
-      const queue = [], attempted = new Set(), handles = new Set()
+      const queue = [], attempted = new Set(), handles = new Set(), callbacks = new Map()
       const applySupplement = ThumbInfoListener.forSupplement(movies)
       let timer = null, disposed = false
       function finishMovie(id, status) {
@@ -55,6 +55,9 @@
         movie._nrnOwnerIdPending = false
         movie._nrnOwnerSnapshotStatus = status
         movie.metadataChanged()
+        const done = callbacks.get(id)
+        callbacks.delete(id)
+        if (done && !disposed) done(status)
       }
       function send(ids) {
         const measured = diagnostics?.begin?.('snapshot','run') || function() {}
@@ -85,10 +88,12 @@
         while (!disposed && queue.length) send(queue.splice(0,batchSize))
       }
       // Collects videos for a short moment so several lookups share one GET.
-      function enqueue(movie) {
+      // onDone(status) runs once the batch answers (not after dispose).
+      function enqueue(movie, onDone) {
         if (disposed || !movie || attempted.has(movie.id) || !videoIdPattern.test(movie.id)) return false
         if (movie.ownerResolution?.status !== 'missing') return false
         attempted.add(movie.id);queue.push(movie.id)
+        if (typeof onDone === 'function') callbacks.set(movie.id,onDone)
         movie._nrnOwnerIdPending = true
         movie._nrnOwnerSnapshotStatus = 'queued'
         if (queue.length >= batchSize) flush()
@@ -98,7 +103,7 @@
       function dispose() {
         disposed = true;clearTimeout(timer);timer = null
         for (const handle of handles) { try { handle.abort?.() } catch (_) {} }
-        handles.clear();queue.length = 0
+        handles.clear();queue.length = 0;callbacks.clear()
         for (const id of attempted) { const movie = movies.get(id); if (movie) movie._nrnOwnerIdPending = false }
       }
       return {enqueue, flush, dispose}

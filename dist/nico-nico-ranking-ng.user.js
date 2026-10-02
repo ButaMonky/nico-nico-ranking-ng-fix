@@ -1121,6 +1121,18 @@
       if (movie._detailsRequested || movie._descriptionRequested || !config.descriptionTogglable.value) need.add('description')
       return need
     }
+    // BRUSH-011: whether an owner the normal route could not find is worth an
+    // extra lookup. id: NG, visibility or rules depend on the identity.
+    // name: something also reads the account name (implies id).
+    function ownerDemand(movie, config) {
+      if (!config) return {id:true, name:true}
+      const rules = config.advancedNgRulesEnabled.value ? ruleRequirements(config.advancedNgRulesJson.value) : new Set()
+      const name = config.ngUserNames.set.size > 0 || rules.has('ownerName') || Boolean(config.selfAdWarningEnabled.value)
+        || Boolean(movie?._detailsRequested) || !config.movieInfoTogglable.value
+      const id = name || config.ngUserIds.set.size > 0 || config.ngChannelIds.set.size > 0 || rules.has('ownerId')
+        || config.visibleContributorType.value !== 'all' || !config.unknownContributorMovieVisible.value
+      return {id, name}
+    }
     function ready(movie, config) {
       return [...required(movie,config)].every(field => movie.metadata[field] === 'known')
     }
@@ -1154,7 +1166,7 @@
       if (status === 'failed' && record.failureKind) return {...record}
       return null
     }
-    return {fields,detailFields,searchFields,ruleFields,settings,required,ready,sources,noteSource,noteFailure,clearSource,sourceOf}
+    return {fields,detailFields,searchFields,ruleFields,settings,required,ownerDemand,ready,sources,noteSource,noteFailure,clearSource,sourceOf}
   })()
 
   // Pure planner: decides which source should supply each missing field.
@@ -2267,7 +2279,7 @@
       return {status:'ok', owners, missing:ids.filter(id => !seen.has(id)), conflicts:[...conflicts]}
     }
     function create(movies, httpRequest, diagnostics) {
-      const queue = [], attempted = new Set(), handles = new Set()
+      const queue = [], attempted = new Set(), handles = new Set(), callbacks = new Map()
       const applySupplement = ThumbInfoListener.forSupplement(movies)
       let timer = null, disposed = false
       function finishMovie(id, status) {
@@ -2276,6 +2288,9 @@
         movie._nrnOwnerIdPending = false
         movie._nrnOwnerSnapshotStatus = status
         movie.metadataChanged()
+        const done = callbacks.get(id)
+        callbacks.delete(id)
+        if (done && !disposed) done(status)
       }
       function send(ids) {
         const measured = diagnostics?.begin?.('snapshot','run') || function() {}
@@ -2306,10 +2321,12 @@
         while (!disposed && queue.length) send(queue.splice(0,batchSize))
       }
       // Collects videos for a short moment so several lookups share one GET.
-      function enqueue(movie) {
+      // onDone(status) runs once the batch answers (not after dispose).
+      function enqueue(movie, onDone) {
         if (disposed || !movie || attempted.has(movie.id) || !videoIdPattern.test(movie.id)) return false
         if (movie.ownerResolution?.status !== 'missing') return false
         attempted.add(movie.id);queue.push(movie.id)
+        if (typeof onDone === 'function') callbacks.set(movie.id,onDone)
         movie._nrnOwnerIdPending = true
         movie._nrnOwnerSnapshotStatus = 'queued'
         if (queue.length >= batchSize) flush()
@@ -2319,7 +2336,7 @@
       function dispose() {
         disposed = true;clearTimeout(timer);timer = null
         for (const handle of handles) { try { handle.abort?.() } catch (_) {} }
-        handles.clear();queue.length = 0
+        handles.clear();queue.length = 0;callbacks.clear()
         for (const id of attempted) { const movie = movies.get(id); if (movie) movie._nrnOwnerIdPending = false }
       }
       return {enqueue, flush, dispose}
@@ -8626,17 +8643,35 @@ a.nrn-parsed[data-anchor-detail="nicoad"] > .nrn-movie-info-toggle { background:
       // answer had no owner (ownerResolution 'missing'). data.id is the video
       // ID and is checked by getData; only data.ownerId becomes the user ID.
       // A failure or 404 leaves the owner unknown; nothing is read as absence.
+      // BRUSH-011: demand-driven order. No owner demand -> no extra request.
+      // ID only -> one batched Snapshot GET first, nicoad for what it misses.
+      // Name too -> nicoad first (it also carries the name), Snapshot after.
       function requestOwnerId(movie) {
         if (movie.ownerResolution?.status !== 'missing' || movie._nrnOwnerIdPending) return
         if (!/^(sm|nm)[0-9]+$/.test(movie.id) || idAttempted.has(movie.id)) return
         if (movie.ng && !movie._detailsRequested) return
+        const demand = MetadataReadiness.ownerDemand(movie,movies.config)
+        // Not marked attempted: a later setting or details request re-plans it.
+        if (!demand.id) { movie._nrnOwnerIdStatus = 'not-needed'; return }
+        idAttempted.add(movie.id)
+        if (!demand.name && snapshot) {
+          movie._nrnOwnerIdStatus = 'snapshot-first'
+          const queued = snapshot.enqueue(movie,status => {
+            if (status !== 'accepted' && status !== 'channel') lookupNicoad(movie,false)
+          })
+          if (queued) return
+        }
+        lookupNicoad(movie,true)
+      }
+      function lookupNicoad(movie, snapshotAfter) {
+        if (disposed || movie.ownerResolution?.status !== 'missing') return
         if (!responses.has(movie.id) && extraRequests >= 64) {
           // Over the per-video budget: the batched Snapshot lookup is cheaper.
-          idAttempted.add(movie.id);movie._nrnOwnerIdStatus = 'budget';snapshot?.enqueue(movie)
+          movie._nrnOwnerIdStatus = 'budget'
+          if (snapshotAfter) snapshot?.enqueue(movie)
           return
         }
         if (!responses.has(movie.id)) extraRequests++
-        idAttempted.add(movie.id)
         movie._nrnOwnerIdPending = true
         movie._nrnOwnerIdStatus = 'pending'
         movie.metadataChanged()
@@ -8651,7 +8686,7 @@ a.nrn-parsed[data-anchor-detail="nicoad"] > .nrn-movie-info-toggle { background:
           movie._nrnOwnerIdPending = false
           if (disposed) return
           // Still without an ID: hand over to the batched Snapshot lookup.
-          if (movie._nrnOwnerIdStatus !== 'accepted') snapshot?.enqueue(movie)
+          if (snapshotAfter && movie._nrnOwnerIdStatus !== 'accepted') snapshot?.enqueue(movie)
           movie.metadataChanged()
         })
       }

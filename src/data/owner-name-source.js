@@ -56,17 +56,35 @@
       // answer had no owner (ownerResolution 'missing'). data.id is the video
       // ID and is checked by getData; only data.ownerId becomes the user ID.
       // A failure or 404 leaves the owner unknown; nothing is read as absence.
+      // BRUSH-011: demand-driven order. No owner demand -> no extra request.
+      // ID only -> one batched Snapshot GET first, nicoad for what it misses.
+      // Name too -> nicoad first (it also carries the name), Snapshot after.
       function requestOwnerId(movie) {
         if (movie.ownerResolution?.status !== 'missing' || movie._nrnOwnerIdPending) return
         if (!/^(sm|nm)[0-9]+$/.test(movie.id) || idAttempted.has(movie.id)) return
         if (movie.ng && !movie._detailsRequested) return
+        const demand = MetadataReadiness.ownerDemand(movie,movies.config)
+        // Not marked attempted: a later setting or details request re-plans it.
+        if (!demand.id) { movie._nrnOwnerIdStatus = 'not-needed'; return }
+        idAttempted.add(movie.id)
+        if (!demand.name && snapshot) {
+          movie._nrnOwnerIdStatus = 'snapshot-first'
+          const queued = snapshot.enqueue(movie,status => {
+            if (status !== 'accepted' && status !== 'channel') lookupNicoad(movie,false)
+          })
+          if (queued) return
+        }
+        lookupNicoad(movie,true)
+      }
+      function lookupNicoad(movie, snapshotAfter) {
+        if (disposed || movie.ownerResolution?.status !== 'missing') return
         if (!responses.has(movie.id) && extraRequests >= 64) {
           // Over the per-video budget: the batched Snapshot lookup is cheaper.
-          idAttempted.add(movie.id);movie._nrnOwnerIdStatus = 'budget';snapshot?.enqueue(movie)
+          movie._nrnOwnerIdStatus = 'budget'
+          if (snapshotAfter) snapshot?.enqueue(movie)
           return
         }
         if (!responses.has(movie.id)) extraRequests++
-        idAttempted.add(movie.id)
         movie._nrnOwnerIdPending = true
         movie._nrnOwnerIdStatus = 'pending'
         movie.metadataChanged()
@@ -81,7 +99,7 @@
           movie._nrnOwnerIdPending = false
           if (disposed) return
           // Still without an ID: hand over to the batched Snapshot lookup.
-          if (movie._nrnOwnerIdStatus !== 'accepted') snapshot?.enqueue(movie)
+          if (snapshotAfter && movie._nrnOwnerIdStatus !== 'accepted') snapshot?.enqueue(movie)
           movie.metadataChanged()
         })
       }
