@@ -144,7 +144,7 @@
         return function(thumbInfo) {
           var m = movies.get(thumbInfo.id)
           m.error = thumbInfo.error
-          for (const field of MetadataReadiness.fields) {
+          for (const field of MetadataReadiness.detailFields) {
             if (m.metadata[field] !== 'known') {
               m.metadata[field] = 'failed'
               MetadataReadiness.noteFailure(m,field,thumbInfo.error?.type)

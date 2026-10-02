@@ -103,3 +103,19 @@ test('fetched pages: injected roots only return the item of the same video',()=>
  assert.equal(A.fromRoot(root,'sm2'),null);root.dataset.decorationVideoId='sm9';assert.equal(A.fromRoot(root,'sm1'),null,'card reused for another video');
  assert.equal(A.tryNormalize({id:'sm1',get owner(){throw new Error('broken');}}),null);
 });
+// BRUSH-006: like counts per video and per card row.
+test('like counts: known values per video, conflicts and nulls stay unknown',()=>{
+ const items=[{id:'sm1',count:{like:0}},{id:'sm1',count:{like:0}},{id:'sm2',count:{like:5}},{id:'sm2',count:{like:6}},
+  {id:'sm2',count:{like:5}},{id:'sm3'},{id:'sm4',count:{like:null}},{id:'sm4',count:{like:8}},{id:'sm5',count:{like:'9'}}].map(A.normalize);
+ assert.deepEqual(plain([...A.likeCounts(items)]),[['sm1',0],['sm4',8]]);
+ assert.equal(A.likeCounts(null).size,0);
+});
+test('like counts: a card row uses its own injected item, then the initial document for the same video',()=>{
+ const initial=new Map([['sm1',0],['sm2',4]]);
+ const injectedRoot={dataset:{decorationVideoId:'sm2'}};A.register(injectedRoot,A.normalize({id:'sm2',count:{}}));
+ assert.strictEqual(A.likeFor({movie:{id:'sm1'},rootElem:{dataset:{decorationVideoId:'sm1'}}},initial),0);
+ assert.strictEqual(A.likeFor({movie:{id:'sm2'},rootElem:injectedRoot},initial),null,'injected item without likes is not filled from another source');
+ assert.strictEqual(A.likeFor({movie:{id:'sm1'},rootElem:{dataset:{decorationVideoId:'sm9'}}},initial),null,'mismatched card');
+ assert.strictEqual(A.likeFor({movie:{id:'sm3'},rootElem:{dataset:{decorationVideoId:'sm3'}}},initial),null);
+ assert.strictEqual(A.likeFor({movie:{id:'sm1'},rootElem:{dataset:{decorationVideoId:'sm1'}}},null),null,'SPA route without initial data');
+});

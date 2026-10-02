@@ -59,5 +59,27 @@
       const normalized = root ? injected.get(root) : null
       return normalized && normalized.videoId === videoId && root.dataset?.decorationVideoId === videoId ? normalized : null
     }
-    return {normalize, tryNormalize, count, itemsOf, readDocument, register, fromRoot}
+    // videoId -> likeCount for known counts. Rows of one video that disagree
+    // leave it out (unknown); null rows never hide a known row.
+    function likeCounts(items) {
+      const counts = new Map(), conflicts = new Set()
+      for (const item of items || []) {
+        if (!item || item.likeCount === null || conflicts.has(item.videoId)) continue
+        if (counts.has(item.videoId) && counts.get(item.videoId) !== item.likeCount) {
+          counts.delete(item.videoId);conflicts.add(item.videoId);continue
+        }
+        counts.set(item.videoId,item.likeCount)
+      }
+      return counts
+    }
+    // The like count for one parsed card row: its own injected item first,
+    // then the initial document (only when the card is that same video).
+    function likeFor(row, initialLikes) {
+      const id = row?.movie?.id, root = row?.rootElem
+      if (!id || root?.dataset?.decorationVideoId !== id) return null
+      const injectedItem = fromRoot(root,id)
+      if (injectedItem) return injectedItem.likeCount
+      return initialLikes?.has(id) ? initialLikes.get(id) : null
+    }
+    return {normalize, tryNormalize, count, itemsOf, readDocument, register, fromRoot, likeCounts, likeFor}
   })()

@@ -59,7 +59,8 @@ test('source plan: lock state, owner type and like count only come from sources 
  assert.equal(p.fields.likeCount.next,null);
  p=plain(h.SourcePlan.plan(h.movie,['likeCount','madeUp'],{available:ALL}));
  assert.equal(p.fields.likeCount.next,'search');assert.equal(p.fields.madeUp.reason,'unsupported-field');
- assert.equal('likeCount' in h.movie.metadata,false,'planning never adds metadata fields');
+ assert.equal('madeUp' in h.movie.metadata,false,'planning never adds metadata fields');
+ assert.equal(h.movie.metadata.likeCount,'unknown','planning never marks a field known');
 });
 test('source plan: pure — no movie mutation, no requests',async()=>{
  const h=await setup();h.search('sm1',{type:'user',id:12,name:null});

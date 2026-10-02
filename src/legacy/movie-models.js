@@ -13,6 +13,7 @@
       this._thumbInfoDone = false
       this.metadata = Object.fromEntries(MetadataReadiness.fields.map(field => [field,'unknown']))
       this.metadataSource = {}
+      this.likeCount = null
       this.owner = null
       this._ng = false
       this.ngByLockedTagCount = false
@@ -172,6 +173,18 @@
           if (mark) MetadataReadiness.noteSource(this,field,mark.source,mark.at)
         }
         this._refreshNicoadMatches()
+      },
+      // Records an observed like count. Only a valid count (0 included) is
+      // accepted; an unknown observation never erases a known value.
+      observeLikeCount(value, source = 'search', observedAt = Date.now()) {
+        const count = SearchItemAdapter.count(value)
+        if (count === null || !MetadataReadiness.sources.has(source)) return false
+        const changed = this.likeCount !== count || this.metadata.likeCount !== 'known'
+        this.likeCount = count
+        this.metadata.likeCount = 'known'
+        MetadataReadiness.noteSource(this,'likeCount',source,observedAt)
+        if (changed) this.metadataChanged()
+        return true
       },
       metadataChanged() {
         this._updateAdvancedRule()

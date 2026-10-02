@@ -1076,7 +1076,10 @@
   // ============================================================
   // Field knowledge is independent from the completion of a detail request.
   var MetadataReadiness = (function() {
-    const fields = ['ownerId','ownerType','ownerName','ownerVisibility','tags','lockedTags','description']
+    const fields = ['ownerId','ownerType','ownerName','ownerVisibility','tags','lockedTags','description','likeCount']
+    // Fields a detail (getthumbinfo) response can supply. A failed detail
+    // request says nothing about the others (likeCount comes from page data).
+    const detailFields = fields.filter(field => field !== 'likeCount')
     const ruleFields = {
       contributorId:'ownerId', userId:'ownerId', channelId:'ownerId', contributorName:'ownerName',
       tag:'tags', tagCount:'tags', lockedTag:'lockedTags', lockedTagCount:'lockedTags', description:'description',
@@ -1150,7 +1153,7 @@
       if (status === 'failed' && record.failureKind) return {...record}
       return null
     }
-    return {fields,ruleFields,settings,required,ready,sources,noteSource,noteFailure,clearSource,sourceOf}
+    return {fields,detailFields,ruleFields,settings,required,ready,sources,noteSource,noteFailure,clearSource,sourceOf}
   })()
 
   // Pure planner: decides which source should supply each missing field.
@@ -1168,7 +1171,7 @@
       tags:['cache','detail'],
       lockedTags:['cache','detail'],
       description:['cache','detail'],
-      // Not tracked by MetadataReadiness yet (BRUSH-005/006); only page data.
+      // Search page data only (count.like); no detail or index source is used.
       likeCount:['search']
     }
     const freeSources = new Set(['search','cache'])
@@ -1669,6 +1672,7 @@
       this._thumbInfoDone = false
       this.metadata = Object.fromEntries(MetadataReadiness.fields.map(field => [field,'unknown']))
       this.metadataSource = {}
+      this.likeCount = null
       this.owner = null
       this._ng = false
       this.ngByLockedTagCount = false
@@ -1828,6 +1832,18 @@
           if (mark) MetadataReadiness.noteSource(this,field,mark.source,mark.at)
         }
         this._refreshNicoadMatches()
+      },
+      // Records an observed like count. Only a valid count (0 included) is
+      // accepted; an unknown observation never erases a known value.
+      observeLikeCount(value, source = 'search', observedAt = Date.now()) {
+        const count = SearchItemAdapter.count(value)
+        if (count === null || !MetadataReadiness.sources.has(source)) return false
+        const changed = this.likeCount !== count || this.metadata.likeCount !== 'known'
+        this.likeCount = count
+        this.metadata.likeCount = 'known'
+        MetadataReadiness.noteSource(this,'likeCount',source,observedAt)
+        if (changed) this.metadataChanged()
+        return true
       },
       metadataChanged() {
         this._updateAdvancedRule()
@@ -2069,7 +2085,29 @@
       const normalized = root ? injected.get(root) : null
       return normalized && normalized.videoId === videoId && root.dataset?.decorationVideoId === videoId ? normalized : null
     }
-    return {normalize, tryNormalize, count, itemsOf, readDocument, register, fromRoot}
+    // videoId -> likeCount for known counts. Rows of one video that disagree
+    // leave it out (unknown); null rows never hide a known row.
+    function likeCounts(items) {
+      const counts = new Map(), conflicts = new Set()
+      for (const item of items || []) {
+        if (!item || item.likeCount === null || conflicts.has(item.videoId)) continue
+        if (counts.has(item.videoId) && counts.get(item.videoId) !== item.likeCount) {
+          counts.delete(item.videoId);conflicts.add(item.videoId);continue
+        }
+        counts.set(item.videoId,item.likeCount)
+      }
+      return counts
+    }
+    // The like count for one parsed card row: its own injected item first,
+    // then the initial document (only when the card is that same video).
+    function likeFor(row, initialLikes) {
+      const id = row?.movie?.id, root = row?.rootElem
+      if (!id || root?.dataset?.decorationVideoId !== id) return null
+      const injectedItem = fromRoot(root,id)
+      if (injectedItem) return injectedItem.likeCount
+      return initialLikes?.has(id) ? initialLikes.get(id) : null
+    }
+    return {normalize, tryNormalize, count, itemsOf, readDocument, register, fromRoot, likeCounts, likeFor}
   })()
   var ThumbInfoListener = (function() {
     var createTagBuilder = function(config) {
@@ -2217,7 +2255,7 @@
         return function(thumbInfo) {
           var m = movies.get(thumbInfo.id)
           m.error = thumbInfo.error
-          for (const field of MetadataReadiness.fields) {
+          for (const field of MetadataReadiness.detailFields) {
             if (m.metadata[field] !== 'known') {
               m.metadata[field] = 'failed'
               MetadataReadiness.noteFailure(m,field,thumbInfo.error?.type)
@@ -9646,6 +9684,8 @@ var CardActionData = (function () {
           for (var row of resultsOfParsing) {
             if (row.rootElem.dataset.decorationVideoId === row.movie.id) applySearchOwner(row.movie.id,this.initialOwners?.get(row.movie.id))
             applySearchOwner(row.movie.id, OwnerEvidence.fromRow(row))
+            // Search data like counts (BRUSH-006); unknown stays unknown, 0 is a count.
+            movies.get(row.movie.id).observeLikeCount(SearchItemAdapter.likeFor(row,this.initialLikes),'search')
             var count = Number(row.rootElem.dataset.nrnPageContributorCount)
             if (Number.isFinite(count) && count > 0) movies.get(row.movie.id).setPageContributorCount(count)
           }
@@ -14030,6 +14070,7 @@ var CardActionData = (function () {
       try {
         const initialSourceUrl = initialDocumentUrl
         let initialOwners = OwnerEvidence.initialDocument(document)
+        let initialLikes = SearchItemAdapter.likeCounts(SearchItemAdapter.readDocument(document).items)
         const config = new Config(gmGetValue(), gmSetValue())
         await config.sync()
         if (typeof nrnSetConsoleConfig === 'function') nrnSetConsoleConfig(config)
@@ -14078,7 +14119,9 @@ var CardActionData = (function () {
             if (config.useGetThumbInfo.value) setPendingMoviesInvisible()
             model = createModel(config)
             model.initialOwners = initialSourceUrl === location.href ? initialOwners : null
+            model.initialLikes = initialSourceUrl === location.href ? initialLikes : null
             initialOwners = null
+            initialLikes = null
             page._diagnostics = model.diagnostics
             page._ownerNames = model.ownerNames
             page._cardActions = CardActions.create(page,config)

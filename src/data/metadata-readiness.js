@@ -1,6 +1,9 @@
   // Field knowledge is independent from the completion of a detail request.
   var MetadataReadiness = (function() {
-    const fields = ['ownerId','ownerType','ownerName','ownerVisibility','tags','lockedTags','description']
+    const fields = ['ownerId','ownerType','ownerName','ownerVisibility','tags','lockedTags','description','likeCount']
+    // Fields a detail (getthumbinfo) response can supply. A failed detail
+    // request says nothing about the others (likeCount comes from page data).
+    const detailFields = fields.filter(field => field !== 'likeCount')
     const ruleFields = {
       contributorId:'ownerId', userId:'ownerId', channelId:'ownerId', contributorName:'ownerName',
       tag:'tags', tagCount:'tags', lockedTag:'lockedTags', lockedTagCount:'lockedTags', description:'description',
@@ -74,5 +77,5 @@
       if (status === 'failed' && record.failureKind) return {...record}
       return null
     }
-    return {fields,ruleFields,settings,required,ready,sources,noteSource,noteFailure,clearSource,sourceOf}
+    return {fields,detailFields,ruleFields,settings,required,ready,sources,noteSource,noteFailure,clearSource,sourceOf}
   })()

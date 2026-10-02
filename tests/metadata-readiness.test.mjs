@@ -209,7 +209,8 @@ test('provenance: cache restore keeps statuses and is labelled cache',async()=>{
 test('provenance: records never promote fields and stale records are not reported',async()=>{
  const h=await setup(),M=h.MetadataReadiness;
  assert.equal(M.noteSource(h.movie,'tags','detail',1),false);assert.equal(h.movie.metadata.tags,'unknown');
- assert.equal(M.noteSource(h.movie,'likeCount','search',1),false);assert.equal('likeCount' in h.movie.metadata,false);
+ assert.equal(M.noteSource(h.movie,'madeUpCount','search',1),false);assert.equal('madeUpCount' in h.movie.metadata,false);
+ assert.equal(M.noteSource(h.movie,'likeCount','search',1),false,'a tracked field still is not promoted by a record');assert.equal(h.movie.metadata.likeCount,'unknown');
  h.search('sm1',{type:'user',id:12,name:'x'});assert.equal(M.noteSource(h.movie,'ownerId','guess',1),false);
  assert.equal(M.noteFailure(h.movie,'ownerId','NETWORK'),false,'known fields cannot be marked failed');
  h.movie.metadataSource.tags={source:'detail',observedAt:1};assert.equal(M.sourceOf(h.movie,'tags'),null);
@@ -224,4 +225,48 @@ test('provenance: records are per movie and a new SPA model starts empty',async(
  assert.equal(Object.prototype.hasOwnProperty.call(second.Movie.prototype,'metadataSource'),false);
  const other=new first.Movie('sm2','other');assert.notEqual(other.metadataSource,first.movie.metadataSource);
  assert.deepEqual({...other.metadataSource},{});
+});
+
+// BRUSH-006: like count is a metadata field; 0 is a count, everything invalid stays unknown.
+test('like count: valid counts become known with search provenance',async()=>{
+ for(const value of [0,1,Number.MAX_SAFE_INTEGER]){
+  const h=await setup(),at=Date.now()-1000;
+  assert.equal(h.movie.metadata.likeCount,'unknown');assert.equal(h.movie.likeCount,null);
+  assert.equal(h.movie.observeLikeCount(value,'search',at),true);
+  assert.strictEqual(h.movie.likeCount,value);assert.equal(h.movie.metadata.likeCount,'known');
+  assert.deepEqual({...h.MetadataReadiness.sourceOf(h.movie,'likeCount')},{source:'search',observedAt:at});
+ }
+});
+test('like count: missing, null, strings, negatives, fractions and non-finite stay unknown',async()=>{
+ for(const value of [undefined,null,'5','0','',-1,1.5,NaN,Infinity,-Infinity,2**53,true,{}]){
+  const h=await setup();assert.equal(h.movie.observeLikeCount(value,'search'),false,String(value));
+  assert.equal(h.movie.likeCount,null);assert.equal(h.movie.metadata.likeCount,'unknown');
+  assert.equal(h.MetadataReadiness.sourceOf(h.movie,'likeCount'),null);
+ }
+ const h=await setup();assert.equal(h.movie.observeLikeCount(3,'guess'),false,'unknown source rejected');
+ assert.equal(h.movie.metadata.likeCount,'unknown');
+});
+test('like count: an unknown observation never erases a known count, a newer count replaces it',async()=>{
+ const h=await setup();h.movie.observeLikeCount(0,'search',1000);
+ for(const value of [null,undefined,'7',-1])h.movie.observeLikeCount(value,'search');
+ assert.strictEqual(h.movie.likeCount,0);assert.equal(h.movie.metadata.likeCount,'known');
+ h.movie.observeLikeCount(9,'search',2000);assert.strictEqual(h.movie.likeCount,9);
+ assert.equal(h.MetadataReadiness.sourceOf(h.movie,'likeCount').observedAt,2000);
+});
+test('like count: detail failures do not mark it failed and NG results do not change',async()=>{
+ const h=await setup();h.search('sm1',{type:'user',id:12,name:'x'});h.config.advancedNgRulesEnabled.value=true;
+ h.config.advancedNgRulesJson.value=JSON.stringify([{expression:condition('userId','eq',12)}]);
+ const before=[h.movie.ng,...evaluateAll(h)];
+ h.fail({id:'sm1',error:{type:'NETWORK'}});assert.equal(h.movie.metadata.likeCount,'unknown');assert.equal(h.movie.metadata.tags,'failed');
+ h.movie.observeLikeCount(5,'search');assert.deepEqual([h.movie.ng,...evaluateAll(h)],before);
+ const other=await setup();other.movie.observeLikeCount(4,'search');other.fail({id:'sm1',error:{type:'TIMEOUT'}});
+ assert.equal(other.movie.metadata.likeCount,'known');assert.strictEqual(other.movie.likeCount,4);
+ assert.equal(h.MetadataReadiness.required(h.movie,h.config).has('likeCount'),false,'no rule demands like counts yet');
+});
+test('like count: a cache restore keeps the search value and detail fields separate',async()=>{
+ const h=await setup();h.movie.observeLikeCount(0,'search');
+ await restoreCache(h,{id:'sm1',cachedAt:Date.now()-60000,metadata:{tags:'known',lockedTags:'known',description:'known',ownerName:'unknown'},
+  contributor:{type:'user',id:12,name:''},tags:[],description:''});
+ assert.strictEqual(h.movie.likeCount,0);assert.equal(h.MetadataReadiness.sourceOf(h.movie,'likeCount').source,'search');
+ assert.equal(h.MetadataReadiness.sourceOf(h.movie,'tags').source,'cache');
 });

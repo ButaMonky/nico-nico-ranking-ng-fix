@@ -14,7 +14,7 @@
       tags:['cache','detail'],
       lockedTags:['cache','detail'],
       description:['cache','detail'],
-      // Not tracked by MetadataReadiness yet (BRUSH-005/006); only page data.
+      // Search page data only (count.like); no detail or index source is used.
       likeCount:['search']
     }
     const freeSources = new Set(['search','cache'])
