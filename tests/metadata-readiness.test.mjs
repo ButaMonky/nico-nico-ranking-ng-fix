@@ -492,3 +492,23 @@ test('aggregate demand: disabled aggregate rules do not introduce hidden-video t
  h.config.advancedNgRulesJson.value=JSON.stringify([{enabled:false,expression:condition('pageContributorCount','gte',3)}]);
  h.request();assert.equal(h.calls.length,0);assert.equal(h.MetadataReadiness.ownerDemand(h.movie,h.config).id,false);h.request.dispose();
 });
+
+test('partial settings: multiple demand changes schedule one detail plan without synthetic metadataChanged broadcasts',async()=>{
+ const h=await setup();h.search('sm1',{type:'user',id:12,name:'synthetic'});
+ let metadataEvents=0;h.movie.on('metadataChanged',()=>metadataEvents++);
+ h.config.ngTags.add('synthetic-tag');
+ h.config.ngLockedTags.add('locked-tag');
+ await new Promise(r=>setImmediate(r));
+ assert.equal(h.calls.length,1,'coalesced settings changes produce one deduplicated detail request');
+ assert.equal(metadataEvents,0,'config demand changes must not rebroadcast metadata that did not change');
+ h.request.dispose();
+});
+test('partial settings: dedicated decision listeners still update NG immediately while demand scheduler stays cheap',async()=>{
+ const h=await setup();h.search('sm1',{type:'user',id:12,name:'synthetic'});
+ let metadataEvents=0;h.movie.on('metadataChanged',()=>metadataEvents++);
+ h.config.ngMovies.add('sm1');
+ assert.equal(h.movie.ng,true,'movie-ID NG listener remains immediate');
+ await new Promise(r=>setImmediate(r));
+ assert.equal(h.calls.length,0,'a decisively hidden movie does not start unrelated detail traffic');
+ assert.equal(metadataEvents,0,'decision changes do not masquerade as metadata changes');
+});

@@ -10395,7 +10395,9 @@ var CardActionData = (function () {
       }
       var settingsChanged = function() {
         if (disposed) return
-        for (var movie of movies._idToMovie.values()) movie.metadataChanged()
+        // Dedicated Movie/Contributor/Tag listeners already update NG decisions.
+        // Demand-only settings only need one current-config replan; broadcasting
+        // metadataChanged to every movie invents metadata work and multiplies UI listeners.
         schedule()
       }
       for (var key of MetadataReadiness.settings) movies.config[key].on('changed',settingsChanged)
