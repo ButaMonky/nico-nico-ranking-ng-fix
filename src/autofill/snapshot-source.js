@@ -135,6 +135,15 @@
         var totalCount = rawTotal == null ? NaN : Number(rawTotal)
 
         var items = data.map(function(x, i) {
+          // Reuse the normal search-item bridge for injected Snapshot cards.
+          // This keeps numeric metadata semantics identical across legacy / hybrid / snapshot:
+          // explicit 0 stays known, missing or invalid values stay unknown, and no request is added.
+          var normalizedSearchItem = SearchItemAdapter.tryNormalize({
+            id:x.contentId,
+            count:{view:x.viewCounter,comment:x.commentCounter,mylist:x.mylistCounter,like:x.likeCounter},
+            duration:x.lengthSeconds,
+            registeredAt:x.startTime
+          })
           return {
             id: x.contentId,
             title: x.title || x.contentId,
@@ -158,6 +167,7 @@
             snapshotTags: Array.isArray(x.tags)
               ? x.tags
               : typeof x.tags === 'string' ? x.tags.split(/\s+/).filter(Boolean) : [],
+            __nrnSearchItem: normalizedSearchItem,
             __nrnSourcePage: Math.floor(offset / 100) + 1,
             __nrnSourceIndex: i,
             __nrnSnapshot: true,
