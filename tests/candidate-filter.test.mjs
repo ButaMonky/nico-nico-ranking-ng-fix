@@ -52,3 +52,38 @@ test('candidate filter: disabled rules and nested uncertainty are not rejected',
  assert.equal(C.reason(item(1,'KEEP'),c),null);
  const r=C.create(c).partition([item(1,'DROP'),item(2)]);assert.equal(r.rejected,1);
 });
+
+test('candidate scheduling: normalized numeric search metadata can settle NG before DOM without reordering',()=>{
+ const expr=group('OR',[field('likeCount','eq','0'),field('viewCount','gte','100')]);
+ const c=config(expr),q=C.create(c,8);
+ const rows=[
+  {...item(1),__nrnSearchItem:{videoId:'sm1',likeCount:0,viewCount:1}},
+  {...item(2),__nrnSearchItem:{videoId:'sm2',likeCount:1,viewCount:99}},
+  {...item(3),__nrnSearchItem:{videoId:'sm3',likeCount:2,viewCount:100}}
+ ];
+ const r=q.partition(rows);
+ assert.deepEqual([...r.passed].map(x=>x.id),['sm2']);
+ assert.equal(r.rejected,2);
+ c.advancedNgRulesEnabled.value=false;
+ assert.deepEqual([...q.release()].map(x=>x.id),['sm1','sm3'],'release keeps source order');
+});
+test('candidate scheduling: unknown, mismatched and nonnumeric search values stay undecided under NOT and neq',()=>{
+ for(const payload of [
+  null,
+  {videoId:'sm9',likeCount:0},
+  {videoId:'sm1',likeCount:null},
+  {videoId:'sm1',likeCount:'0'},
+  {videoId:'sm1',likeCount:-1},
+  {videoId:'sm1',likeCount:1.5}
+ ]){
+  const row={...item(1),__nrnSearchItem:payload};
+  for(const expr of [field('likeCount','neq','5'),field('likeCount','notExists'),group('AND',[field('likeCount','eq','0')],true)])
+   assert.equal(C.reason(row,config(expr)),null,JSON.stringify(payload)+' '+JSON.stringify(expr));
+ }
+});
+test('candidate scheduling: numeric truth never promotes unknown owner or tag siblings',()=>{
+ const row={...item(1),__nrnSearchItem:{videoId:'sm1',likeCount:0,viewCount:10}};
+ assert.equal(C.reason(row,config(group('AND',[field('likeCount','eq','0'),field('tag','exists')]))),null);
+ assert.equal(C.reason(row,config(group('AND',[field('likeCount','eq','0'),field('userId','neq',99)]))),null);
+ assert.equal(C.reason(row,config(group('OR',[field('likeCount','eq','0'),field('tag','exists')]))),'advanced');
+});

@@ -1,12 +1,13 @@
-export const scenarioNames=['none','title30','title90','owner','tag','lock','compound','details'];
+export const scenarioNames=['none','title30','title90','numeric90','owner','tag','lock','compound','details'];
 const esc=s=>String(s).replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;');
 const condition=(field,operator,value)=>({kind:'condition',field,operator,value});
 export function makeScenario(name){
  if(!scenarioNames.includes(name))throw Error('Unknown benchmark scenario');
  const total=128,initialSize=8,pageSize=16,target=12,lastPage=1+Math.ceil((total-initialSize)/pageSize);
  const titleBlocked=n=>name==='title90'?n%10!==0:['title30','compound'].includes(name)&&n%10<3;
+ const numericBlocked=n=>name==='numeric90'&&(n-1)<115;
  const tagBlocked=n=>name==='tag'?n%3===0:name==='compound'&&n%4===0;
- const blocked=n=>titleBlocked(n)||tagBlocked(n)||(name==='owner'&&n%3===0)||(name==='lock'&&n%3===0);
+ const blocked=n=>titleBlocked(n)||numericBlocked(n)||tagBlocked(n)||(name==='owner'&&n%3===0)||(name==='lock'&&n%3===0);
  const items=Array.from({length:total},(_,i)=>{const n=i+1;return {
   id:'sm'+n,title:titleBlocked(n)?'DROP synthetic '+n:'KEEP synthetic '+n,
   owner:{type:'user',id:name==='owner'&&n%3===0?99:12,name:'Fixture owner',iconUrl:'https://example.invalid/icon.png'},
@@ -19,8 +20,10 @@ export function makeScenario(name){
   developerDiagnosticMode:'manual',sessionDetailCacheEnabled:true,openNewWindow:false,
   movieInfoTogglable:name!=='details',descriptionTogglable:name!=='details',ngTitles:name.startsWith('title')?['DROP']:[],
   ngUserIds:name==='owner'?[99]:[],ngTags:name==='tag'?['tag-block']:name.startsWith('title')?['never-blocked']:[],
-  ngLockedTagCountEnabled:name==='lock',ngLockedTagCountThreshold:1,advancedNgRulesEnabled:name==='compound',
-  advancedNgRulesJson:JSON.stringify([{id:'fixture-rule',expression:{kind:'group',op:'OR',children:[condition('title','contains','DROP'),condition('tag','contains','tag-block')]}}])};
+  ngLockedTagCountEnabled:name==='lock',ngLockedTagCountThreshold:1,advancedNgRulesEnabled:['compound','numeric90'].includes(name),
+  advancedNgRulesJson:JSON.stringify([{id:'fixture-rule',expression:name==='numeric90'
+    ? condition('likeCount','lt',115)
+    : {kind:'group',op:'OR',children:[condition('title','contains','DROP'),condition('tag','contains','tag-block')]}}])};
  function xml(id){
   const n=Number(id.slice(2)),item=items[n-1];if(!item||item.id!==id)throw Error('Unknown fixture video');
   return '<nicovideo_thumb_response status="ok"><thumb><video_id>'+id+'</video_id><title>'+esc(item.title)+'</title><description>Fixture description</description><user_id>'+item.owner.id+'</user_id><user_nickname>Fixture owner</user_nickname><tags><tag'+(name==='lock'&&n%3===0?' lock="1"':'')+'>'+(tagBlocked(n)?'tag-block':'other')+'</tag></tags></thumb></nicovideo_thumb_response>';

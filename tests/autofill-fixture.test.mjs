@@ -14,6 +14,7 @@ test('AutoFill benchmark fixtures have deterministic disjoint pages and explicit
 test('AutoFill benchmark expected order is independent of production decisions',()=>{
  const a=makeScenario('title90');assert.deepEqual(a.expectedIds,Array.from({length:12},(_,i)=>'sm'+((i+1)*10)));
  const b=makeScenario('none');assert.deepEqual(b.expectedIds,Array.from({length:12},(_,i)=>'sm'+(i+1)));
+ assert.deepEqual(makeScenario('numeric90').expectedIds,Array.from({length:12},(_,i)=>'sm'+(i+116)));
  assert.equal(makeScenario('compound').expectedIds[0],'sm3');
 });
 test('AutoFill benchmark distinguishes tag/lock data and rejects unsupported scenarios',()=>{

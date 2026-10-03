@@ -12,6 +12,19 @@
       if (!config?.advancedNgRulesEnabled?.value) return null
       const movie = {id:item.id, title:item.title, thumbInfoDone:false,
         metadata:Object.fromEntries(MetadataReadiness.fields.map(field=>[field,'unknown']))}
+      // BRUSH-026: server-response/Snapshot numeric metadata is immutable for
+      // this candidate decision and can settle a rule before DOM/detail work.
+      // Owner/tag evidence stays unknown because later authoritative detail can
+      // replace it. Never trust a payload attached to another video identity.
+      const search = item.__nrnSearchItem?.videoId === item.id ? item.__nrnSearchItem : null
+      for (const field of MetadataReadiness.searchFields) {
+        movie[field] = null
+        const value = search?.[field]
+        if (typeof value === 'number' && Number.isSafeInteger(value) && value >= 0) {
+          movie[field] = value
+          movie.metadata[field] = 'known'
+        }
+      }
       return AdvancedNgRules.match(movie,true,config.advancedNgRulesJson.value,false).length ? 'advanced' : null
     }
     function create(config, capacity = 2048) {
