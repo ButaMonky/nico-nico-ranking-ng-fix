@@ -566,14 +566,21 @@
         return null
       },
       _appendInjectedTile(tileElem) {
+        this._appendInjectedTiles([tileElem])
+      },
+      _appendInjectedTiles(tileElems) {
+        tileElems = (tileElems || []).filter(Boolean)
+        if (!tileElems.length) return
+        var fragment = this.doc.createDocumentFragment()
+        tileElems.forEach(function(tile) { fragment.appendChild(tile) })
         var anchor = this._nextInsertAnchor()
         if (anchor && anchor.parentNode) {
-          anchor.insertAdjacentElement('afterend', tileElem)
+          anchor.parentNode.insertBefore(fragment, anchor.nextSibling)
         } else {
           console.warn('[NicoNicoRankingNG] 本物のタイルが見つからないため、独立した領域に追加しました')
-          this._fallbackContainer().appendChild(tileElem)
+          this._fallbackContainer().appendChild(fragment)
         }
-        this._injectAnchor = tileElem
+        this._injectAnchor = tileElems[tileElems.length - 1]
       },
       _fallbackContainer() {
         // 本物のタイルが1件も見つからない場合のみ使う最終手段
@@ -594,7 +601,8 @@
         host.appendChild(wrap)
         return container
       },
-      _createInjectedTile(item) {
+      _createInjectedTile(item, options) {
+        options = options || {}
         var doc = this.doc
         var thumbUrl = (item.thumbnail && (item.thumbnail.listingUrl || item.thumbnail.middleUrl || item.thumbnail.url)) || ''
         var watchUrl = 'https://www.nicovideo.jp/watch/' + item.id
@@ -671,11 +679,21 @@
         description.textContent = item.description || ""
         titleA.after(description)
         this.resultLayout.add(root)
-        this._appendInjectedTile(root)
-        this._cardActions?.attach(root, item)
+        if (!options.deferAppend) this._appendInjectedTile(root)
+        if (!options.deferActions) this._cardActions?.attach(root, item)
         // 自動追加分では1本ごとのニコニコ広告API通信を省略して高速化する。
         // 元ページ側の広告表示には影響しない。
         return root
+      },
+      _createInjectedTiles(items) {
+        var self = this
+        var pairs = (items || []).map(function(item) {
+          return {item:item, root:self._createInjectedTile(item,{deferAppend:true,deferActions:true})}
+        })
+        var roots = pairs.map(function(pair) { return pair.root })
+        this._appendInjectedTiles(roots)
+        pairs.forEach(function(pair) { self._cardActions?.attach(pair.root,pair.item) })
+        return roots
       },
       async _applyAdDecoration(root, videoId) {
         try {

@@ -213,8 +213,9 @@
         var addedIds = []
         var itemById = new Map()
 
-        var parsedResults = items.map(function(item) {
-          var tile = page._createInjectedTile(item)
+        var batchTiles = page._createInjectedTiles(items)
+        var parsedResults = items.map(function(item, itemIndex) {
+          var tile = batchTiles[itemIndex]
           var ordinal = candidateFilter.order(item)
           tile.dataset.nrnCandidateOrder = String(ordinal)
           var later = connectedInjectedRoots().find(function(root) {
