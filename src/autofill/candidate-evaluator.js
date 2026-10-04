@@ -265,16 +265,6 @@
         if (selfAdRuleRequired()) {
           await ensureSelfAdChecks(addedIds, '自動追加候補 / NG条件必須')
           if (page._disposed) return
-        } else if (model.config.selfAdWarningEnabled.value) {
-          var warningOnlyIds = visibleNonNgIds(addedIds)
-          console.log(LOG, '自演広告監査を表示動画だけに限定:', {
-            phase:'自動追加候補',
-            all:addedIds.length,
-            visibleCandidates:warningOnlyIds.length,
-            skippedNg:addedIds.length - warningOnlyIds.length
-          })
-          await ensureSelfAdChecks(warningOnlyIds, '自動追加候補 / 表示動画のみ')
-          if (page._disposed) return
         }
         var candidateSelfAdMs = Math.round(performance.now() - candidateSelfAdStarted)
 
@@ -361,6 +351,21 @@
 
         rebalanceOverflow()
         renderStoredSelfAdWarnings(addedIds, 'overflow調整後')
+        if (!selfAdRuleRequired() && model.config.selfAdWarningEnabled.value) {
+          var warningOnlyIds = addedRoots.filter(function(r) {
+            var movie = model.movies.get(r.movieId)
+            return movie && movie.metadataSettled && !movie.ng
+              && !r.elem.classList.contains('nrn-hide')
+              && !r.elem.classList.contains('nrn-autofill-overflow')
+          }).map(function(r) { return r.movieId })
+          console.log(LOG, '自演広告警告を最終表示候補だけ非同期取得:', {
+            phase:'自動追加候補',
+            all:addedIds.length,
+            visibleCandidates:warningOnlyIds.length,
+            skippedNgOrOverflow:addedIds.length - warningOnlyIds.length
+          })
+          startSelfAdWarnings(warningOnlyIds, '自動追加候補 / 最終表示動画のみ')
+        }
 
         if (model.config.autoFillAdMode.value === 'visible') {
           var visibleAddedRoots = addedRoots.filter(function(r) {

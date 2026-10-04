@@ -10895,6 +10895,43 @@ var CardActionData = (function () {
     }
     return {create,layout,ranges,history,searchKey,settingsKey}
   })()
+    // BRUSH-031: reuse only successful advertiser lists across SPA routes.
+    // Failures never enter this cache; [] is a successful known-empty result.
+    var SelfAdSessionCache = (function() {
+      var ttlMs = 5 * 60 * 1000
+      var maxEntries = 1000
+      var entries = new Map()
+      var cloneSponsors = function(sponsors) {
+        return (sponsors || []).map(function(s) {
+          return {
+            userId:s.userId,
+            advertiserName:s.advertiserName,
+            contribution:s.contribution
+          }
+        })
+      }
+      var get = function(id, now) {
+        now = now == null ? Date.now() : now
+        var entry = entries.get(id)
+        if (!entry) return null
+        if (entry.cachedAt > now || now - entry.cachedAt >= ttlMs) {
+          entries.delete(id)
+          return null
+        }
+        entries.delete(id)
+        entries.set(id, entry)
+        return cloneSponsors(entry.sponsors)
+      }
+      var put = function(id, sponsors, now) {
+        now = now == null ? Date.now() : now
+        entries.delete(id)
+        entries.set(id, {cachedAt:now, sponsors:cloneSponsors(sponsors)})
+        while (entries.size > maxEntries) entries.delete(entries.keys().next().value)
+      }
+      return {get:get, put:put, clear:function(){entries.clear()},
+        diagnostics:function(){return {size:entries.size,ttlMs:ttlMs,maxEntries:maxEntries}}}
+    })()
+
     var setupAutoFill = function(model, page, controller) {
       // Resources belong to one result route. No timer/listener survives disposal.
       var timers = new Set(), intervals = new Set(), frames = new Set(), handles = new Set()
@@ -10998,7 +11035,7 @@ var CardActionData = (function () {
       }
 
       // -------------------- SelfAdService --------------------
-      var selfAdCache = new Map()
+      var selfAdFailureCooldown = new Map()
       var normalizeAdName = function(v) {
         return String(v == null ? '' : v).normalize('NFKC').trim()
           .replace(/\s+/g, ' ').toUpperCase()
@@ -11028,6 +11065,48 @@ var CardActionData = (function () {
           return movie && movie.metadataSettled && !movie.ng
         })
       }
+      var sanitizeSelfAdSponsors = function(sponsors) {
+        return (sponsors || []).map(function(s) {
+          return {
+            userId:s && s.userId != null ? Number(s.userId) : null,
+            advertiserName:s ? String(s.advertiserName || '') : '',
+            contribution:s && s.contribution != null ? Number(s.contribution) : null
+          }
+        })
+      }
+      var selfAdResultFromSponsors = function(movie, sponsors, source) {
+        var contributor = movie && movie.contributor
+        var uploaderId = contributor && contributor.type === 'user'
+          ? Number(contributor.id) : null
+        var uploaderName = contributor ? String(contributor.name || '') : ''
+        var uploaderNameNorm = normalizeAdName(uploaderName)
+        var cleanSponsors = sanitizeSelfAdSponsors(sponsors)
+        return {
+          checked:true,
+          idMatch:Boolean(Number.isFinite(uploaderId) && cleanSponsors.some(function(s) {
+            return Number.isFinite(s.userId) && s.userId === uploaderId
+          })),
+          nameMatch:Boolean(uploaderNameNorm && cleanSponsors.some(function(s) {
+            return normalizeAdName(s.advertiserName) === uploaderNameNorm
+          })),
+          sponsors:cleanSponsors,
+          uploaderId:Number.isFinite(uploaderId) ? uploaderId : null,
+          uploaderName:uploaderName,
+          error:null,
+          source:source
+        }
+      }
+      var selfAdFailureResult = function(movie, entry, source) {
+        var contributor = movie && movie.contributor
+        var uploaderId = contributor && contributor.type === 'user'
+          ? Number(contributor.id) : null
+        return {
+          checked:false, idMatch:false, nameMatch:false, sponsors:[],
+          uploaderId:Number.isFinite(uploaderId) ? uploaderId : null,
+          uploaderName:contributor ? String(contributor.name || '') : '',
+          error:entry.error, failedAt:entry.failedAt, source:source
+        }
+      }
       var fetchSelfAdResult = function(movie) {
         if (!movie) return Promise.resolve(null)
         return Network.ads(requestScope + ':thanks:' + movie.id, function() { return fetchSelfAdResultUnshared(movie) }, {signal:runLifetime.signal})
@@ -11042,12 +11121,18 @@ var CardActionData = (function () {
           sponsors:movie.nicoadSelfAdSponsors || [],
           uploaderId:movie.contributor && movie.contributor.type === 'user'
             ? Number(movie.contributor.id) : null,
-          uploaderName:movie.contributor ? movie.contributor.name || '' : ''
+          uploaderName:movie.contributor ? movie.contributor.name || '' : '',
+          source:'movie'
         }
-        if (selfAdCache.has(movie.id)) {
-          var cached = selfAdCache.get(movie.id)
-          if (cached.checked || Date.now() - cached.failedAt < 30000) return cached
-          selfAdCache.delete(movie.id)
+        var sessionSponsors = SelfAdSessionCache.get(movie.id)
+        if (sessionSponsors !== null) {
+          return selfAdResultFromSponsors(movie, sessionSponsors, 'session-cache')
+        }
+        if (selfAdFailureCooldown.has(movie.id)) {
+          var failed = selfAdFailureCooldown.get(movie.id)
+          var failedAge = Date.now() - failed.failedAt
+          if (failedAge >= 0 && failedAge < 30000) return selfAdFailureResult(movie, failed, 'failure-cooldown')
+          selfAdFailureCooldown.delete(movie.id)
         }
 
         var contributor = movie.contributor
@@ -11071,8 +11156,9 @@ var CardActionData = (function () {
           })
           if (page._disposed) return
           if (Number(response.status) === 404) {
-            result.checked = true
-            selfAdCache.set(movie.id, result)
+            result = selfAdResultFromSponsors(movie, [], 'network-404')
+            SelfAdSessionCache.put(movie.id, [])
+            selfAdFailureCooldown.delete(movie.id)
             return result
           }
           if (Number(response.status) < 200 || Number(response.status) >= 300) {
@@ -11087,28 +11173,16 @@ var CardActionData = (function () {
             model.diagnostics?.validationFailure('adsThanks','run','incomplete')
             throw new Error('広告者一覧が取得上限100件に到達したため、一致・不一致の判定を保留します')
           }
-          result.sponsors = sponsors.map(function(s) {
-            return {
-              userId:s && s.userId != null ? Number(s.userId) : null,
-              advertiserName:s ? String(s.advertiserName || '') : '',
-              contribution:s && s.contribution != null ? Number(s.contribution) : null
-            }
-          })
-          result.idMatch = Boolean(Number.isFinite(uploaderId)
-            && result.sponsors.some(function(s) {
-              return Number.isFinite(s.userId) && s.userId === uploaderId
-            }))
-          result.nameMatch = Boolean(uploaderNameNorm
-            && result.sponsors.some(function(s) {
-              return normalizeAdName(s.advertiserName) === uploaderNameNorm
-            }))
-          result.checked = true
+          result = selfAdResultFromSponsors(movie, sponsors, 'network')
+          SelfAdSessionCache.put(movie.id, result.sponsors)
+          selfAdFailureCooldown.delete(movie.id)
         } catch (e) {
           if (page._disposed) return
           result.error = String(e && e.message ? e.message : e)
           result.failedAt = Date.now()
+          result.source = 'network-failure'
+          selfAdFailureCooldown.set(movie.id, {error:result.error, failedAt:result.failedAt})
         }
-        selfAdCache.set(movie.id, result)
         return result
       }
       var findDomRootsForMovieId = function(movieId) {
@@ -11312,6 +11386,7 @@ var CardActionData = (function () {
             rows.push({
               id:id, uploaderId:result.uploaderId, uploaderName:result.uploaderName,
               sponsors:result.sponsors ? result.sponsors.length : 0,
+              source:result.source || '',
               idMatch:result.idMatch, nameMatch:result.nameMatch,
               checked:result.checked, error:result.error || ''
             })
@@ -11330,6 +11405,7 @@ var CardActionData = (function () {
           idMatches:rows.filter(function(r){return r.idMatch}).length,
           nameMatches:rows.filter(function(r){return r.nameMatch}).length,
           errors:errors,
+          sessionCacheHits:rows.filter(function(r){return r.source === 'session-cache'}).length,
           elapsedMs:Math.round(performance.now() - started),
           ruleUsesIdMatch:advancedRulesUseField('selfAdIdMatch'),
           ruleUsesNameMatch:advancedRulesUseField('selfAdNameMatch'),
@@ -11358,6 +11434,17 @@ var CardActionData = (function () {
         }
         return {checked:checked, matches:matches, errors:errors,
           idMatches:summary.idMatches, nameMatches:summary.nameMatches}
+      }
+      var startSelfAdWarnings = function(ids, reason) {
+        if (page._disposed || selfAdRuleRequired() || !model.config.selfAdWarningEnabled.value) return
+        ensureSelfAdChecks(ids, reason).then(function() {
+          if (!page._disposed) renderStoredSelfAdWarnings(ids, reason + ' / 非同期完了')
+        }, function(error) {
+          if (!page._disposed) console.warn(LOG, '自演広告警告の非同期取得に失敗:', {
+            reason:reason,
+            error:String(error && error.message ? error.message : error)
+          })
+        })
       }
 
       var decodeSearchPath = function() {
@@ -13521,16 +13608,6 @@ var CardActionData = (function () {
         if (selfAdRuleRequired()) {
           await ensureSelfAdChecks(addedIds, '自動追加候補 / NG条件必須')
           if (page._disposed) return
-        } else if (model.config.selfAdWarningEnabled.value) {
-          var warningOnlyIds = visibleNonNgIds(addedIds)
-          console.log(LOG, '自演広告監査を表示動画だけに限定:', {
-            phase:'自動追加候補',
-            all:addedIds.length,
-            visibleCandidates:warningOnlyIds.length,
-            skippedNg:addedIds.length - warningOnlyIds.length
-          })
-          await ensureSelfAdChecks(warningOnlyIds, '自動追加候補 / 表示動画のみ')
-          if (page._disposed) return
         }
         var candidateSelfAdMs = Math.round(performance.now() - candidateSelfAdStarted)
 
@@ -13617,6 +13694,21 @@ var CardActionData = (function () {
 
         rebalanceOverflow()
         renderStoredSelfAdWarnings(addedIds, 'overflow調整後')
+        if (!selfAdRuleRequired() && model.config.selfAdWarningEnabled.value) {
+          var warningOnlyIds = addedRoots.filter(function(r) {
+            var movie = model.movies.get(r.movieId)
+            return movie && movie.metadataSettled && !movie.ng
+              && !r.elem.classList.contains('nrn-hide')
+              && !r.elem.classList.contains('nrn-autofill-overflow')
+          }).map(function(r) { return r.movieId })
+          console.log(LOG, '自演広告警告を最終表示候補だけ非同期取得:', {
+            phase:'自動追加候補',
+            all:addedIds.length,
+            visibleCandidates:warningOnlyIds.length,
+            skippedNgOrOverflow:addedIds.length - warningOnlyIds.length
+          })
+          startSelfAdWarnings(warningOnlyIds, '自動追加候補 / 最終表示動画のみ')
+        }
 
         if (model.config.autoFillAdMode.value === 'visible') {
           var visibleAddedRoots = addedRoots.filter(function(r) {
@@ -14630,22 +14722,22 @@ var CardActionData = (function () {
         if (selfAdRuleRequired()) {
           await ensureSelfAdChecks([...originalMovieIds], '初期ページ / NG条件必須')
           if (page._disposed) return
-        } else if (model.config.selfAdWarningEnabled.value) {
-          var initialWarningIds = visibleNonNgIds([...originalMovieIds])
-          console.log(LOG, '自演広告監査を表示動画だけに限定:', {
-            phase:'初期ページ',
-            all:originalMovieIds.size,
-            visibleCandidates:initialWarningIds.length,
-            skippedNg:originalMovieIds.size - initialWarningIds.length
-          })
-          await ensureSelfAdChecks(initialWarningIds, '初期ページ / 表示動画のみ')
-          if (page._disposed) return
         }
         var initialSelfAdMs = Math.round(performance.now() - initialSelfAdStarted)
         renderStoredSelfAdWarnings([...originalMovieIds], '初期ページ')
 
         initialized = true
         rebalanceOverflow()
+        if (!selfAdRuleRequired() && model.config.selfAdWarningEnabled.value) {
+          var initialWarningIds = visibleNonNgIds([...originalMovieIds])
+          console.log(LOG, '自演広告警告を表示動画だけ非同期取得:', {
+            phase:'初期ページ',
+            all:originalMovieIds.size,
+            visibleCandidates:initialWarningIds.length,
+            skippedNg:originalMovieIds.size - initialWarningIds.length
+          })
+          startSelfAdWarnings(initialWarningIds, '初期ページ / 表示動画のみ')
+        }
 
         // 重要: setupAutoFill直後ではなく、動画DOMが安定したこの時点で初めて
         // 現在ページのページャーから最終ページを判定する。

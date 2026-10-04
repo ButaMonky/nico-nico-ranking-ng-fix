@@ -56,21 +56,109 @@ test('network: response timeout includes body download',async()=>{
  const n=loadNetwork({fetch:async(_url,{signal})=>({text:()=>new Promise((resolve,reject)=>signal.addEventListener('abort',()=>{aborted=true;reject(Error('aborted'));}))})});
  await assert.rejects(n.fetchResponse('test',{},5),/aborted/);assert.equal(aborted,true);
 });
-test('ads: parallel callers share one request; malformed response is not a negative match; cooldown expires',async()=>{
- let calls=0,now=1000,body={data:{sponsors:[]}};
- const ctx=vm.createContext({runLifetime:new AbortController(),page:{},requestScope:'test-route',Network:loadNetwork(),Date:{now:()=>now},model:{},AdvancedNgRules:{},gmRequest:async()=>{calls++;return {status:200,responseText:JSON.stringify(body)};}});
- const a=auto.indexOf('      var selfAdCache = new Map()'),b=auto.indexOf('      var findDomRootsForMovieId',a);
- const run=vm.runInContext(auto.slice(a,b)+';fetchSelfAdResult',ctx);
- const movie={id:'sm1',contributor:{type:'user',id:42,name:'user'}};
- const results=await Promise.all([run(movie),run(movie)]);assert.equal(calls,1);assert.equal(results[0].checked,true);
- body={unexpected:true};const other={...movie,id:'sm2'};
- assert.equal((await run(other)).checked,false);await new Promise(r=>setImmediate(r));
- await run(other);assert.equal(calls,2);
- now+=30001;body={data:{sponsors:[{userId:42,advertiserName:'user'}]}};
- await new Promise(r=>setImmediate(r));const result=await run(other);assert.equal(calls,3);assert.equal(result.idMatch,true);
- body={data:{sponsors:Array.from({length:100},()=>({userId:3}))}};
- assert.equal((await run({...movie,id:'sm3'})).checked,false);
+function createSelfAdHarness(){
+ let now=1000;
+ const DateShim={now:()=>now};
+ const ctx=vm.createContext({AbortController,Date:DateShim});
+ const sharedStart=auto.indexOf('    var SelfAdSessionCache = (function() {');
+ const setupStart=auto.indexOf('    var setupAutoFill = function(',sharedStart);
+ const innerStart=auto.indexOf('      var selfAdFailureCooldown = new Map()',setupStart);
+ const innerEnd=auto.indexOf('      var findDomRootsForMovieId',innerStart);
+ assert.ok(sharedStart>=0&&setupStart>sharedStart&&innerStart>setupStart&&innerEnd>innerStart,'self-ad source boundaries must be present');
+ vm.runInContext(auto.slice(sharedStart,setupStart),ctx);
+ const networkApi=loadNetwork();
+ const makeRoute=(scope,gmRequest)=>{
+  Object.assign(ctx,{
+   runLifetime:new AbortController(),page:{_disposed:false},requestScope:scope,Network:networkApi,
+   model:{diagnostics:{validationFailure(){}}},AdvancedNgRules:{},gmRequest
+  });
+  const body=auto.slice(innerStart,innerEnd);
+  return vm.runInContext(
+   '(function(runLifetime,page,requestScope,Network,Date,model,AdvancedNgRules,gmRequest){'+body+
+   ';return {fetchSelfAdResult,fetchSelfAdResultUnshared,selfAdFailureCooldown};})'+
+   '(runLifetime,page,requestScope,Network,Date,model,AdvancedNgRules,gmRequest)',ctx);
+ };
+ return {
+  makeRoute,
+  advance(ms){now+=ms;},
+  setNow(value){now=value;},
+  sessionCache:ctx.SelfAdSessionCache
+ };
+}
+const selfAdMovie=(id,userId=42,name='user')=>({id,contributor:{type:'user',id:userId,name}});
+
+test('ads: parallel callers share one request; successful sponsors are reused across SPA routes and matches are recomputed',async()=>{
+ const h=createSelfAdHarness();let calls=0;
+ const route1=h.makeRoute('route-1',async()=>{calls++;return {status:200,responseText:JSON.stringify({data:{sponsors:[{userId:99,advertiserName:'Renamed'}]}})};});
+ const movie=selfAdMovie('sm1',42,'user');
+ const results=await Promise.all([route1.fetchSelfAdResult(movie),route1.fetchSelfAdResult(movie)]);
+ assert.equal(calls,1);assert.equal(results[0].checked,true);assert.equal(results[0].idMatch,false);
+ const route2=h.makeRoute('route-2',async()=>{calls++;throw Error('session cache miss');});
+ const reused=await route2.fetchSelfAdResult(selfAdMovie('sm1',99,'Renamed'));
+ assert.equal(calls,1,'a new SPA route reuses successful sponsor data without another request');
+ assert.equal(reused.source,'session-cache');assert.equal(reused.idMatch,true);assert.equal(reused.nameMatch,true);
 });
+
+test('ads: 404 is a successful known-empty result and is reused across SPA routes',async()=>{
+ const h=createSelfAdHarness();let calls=0;
+ const first=h.makeRoute('route-empty-1',async()=>{calls++;return {status:404,responseText:''};});
+ const a=await first.fetchSelfAdResult(selfAdMovie('sm404'));
+ assert.equal(a.checked,true);assert.equal(a.sponsors.length,0);
+ const second=h.makeRoute('route-empty-2',async()=>{calls++;throw Error('known-empty should be cached');});
+ const b=await second.fetchSelfAdResult(selfAdMovie('sm404'));
+ assert.equal(calls,1);assert.equal(b.checked,true);assert.equal(b.source,'session-cache');assert.equal(b.sponsors.length,0);
+});
+
+test('ads: transient failures stay route-local for 30 seconds and never poison the cross-route success cache',async()=>{
+ const h=createSelfAdHarness();let calls=0;
+ const bad=h.makeRoute('route-fail-1',async()=>{calls++;return {status:200,responseText:JSON.stringify({unexpected:true})};});
+ const movie=selfAdMovie('sm-fail');
+ const first=await bad.fetchSelfAdResult(movie);
+ assert.equal(first.checked,false);assert.equal(first.source,'network-failure');assert.equal(calls,1);
+ const cooldown=await bad.fetchSelfAdResult(movie);
+ assert.equal(cooldown.checked,false);assert.equal(cooldown.source,'failure-cooldown');assert.equal(calls,1);
+ const freshRoute=h.makeRoute('route-fail-2',async()=>{calls++;return {status:200,responseText:JSON.stringify({data:{sponsors:[{userId:42,advertiserName:'user'}]}})};});
+ const recovered=await freshRoute.fetchSelfAdResult(movie);
+ assert.equal(calls,2,'a different SPA route retries immediately because failures are not session-cached');
+ assert.equal(recovered.checked,true);assert.equal(recovered.idMatch,true);
+});
+
+test('ads: session success cache expires at five minutes and remains bounded',async()=>{
+ const h=createSelfAdHarness();let calls=0;
+ const response=()=>({status:200,responseText:JSON.stringify({data:{sponsors:[]}})});
+ const first=h.makeRoute('ttl-1',async()=>{calls++;return response();});
+ await first.fetchSelfAdResult(selfAdMovie('sm-ttl'));assert.equal(calls,1);
+ h.advance(299999);
+ const second=h.makeRoute('ttl-2',async()=>{calls++;return response();});
+ assert.equal((await second.fetchSelfAdResult(selfAdMovie('sm-ttl'))).source,'session-cache');assert.equal(calls,1);
+ h.advance(1);
+ const third=h.makeRoute('ttl-3',async()=>{calls++;return response();});
+ assert.equal((await third.fetchSelfAdResult(selfAdMovie('sm-ttl'))).source,'network');assert.equal(calls,2,'cache expires exactly at five minutes');
+ h.sessionCache.clear();
+ for(let i=0;i<1001;i++)h.sessionCache.put('sm-bound-'+i,[]);
+ assert.equal(h.sessionCache.diagnostics().size,1000);assert.equal(h.sessionCache.get('sm-bound-0'),null);assert.equal(h.sessionCache.get('sm-bound-1000').length,0);
+});
+
+test('ads: a 100-sponsor incomplete response is never promoted into the cross-route success cache',async()=>{
+ const h=createSelfAdHarness();let calls=0;
+ const full=Array.from({length:100},(_,i)=>({userId:i+1,advertiserName:'u'+i}));
+ const first=h.makeRoute('full-1',async()=>{calls++;return {status:200,responseText:JSON.stringify({data:{sponsors:full}})};});
+ const incomplete=await first.fetchSelfAdResult(selfAdMovie('sm-full'));
+ assert.equal(incomplete.checked,false);assert.equal(calls,1);
+ const second=h.makeRoute('full-2',async()=>{calls++;return {status:200,responseText:JSON.stringify({data:{sponsors:[{userId:42,advertiserName:'user'}]}})};});
+ const retry=await second.fetchSelfAdResult(selfAdMovie('sm-full'));
+ assert.equal(calls,2);assert.equal(retry.checked,true);assert.equal(retry.idMatch,true);
+});
+
+test('ads policy: required self-ad NG rules stay blocking while warning-only lookups are fire-and-render-later',()=>{
+ assert.match(auto,/await ensureSelfAdChecks\(\[\.\.\.originalMovieIds\], '初期ページ \/ NG条件必須'\)/);
+ assert.match(auto,/await ensureSelfAdChecks\(addedIds, '自動追加候補 \/ NG条件必須'\)/);
+ assert.doesNotMatch(auto,/await ensureSelfAdChecks\(initialWarningIds/);
+ assert.doesNotMatch(auto,/await ensureSelfAdChecks\(warningOnlyIds/);
+ assert.match(auto,/startSelfAdWarnings\(initialWarningIds, '初期ページ \/ 表示動画のみ'\)/);
+ assert.match(auto,/startSelfAdWarnings\(warningOnlyIds, '自動追加候補 \/ 最終表示動画のみ'\)/);
+});
+
 test('Snapshot: bad response triggers fallback path; empty data cannot claim a next page',async()=>{
  let body={data:[],meta:{totalCount:10000}};
  const ctx=vm.createContext({page:{},model:{},URLSearchParams,performance,console:quiet,LOG:'test',SNAPSHOT_ENDPOINT:'https://example.invalid',snapshotDescriptor:{q:'test',isTag:true,order:'desc',sortField:'startTime'},gmRequest:async()=>({status:200,responseText:JSON.stringify(body)})});

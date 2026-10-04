@@ -133,22 +133,22 @@
         if (selfAdRuleRequired()) {
           await ensureSelfAdChecks([...originalMovieIds], '初期ページ / NG条件必須')
           if (page._disposed) return
-        } else if (model.config.selfAdWarningEnabled.value) {
-          var initialWarningIds = visibleNonNgIds([...originalMovieIds])
-          console.log(LOG, '自演広告監査を表示動画だけに限定:', {
-            phase:'初期ページ',
-            all:originalMovieIds.size,
-            visibleCandidates:initialWarningIds.length,
-            skippedNg:originalMovieIds.size - initialWarningIds.length
-          })
-          await ensureSelfAdChecks(initialWarningIds, '初期ページ / 表示動画のみ')
-          if (page._disposed) return
         }
         var initialSelfAdMs = Math.round(performance.now() - initialSelfAdStarted)
         renderStoredSelfAdWarnings([...originalMovieIds], '初期ページ')
 
         initialized = true
         rebalanceOverflow()
+        if (!selfAdRuleRequired() && model.config.selfAdWarningEnabled.value) {
+          var initialWarningIds = visibleNonNgIds([...originalMovieIds])
+          console.log(LOG, '自演広告警告を表示動画だけ非同期取得:', {
+            phase:'初期ページ',
+            all:originalMovieIds.size,
+            visibleCandidates:initialWarningIds.length,
+            skippedNg:originalMovieIds.size - initialWarningIds.length
+          })
+          startSelfAdWarnings(initialWarningIds, '初期ページ / 表示動画のみ')
+        }
 
         // 重要: setupAutoFill直後ではなく、動画DOMが安定したこの時点で初めて
         // 現在ページのページャーから最終ページを判定する。
