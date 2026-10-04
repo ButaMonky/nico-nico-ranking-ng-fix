@@ -1,10 +1,10 @@
-# 配布・手動更新の仕様
+# 配布・自動更新の仕様
 
 [利用者向けREADME](../README.md) · [開発手順](../CONTRIBUTING.md)
 
 ## 配布元と更新の考え方
 
-本改変版の配布ファイルは `dist/nico-nico-ranking-ng.user.js` です。**手動更新**とし、自動更新先は設けません。初回の導入リンクを開くことと、自動更新が有効であることは別です。
+本改変版の配布ファイルは `dist/nico-nico-ranking-ng.user.js` です。160.27からは、Tampermonkeyの更新確認用 `dist/nico-nico-ranking-ng.meta.js` も同じビルドから生成し、GitHub `master` の固定URLを自動更新先として使います。開発途中のbranchやintegrationは更新先にしません。
 
 安定した配布対象は、検証してmasterへ反映した版です。作業途中のブランチを一般利用者へ案内しません。ファイル名とインストールURLは更新ごとに変えず、最新版の判定は `@version` とCHANGELOGを使います。
 
@@ -12,36 +12,37 @@
 
 新しいリポジトリには製品masterだけを移し、旧研究ブランチ・旧タグ・既存PRは含めません。旧タグ `stable-v14.1` は非公開バックアップ側に残し、最新版として案内したり付け替えたりしません。
 
-## 160.26のメタデータ
+## 160.27のメタデータ
 
 | キー | 値・目的 |
 | --- | --- |
 | @name | `Nico Nico Ranking NG`。既存利用者の識別を維持 |
 | @namespace | `http://userscripts.org/users/121129`。URLが古くても識別値として維持 |
-| @version | `160.26`。内部診断の `NRN_VERSION` も揃える |
-| @author | `kengo321 (original)`。原作者を示し、原作者が改変版を保守する意味にはしない |
+| @version | `160.27`。内部診断の `NRN_VERSION` も揃える |
+| @author | `ButaMonky`。この改変版の作者・保守者 |
+| @contributor | `kengo321 (original)`。原作者クレジット |
 | @license | 本体MIT、同梱部品は別条件である旨を記載 |
-| @downloadURL | `none`。Tampermonkeyで更新確認を止める指定 |
-| @updateURL | なし。原配布元のURLを削除 |
+| @updateURL | `https://raw.githubusercontent.com/ButaMonky/nico-nico-ranking-ng-fix/refs/heads/master/dist/nico-nico-ranking-ng.meta.js` |
+| @downloadURL | `https://raw.githubusercontent.com/ButaMonky/nico-nico-ranking-ng-fix/refs/heads/master/dist/nico-nico-ranking-ng.user.js` |
 | @homepageURL | `https://github.com/ButaMonky/nico-nico-ranking-ng-fix` |
 | @supportURL | `https://github.com/ButaMonky/nico-nico-ranking-ng-fix/issues` |
 
-根拠: [Tampermonkeyの更新URL仕様](https://www.tampermonkey.net/documentation.php?q=update_url)。自動更新しないこの構成では `.meta.js` を配信・生成する必要はありません。将来の自動更新を有効にするためだけのファイルは追加していません。
+根拠: [Tampermonkeyの更新URL仕様](https://www.tampermonkey.net/documentation.php?q=update_url)。`.meta.js` はビルド済み `user.js` のUserscriptメタデータブロックだけを取り出して生成し、版番号や更新URLが本文とずれないようにします。Greasy Fork 880 は原配布版なので、この改変版の更新先には使いません。
 
 ## 設定を保持して更新する
 
-160.24以前には原配布元のGreasy Forkを指す更新URLが残っています。このリポジトリへ新しいファイルを置いても、以前の更新元を通じて自動移行することはできません。最初は一度、手動更新が必要です。
+160.24以前には原配布元のGreasy Forkを指す更新URLが残り、160.25〜160.26はこの改変版側で自動更新を停止していました。そのため160.27への移行だけは、READMEのインストールリンクから一度手動更新する必要があります。160.27以降は `@updateURL` の版番号確認により、このプロジェクトのGitHub stable版へ追従できます。
 
-160.25からの移行も、新しいREADMEのインストールリンクから手動で更新します。旧リポジトリのリンクは非公開バックアップを指す場合があるため、そのまま使い続けないでください。配布ファイル名は変わりますが、スクリプトの名前・namespace・保存形式は同じです。
+配布ファイル名が変わっても、スクリプトの名前・namespace・保存形式は維持するため、既存項目へ上書きして設定を引き継ぐ方針です。
 
 1. Tampermonkeyの「ユーティリティ」で、スクリプト本体と保存データを含むバックアップを作成します。環境ごとに項目名は異なります。含まれる範囲を確認し、バックアップは自分の端末内に保存します。
 2. 既存スクリプトを残したまま、新版をインストールします。別の項目が作られそうなら既存項目を開き、新版の全文で置き換えて保存します。
 3. 版番号、NG各種、ロックタグ、複合ルール、閲覧済み、補充・表示設定を確認します。ページを開き直し、原配布版などと二重に動いていないことを確認します。
-4. このスクリプトの更新確認を無効にします。Tampermonkeyで更新URLを独自設定していた場合は、古いURLを使い続けていないか確認してください。5.5.0では更新確認と自動インストールが分かれています。
+4. Tampermonkeyのスクリプト情報で、この改変版の更新先が `raw.githubusercontent.com/ButaMonky/nico-nico-ranking-ng-fix/.../master/dist/` を指していることを確認します。Greasy Fork 880 や旧リポジトリを指す独自更新URLが残っている場合は使わないでください。5.5.0では更新確認と自動インストールが分かれています。
 
 同名・同namespaceでも、利用環境での実際の上書き・保存値保持を無条件に保証するものではありません。旧版のアンインストールや、名前・namespaceの同時変更はしません。異常時はバックアップを利用します。
 
-設定はGM_getValue/GM_setValue（またはGM.*）の保存値を使います。160.26でキー・保存形式・既定値は変更していません。CSV出力は従来の7種だけで、ロックタグ、複合NG JSON、表示・補充などの設定は対象外です。sessionStorageの詳細キャッシュは再取得できる一時情報で、設定とは別です。
+設定はGM_getValue/GM_setValue（またはGM.*）の保存値を使います。160.27の自動更新対応でもキー・保存形式は変更しません。CSV出力は従来の7種だけで、ロックタグ、複合NG JSON、表示・補充などの設定は対象外です。sessionStorageの詳細キャッシュは再取得できる一時情報で、設定とは別です。
 
 [Tampermonkeyのバックアップ手順](https://www.tampermonkey.net/faq.php?locale=en&q=Q106) · [保存値の確認](https://www.tampermonkey.net/faq.php?locale=en&q=Q400) · [5.5.0の変更](https://www.tampermonkey.net/changelog.php)
 
@@ -53,17 +54,18 @@ GitHubが非公開の場合、リポジトリやファイルにはアクセス�
 
 公開設定はリポジトリ単位であり、masterだけを公開する設定ではありません。旧研究ブランチ・旧タグ等の確認は製品masterの検査と分けます。非公開状態の変更は利用者の指示に従います。
 
-## 将来、自動更新を導入する場合
+## 自動更新の仕組み
 
-現在の160.26は手動更新のままです。将来の方式を確定したものではありません。自動更新を採用する場合は、認証なしで取得できる安定版の配布先を選び、次を満たしてから案内します。
+160.27以降は、認証なしで取得できるGitHub `master` の固定配布先を使います。`@updateURL` はメタデータだけの `nico-nico-ranking-ng.meta.js`、`@downloadURL` は本文の `nico-nico-ranking-ng.user.js` を指します。
 
-- 開発途中の変更が届かない配布先を使う。非公開リポジトリ内の一つのブランチだけを公開することはできないため、同リポジトリ全体の公開判断か、別の公開配布先が必要。
-- 同じ検証済みsrcから本文のuser.jsと更新確認用のmeta.jsを生成し、版番号を揃えて配布する。名前・namespace・保存キーは維持する。
-- 配布物が変わるため増番し、160.26と同じ版の差し替えにしない。
-- 自動更新停止中の160.26や原配布元を参照する旧版は、公開先を用意するだけでは移行しない。保存データをバックアップし、最初の一度は既存項目へ手動で上書きする。
-- Tampermonkey実拡張で、新規導入・旧版からの移行・次版の検出・設定保持を確認する。トークンやCookieを配布URLへ埋め込まない。
+- 開発途中の `integration/brush` や作業ブランチは更新対象にしません。
+- `meta.js` と `user.js` は同じ検証済みsrcから生成し、`@version` を必ず一致させます。
+- 配布物が変わるたびに版番号を増やし、同じ版番号の中身だけを差し替えません。
+- 160.26以前からは最初の一度だけ手動上書きが必要です。その後はTampermonkeyの更新確認で追従できます。
+- 実際にmasterへ公開する前に、Tampermonkey実拡張で新規導入・旧版からの移行・次版検出・設定保持を確認します。
+- トークン、Cookie、PAT、期限付きURLは更新先に使いません。
 
-公開範囲・配布先の変更は利用者の判断後に行います。
+公開は利用者の明示承認後に行い、未検証のintegrationを自動更新先へ出しません。
 
 ## 版番号と生成
 
@@ -78,4 +80,4 @@ GitHubが非公開の場合、リポジトリやファイルにはアクセス�
 
 ビルド・構文・単体試験、影響する模擬ブラウザ試験、現在ツリーのプライバシー検査を行います。送信前には差分、コミットのnoreplyメール、送信する先端の履歴検査を確認します。[コマンドと環境](../CONTRIBUTING.md)
 
-Tampermonkeyの実拡張による導入・保存値保持・更新停止の確認は、模擬ブラウザ試験とは別です。確認できた範囲と未実施の範囲は[版別記録](distribution-16025.md)に残します。
+Tampermonkeyの実拡張による導入・保存値保持・自動更新検出の確認は、模擬ブラウザ試験とは別です。160.27の確認状況は[版別記録](distribution-16027.md)に残します。
