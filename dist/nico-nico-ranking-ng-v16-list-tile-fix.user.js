@@ -9070,6 +9070,10 @@ div:has(> div > a[data-anchor-page="ranking_genre"][href^="/watch/"] > div > p),
 .nrn-owner-unavailable { color:#828892 !important; }
 .nrn-page-consumed { background:repeating-linear-gradient(135deg,transparent,transparent 5px,#8c929755 5px,#8c929755 6px); text-decoration:line-through; }
 .nrn-native-pager-replaced { display:none !important; }
+/* Keep page numbers/ranges atomic under native body overflow-wrap:anywhere.
+   Scope to our replacement or annotated native pager; keep native sizes/SVGs. */
+.nrn-journey-pager, nav[data-scope="pagination"]:has(.nrn-page-consumed) { flex-shrink:0; white-space:nowrap; }
+.nrn-journey-pager > [data-part], nav[data-scope="pagination"]:has(.nrn-page-consumed) > [data-part] { flex-shrink:0; white-space:nowrap; overflow-wrap:normal; }
 .nrn-pager-summary { display:block; font-size:12px; color:#626a75; margin:4px 0; }
 a.nrn-parsed[data-anchor-detail="nicoad"] { padding-bottom:28px; }
 a.nrn-parsed[data-anchor-detail="nicoad"] > .nrn-movie-info-toggle { background:#fff; box-shadow:0 0 0 1px #aeb5be; }
