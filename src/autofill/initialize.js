@@ -48,13 +48,9 @@
         if (page._disposed) return
         var initialDomWaitMs = Math.round(performance.now() - initialDomWaitStarted)
 
-        // connected + ID重複除去で正規化。
-        var rootSeen = new Set()
-        originalRoots = originalRoots.filter(function(r) {
-          if (!r.movieId || rootSeen.has(r.movieId)) return false
-          rootSeen.add(r.movieId)
-          return true
-        })
+        // Keep physical card slots (including ads); request identities remain
+        // deduplicated separately in originalMovieIds below.
+        refreshOriginalCardBudget()
 
         originalMovieIds = new Set(originalRoots.map(function(r) {
           return r.movieId
@@ -247,6 +243,54 @@
         }
       }
 
+      // Late native cards and metadata settlement can alter the budget without
+      // a view-mode transition. Reconcile only actual changes, once per task.
+      var cardBudgetMovies = new Map()
+      var cardBudgetTimer = null
+      var scheduleCardBudget = function() {
+        if (page._disposed || !initialized || cardBudgetTimer !== null) return
+        cardBudgetTimer = setTimeout(function() {
+          cardBudgetTimer = null
+          if (page._disposed) return
+          stopRefillIfUnneeded()
+          rebalanceOverflow()
+          updateStatus()
+          clearTimeout(debounceTimer)
+          debounceTimer = setTimeout(function() { updatePagerUi('visible card budget changed'); maybeFetchMore() }, 100)
+        }, 0)
+      }
+      var refreshOriginalCardBudget = function() {
+        var seen = new Set()
+        var next = currentOriginalRootCandidates().filter(function(root) {
+          if (seen.has(root.elem)) return false
+          seen.add(root.elem); return true
+        }).sort(function(a,b) {
+          var position = a.elem.compareDocumentPosition(b.elem)
+          return position & 4 ? -1 : position & 2 ? 1 : 0
+        })
+        var changed = next.length !== originalRoots.length || next.some(function(root,i) { return root.elem !== originalRoots[i]?.elem })
+        originalRoots = next
+        next.forEach(function(root) {
+          var movie = model.movies.get(root.movieId)
+          if (!movie || cardBudgetMovies.has(movie)) return
+          var settled = movie.metadataSettled
+          var onMetadata = function() {
+            var current = movie.metadataSettled
+            if (settled === current) return
+            settled = current
+            scheduleCardBudget()
+          }
+          cardBudgetMovies.set(movie,onMetadata)
+          movie.on('metadataChanged',onMetadata).on('thumbInfoDone',onMetadata)
+          listeners.push(function() { movie.off('metadataChanged',onMetadata); movie.off('thumbInfoDone',onMetadata); cardBudgetMovies.delete(movie) })
+        })
+        return changed
+      }
+      page._onAutoFillRootsChanged = function() {
+        if (page._disposed) return
+        if (refreshOriginalCardBudget()) scheduleCardBudget()
+      }
+
       var restorePrefilteredCandidates = function() {
         if (page._disposed) return
         lastAcceptanceRate = null
@@ -271,15 +315,14 @@
 
       model.movieViewModes.on('movieViewModeChanged', function() {
         if (!initialized) return
-        stopRefillIfUnneeded()
-        rebalanceOverflow()
-        updateStatus()
-        clearTimeout(debounceTimer)
-        debounceTimer = setTimeout(function() { updatePagerUi('NG display changed'); maybeFetchMore() }, 100)
+        // Wait until the card's own view listener has applied nrn-hide/reduce.
+        // A burst of NG transitions shares one budget/status update.
+        scheduleCardBudget()
       })
 
       model.config.autoFillEnabled.on('changed', function(enabled) {
         stopRefillIfUnneeded()
+        rebalanceOverflow()
         if (enabled) {
           gaveUp = false
           stopReason = ''

@@ -21,7 +21,9 @@ try {
     window.documentIdentity = {};
     window.savedIdentity = window.documentIdentity;
     window.requests = []; window.hold = false; window.aborts = 0; window.storageWrites = 0;
-    window.GM_getValue = (key, fallback) => ({autoFillEnabled:true, autoFillTargetCount:36,
+    // The fixture has 36 physical slots even when IDs are rewritten alike.
+    // Keep a real shortage to exercise in-flight AutoFill cancellation.
+    window.GM_getValue = (key, fallback) => ({autoFillEnabled:true, autoFillTargetCount:37,
       autoFillMaxExtraPages:1, selfAdWarningEnabled:false, openNewWindow:false, ngTags:'["require-details"]'}[key] ?? fallback);
     window.fetches = []; window.fetchAborts = 0;
     window.fetch = (url, options) => new Promise((resolve, reject) => {

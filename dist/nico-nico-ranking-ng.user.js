@@ -7,7 +7,7 @@
 // @match        *://www.nicovideo.jp/ranking*
 // @match        *://www.nicovideo.jp/search/*
 // @match        *://www.nicovideo.jp/tag/*
-// @version      160.27
+// @version      160.28
 // @grant        unsafeWindow
 // @grant        GM_getValue
 // @grant        GM_setValue
@@ -205,7 +205,7 @@
 
   // This facade is scoped to this userscript; other scripts keep their console.
   var nrnConsoleConfig = null
-  var NRN_VERSION = '160.27'
+  var NRN_VERSION = '160.28'
   var nrnNativeConsole = globalThis.console
   var nrnConsoleCounts = {warnings:0,errors:0}
   var nrnSetConsoleConfig = function(config) { nrnConsoleConfig = config }
@@ -6767,6 +6767,7 @@ html[data-nrn-ui-theme="dark"] .nrn-contributor-ng-name-button:hover {
               if (parsed.length > 0) { callback(parsed, true); this.unbindUnconnectedMovieRoots() }
               this.addConfigBar()
               this._refreshPagerAnnotations?.()
+              this._onAutoFillRootsChanged?.()
             }
           })
         })
@@ -10984,6 +10985,7 @@ var CardActionData = (function () {
         timers.clear(); intervals.clear(); frames.clear(); listeners.length = 0
         delete model.config._nrnDiagnosticHook
         delete page._refreshPagerAnnotations
+        delete page._onAutoFillRootsChanged
         if (typeof restorePagerUi === 'function') restorePagerUi()
       }
       var LOG = '[NicoNicoRankingNG autoFill ' + NRN_VERSION + ']'
@@ -11673,27 +11675,37 @@ var CardActionData = (function () {
         })
       }
 
-      var uniqueVisibleRoots = function(roots) {
+      // Physical slots and unique video IDs are deliberately separate. Native
+      // ads may show the same video as an ordinary card and still occupy a slot.
+      var visibleCardRoots = function(roots, ignoreOverflow) {
         var seen = new Set()
         return roots.filter(function(r) {
-          if (!r || !r.elem || !r.elem.isConnected || !r.movieId || seen.has(r.movieId)) return false
+          if (!r || !r.elem || !r.elem.isConnected || !r.movieId || seen.has(r.elem)) return false
           var movie = model.movies.get(r.movieId)
           if (!movie) return false
           if (model.config.useGetThumbInfo.value && !movie.metadataSettled) return false
-          if (movie.ng) return false
+          if (movie.ng && !model.config.ngMovieVisible.value) return false
           if (r.elem.classList.contains('nrn-hide')) return false
           if (r.elem.classList.contains('nrn-autofill-pending')) return false
-          if (r.elem.classList.contains('nrn-autofill-overflow')) return false
-          seen.add(r.movieId)
+          if (!ignoreOverflow && r.elem.classList.contains('nrn-autofill-overflow')) return false
+          seen.add(r.elem)
+          return true
+        })
+      }
+      var uniqueVisibleRoots = function(roots) {
+        var seen = new Set()
+        return visibleCardRoots(roots).filter(function(root) {
+          if (seen.has(root.movieId)) return false
+          seen.add(root.movieId)
           return true
         })
       }
 
       var visibleOriginalCount = function() {
-        return uniqueVisibleRoots(connectedOriginalRoots()).length
+        return visibleCardRoots(connectedOriginalRoots()).length
       }
       var visibleInjectedCount = function() {
-        return uniqueVisibleRoots(connectedInjectedRoots()).length
+        return visibleCardRoots(connectedInjectedRoots()).length
       }
       var visibleTotalCount = function() {
         return visibleOriginalCount() + visibleInjectedCount()
@@ -11724,13 +11736,17 @@ var CardActionData = (function () {
       }
 
       var rebalanceOverflow = function() {
-        connectedInjectedRoots().forEach(function(r) {
-          r.elem.classList.remove('nrn-autofill-overflow')
-        })
-        var remaining = Math.max(0, targetCount() - visibleOriginalCount())
-        var visibleInjected = uniqueVisibleRoots(connectedInjectedRoots())
-        visibleInjected.forEach(function(r, i) {
-          if (i >= remaining) r.elem.classList.add('nrn-autofill-overflow')
+        var roots = connectedOriginalRoots().concat(connectedInjectedRoots())
+        var eligible = visibleCardRoots(roots, true)
+        var enabled = model.config.autoFillEnabled.value
+        var overflow = new Set(enabled ? eligible.slice(targetCount()).map(function(r) { return r.elem }) : [])
+        // Never remove/re-add the same class on every metadata event. Keep all
+        // cards/models for reversible target and NG-setting changes.
+        roots.forEach(function(r) {
+          var hide = overflow.has(r.elem)
+          if (r.elem.classList.contains('nrn-autofill-overflow') !== hide) {
+            r.elem.classList.toggle('nrn-autofill-overflow', hide)
+          }
         })
       }
 
@@ -14650,13 +14666,9 @@ var CardActionData = (function () {
         if (page._disposed) return
         var initialDomWaitMs = Math.round(performance.now() - initialDomWaitStarted)
 
-        // connected + ID重複除去で正規化。
-        var rootSeen = new Set()
-        originalRoots = originalRoots.filter(function(r) {
-          if (!r.movieId || rootSeen.has(r.movieId)) return false
-          rootSeen.add(r.movieId)
-          return true
-        })
+        // Keep physical card slots (including ads); request identities remain
+        // deduplicated separately in originalMovieIds below.
+        refreshOriginalCardBudget()
 
         originalMovieIds = new Set(originalRoots.map(function(r) {
           return r.movieId
@@ -14849,6 +14861,54 @@ var CardActionData = (function () {
         }
       }
 
+      // Late native cards and metadata settlement can alter the budget without
+      // a view-mode transition. Reconcile only actual changes, once per task.
+      var cardBudgetMovies = new Map()
+      var cardBudgetTimer = null
+      var scheduleCardBudget = function() {
+        if (page._disposed || !initialized || cardBudgetTimer !== null) return
+        cardBudgetTimer = setTimeout(function() {
+          cardBudgetTimer = null
+          if (page._disposed) return
+          stopRefillIfUnneeded()
+          rebalanceOverflow()
+          updateStatus()
+          clearTimeout(debounceTimer)
+          debounceTimer = setTimeout(function() { updatePagerUi('visible card budget changed'); maybeFetchMore() }, 100)
+        }, 0)
+      }
+      var refreshOriginalCardBudget = function() {
+        var seen = new Set()
+        var next = currentOriginalRootCandidates().filter(function(root) {
+          if (seen.has(root.elem)) return false
+          seen.add(root.elem); return true
+        }).sort(function(a,b) {
+          var position = a.elem.compareDocumentPosition(b.elem)
+          return position & 4 ? -1 : position & 2 ? 1 : 0
+        })
+        var changed = next.length !== originalRoots.length || next.some(function(root,i) { return root.elem !== originalRoots[i]?.elem })
+        originalRoots = next
+        next.forEach(function(root) {
+          var movie = model.movies.get(root.movieId)
+          if (!movie || cardBudgetMovies.has(movie)) return
+          var settled = movie.metadataSettled
+          var onMetadata = function() {
+            var current = movie.metadataSettled
+            if (settled === current) return
+            settled = current
+            scheduleCardBudget()
+          }
+          cardBudgetMovies.set(movie,onMetadata)
+          movie.on('metadataChanged',onMetadata).on('thumbInfoDone',onMetadata)
+          listeners.push(function() { movie.off('metadataChanged',onMetadata); movie.off('thumbInfoDone',onMetadata); cardBudgetMovies.delete(movie) })
+        })
+        return changed
+      }
+      page._onAutoFillRootsChanged = function() {
+        if (page._disposed) return
+        if (refreshOriginalCardBudget()) scheduleCardBudget()
+      }
+
       var restorePrefilteredCandidates = function() {
         if (page._disposed) return
         lastAcceptanceRate = null
@@ -14873,15 +14933,14 @@ var CardActionData = (function () {
 
       model.movieViewModes.on('movieViewModeChanged', function() {
         if (!initialized) return
-        stopRefillIfUnneeded()
-        rebalanceOverflow()
-        updateStatus()
-        clearTimeout(debounceTimer)
-        debounceTimer = setTimeout(function() { updatePagerUi('NG display changed'); maybeFetchMore() }, 100)
+        // Wait until the card's own view listener has applied nrn-hide/reduce.
+        // A burst of NG transitions shares one budget/status update.
+        scheduleCardBudget()
       })
 
       model.config.autoFillEnabled.on('changed', function(enabled) {
         stopRefillIfUnneeded()
+        rebalanceOverflow()
         if (enabled) {
           gaveUp = false
           stopReason = ''

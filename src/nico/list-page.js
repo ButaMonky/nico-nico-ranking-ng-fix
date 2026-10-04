@@ -865,6 +865,7 @@
               if (parsed.length > 0) { callback(parsed, true); this.unbindUnconnectedMovieRoots() }
               this.addConfigBar()
               this._refreshPagerAnnotations?.()
+              this._onAutoFillRootsChanged?.()
             }
           })
         })

@@ -74,6 +74,7 @@
         timers.clear(); intervals.clear(); frames.clear(); listeners.length = 0
         delete model.config._nrnDiagnosticHook
         delete page._refreshPagerAnnotations
+        delete page._onAutoFillRootsChanged
         if (typeof restorePagerUi === 'function') restorePagerUi()
       }
       var LOG = '[NicoNicoRankingNG autoFill ' + NRN_VERSION + ']'
@@ -763,27 +764,37 @@
         })
       }
 
-      var uniqueVisibleRoots = function(roots) {
+      // Physical slots and unique video IDs are deliberately separate. Native
+      // ads may show the same video as an ordinary card and still occupy a slot.
+      var visibleCardRoots = function(roots, ignoreOverflow) {
         var seen = new Set()
         return roots.filter(function(r) {
-          if (!r || !r.elem || !r.elem.isConnected || !r.movieId || seen.has(r.movieId)) return false
+          if (!r || !r.elem || !r.elem.isConnected || !r.movieId || seen.has(r.elem)) return false
           var movie = model.movies.get(r.movieId)
           if (!movie) return false
           if (model.config.useGetThumbInfo.value && !movie.metadataSettled) return false
-          if (movie.ng) return false
+          if (movie.ng && !model.config.ngMovieVisible.value) return false
           if (r.elem.classList.contains('nrn-hide')) return false
           if (r.elem.classList.contains('nrn-autofill-pending')) return false
-          if (r.elem.classList.contains('nrn-autofill-overflow')) return false
-          seen.add(r.movieId)
+          if (!ignoreOverflow && r.elem.classList.contains('nrn-autofill-overflow')) return false
+          seen.add(r.elem)
+          return true
+        })
+      }
+      var uniqueVisibleRoots = function(roots) {
+        var seen = new Set()
+        return visibleCardRoots(roots).filter(function(root) {
+          if (seen.has(root.movieId)) return false
+          seen.add(root.movieId)
           return true
         })
       }
 
       var visibleOriginalCount = function() {
-        return uniqueVisibleRoots(connectedOriginalRoots()).length
+        return visibleCardRoots(connectedOriginalRoots()).length
       }
       var visibleInjectedCount = function() {
-        return uniqueVisibleRoots(connectedInjectedRoots()).length
+        return visibleCardRoots(connectedInjectedRoots()).length
       }
       var visibleTotalCount = function() {
         return visibleOriginalCount() + visibleInjectedCount()
@@ -814,13 +825,17 @@
       }
 
       var rebalanceOverflow = function() {
-        connectedInjectedRoots().forEach(function(r) {
-          r.elem.classList.remove('nrn-autofill-overflow')
-        })
-        var remaining = Math.max(0, targetCount() - visibleOriginalCount())
-        var visibleInjected = uniqueVisibleRoots(connectedInjectedRoots())
-        visibleInjected.forEach(function(r, i) {
-          if (i >= remaining) r.elem.classList.add('nrn-autofill-overflow')
+        var roots = connectedOriginalRoots().concat(connectedInjectedRoots())
+        var eligible = visibleCardRoots(roots, true)
+        var enabled = model.config.autoFillEnabled.value
+        var overflow = new Set(enabled ? eligible.slice(targetCount()).map(function(r) { return r.elem }) : [])
+        // Never remove/re-add the same class on every metadata event. Keep all
+        // cards/models for reversible target and NG-setting changes.
+        roots.forEach(function(r) {
+          var hide = overflow.has(r.elem)
+          if (r.elem.classList.contains('nrn-autofill-overflow') !== hide) {
+            r.elem.classList.toggle('nrn-autofill-overflow', hide)
+          }
         })
       }
 
