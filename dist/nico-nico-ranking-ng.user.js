@@ -6719,6 +6719,17 @@ html[data-nrn-ui-theme="dark"] .nrn-contributor-ng-name-button:hover {
         const transient = '[data-scope="presence"], [data-scope="tooltip"], video, canvas, .nrn-preview, .nrn-movie-info-container, .nrn-ng-reasons, .nrn-compact-owner'
         const ownerSelector = 'a[data-group-ignore="true"][data-anchor-area="main"]'
         const ownerRoots = new Set()
+        // BRUSH-054A: the observer still watches the whole body (so a replaced
+        // results container is found), but only result-related changes schedule
+        // a full parse: native/ad result cards, pagination and our config bar.
+        // Unrelated parent-document UI (menus, overlays, players) is ignored
+        // without naming any particular site or extension.
+        const resultSelector = '[data-decoration-video-id], a[data-anchor-area][href^="/watch/"], [data-scope="pagination"]'
+        const touchesResults = node => {
+          if (node.nodeType !== 1) return false
+          const bar = this.configBar?.elem
+          return node.matches(resultSelector) || node.querySelector(resultSelector) !== null || (bar != null && (node === bar || node.contains(bar)))
+        }
         let parsePending = false
         const currentRoute = () => {
           if (this._disposed || !isTargetPage()) return false
@@ -6737,6 +6748,9 @@ html[data-nrn-ui-theme="dark"] .nrn-contributor-ng-name-button:hover {
                 this.resultLayout.rememberState(target)
                 continue
               }
+              // A native class change matters only on a result card or on an
+              // element holding results (list/tile host switch).
+              if (!target.closest(resultSelector) && !target.querySelector(resultSelector)) continue
             }
             const nodes = [...record.addedNodes, ...record.removedNodes]
             // Recheck only cards whose native owner row changed, including late text/href.
@@ -6750,6 +6764,12 @@ html[data-nrn-ui-theme="dark"] .nrn-contributor-ng-name-button:hover {
             // Owner-only text/URL updates do not need a whole-page parse.
             if (record.type === 'characterData' || (record.type === 'attributes' && record.attributeName !== 'class')) continue
             if (nodes.length && nodes.every(node => node.nodeType !== 1 || node.matches(transient))) continue
+            // A late owner row is handled by the owner refresh above, not a full parse.
+            if (ownerChanged && (target.closest(ownerSelector) || (nodes.length && nodes.every(node => node.nodeType !== 1 || node.matches(ownerSelector))))) continue
+            // Changes inside a result card or the pager, or nodes that are or
+            // carry results/pagination/the config bar, need a parse. Others do not.
+            // (Native class changes were already narrowed above.)
+            if (record.type === 'childList' && !target.closest(resultSelector) && !nodes.some(touchesResults)) continue
             relevant = true
           }
           parsePending ||= relevant
