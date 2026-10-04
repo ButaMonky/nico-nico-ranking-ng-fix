@@ -75,17 +75,28 @@
       // answer had no owner (ownerResolution 'missing'). data.id is the video
       // ID and is checked by getData; only data.ownerId becomes the user ID.
       // A failure or 404 leaves the owner unknown; nothing is read as absence.
-      // BRUSH-011: demand-driven order. No owner demand -> no extra request.
+      // BRUSH-011/052: demand-driven order for owner-dependent NG stays intact.
       // ID only -> one batched Snapshot GET first, nicoad for what it misses.
       // Name too -> nicoad first (it also carries the name), Snapshot after.
+      // With no NG/readiness demand, a currently processed missing-owner card
+      // still gets one nicoad lookup so the legacy uploader label can be shown.
       function requestOwnerId(movie) {
         if (movie.ownerResolution?.status !== 'missing' || movie._nrnOwnerIdPending) return
         if (!/^(sm|nm)[0-9]+$/.test(movie.id) || idAttempted.has(movie.id)) return
         if (movie.ng && !movie._detailsRequested) return
         const demand = MetadataReadiness.ownerDemand(movie,movies.config)
-        // Not marked attempted: a later setting or details request re-plans it.
-        if (!demand.id) { movie._nrnOwnerIdStatus = 'not-needed'; return }
+        // A card still needs a useful uploader label even when no NG rule/filter
+        // depends on the owner. MylistPocket/Zenza recover this legacy display
+        // evidence from nicoad for sm/nm videos whose normal detail answer has
+        // no owner. Keep that display recovery separate from NG/readiness demand:
+        // nicoad can supply the name, Snapshot cannot.
+        const displayRecovery = !demand.id
         idAttempted.add(movie.id)
+        if (displayRecovery) {
+          movie._nrnOwnerIdStatus = 'display-recovery'
+          lookupNicoad(movie,false)
+          return
+        }
         if (!demand.name && snapshot) {
           movie._nrnOwnerIdStatus = 'snapshot-first'
           const queued = snapshot.enqueue(movie,status => {

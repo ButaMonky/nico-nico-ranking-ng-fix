@@ -130,16 +130,34 @@ async function demandSetup(count=1,known=0){
  const code=await readFile(new URL('../src/data/owner-name-source.js',import.meta.url),'utf8');
  const ctx=vm.createContext({URL,AbortController,setTimeout,clearTimeout,performance,Network:h.Network,ThumbInfoListener:h.ThumbInfoListener,
   MetadataReadiness:h.MetadataReadiness,OwnerEvidence:h.OwnerEvidence,fetch:(url,{signal})=>new Promise((resolve,reject)=>{
-   h.pending.push({url,status:code=>resolve({ok:false,status:code,url,text:async()=>''})});signal.addEventListener('abort',()=>reject(Error('abort')));})});
+   h.pending.push({url,
+    reply:data=>resolve({ok:true,status:200,url,text:async()=>JSON.stringify({meta:{status:200},data})}),
+    status:code=>resolve({ok:false,status:code,url,text:async()=>''})});signal.addEventListener('abort',()=>reject(Error('abort')));})});
  const service=vm.runInContext(code+';OwnerNameSource',ctx).create(h.movies,undefined,{snapshot:snap});
  return {...h,list:extra,snap,service,before:h.pending.length};
 }
-test('owner demand: no NG, visibility or name use means no supplement request at all',async()=>{
- const h=await demandSetup(3);h.service.request(h.list);await tick();
- assert.equal(h.pending.length,h.before);assert.deepEqual(h.snap.queued,[]);
- for(const m of h.list){assert.equal(m._nrnOwnerIdStatus,'not-needed');assert.equal(m.metadataSettled,true);}
- h.config.ngUserIds.add(9);h.service.request(h.list);await tick();
- assert.deepEqual(h.snap.queued,h.list.map(m=>m.id),'a later NG setting re-plans the same videos');h.service.dispose();
+test('owner display recovery: a visible card with no owner still tries nicoad once even without NG demand',async()=>{
+ const h=await demandSetup(3);assert.deepEqual({...h.MetadataReadiness.ownerDemand(h.list[0],h.config)},{id:false,name:false},'NG/readiness demand stays off');
+ h.service.request(h.list);await tick();
+ assert.equal(h.pending.length,h.before+3,'display recovery uses one nicoad lookup per missing visible owner');
+ assert.deepEqual(h.snap.queued,[],'display-name recovery does not waste a Snapshot lookup that cannot provide a name');
+ for(const [i,m] of h.list.entries()){
+  assert.equal(m._nrnOwnerIdStatus,'pending');
+  h.pending[h.before+i].reply?.({id:m.id,ownerId:500+i,ownerName:'restored '+i,ownerIcon:'https://example.invalid/'+i+'.jpg'});
+ }
+ await tick();
+ for(const [i,m] of h.list.entries()){
+  assert.equal(m.contributor.type,'user');assert.equal(m.contributor.name,'restored '+i);assert.equal(m._nrnOwnerNameSource,'nicoad');
+ }
+ h.service.request(h.list);await tick();assert.equal(h.pending.length,h.before+3,'recovered cards are not requested twice');
+ h.service.dispose();
+});
+test('owner display recovery: per-route nicoad work stays bounded',async()=>{
+ const h=await demandSetup(70);h.service.request(h.list);await tick();
+ assert.equal(h.list.filter(m=>m._nrnOwnerIdStatus==='pending').length,64,'only the bounded set is admitted to nicoad work');
+ assert.equal(h.list.filter(m=>m._nrnOwnerIdStatus==='budget').length,6,'overflow stays unresolved instead of starting unbounded work');
+ assert.ok(h.pending.length-h.before<=4,'the shared broker still enforces its transport concurrency cap');
+ h.service.dispose();
 });
 test('owner demand: ID-only demand batches the unresolved videos and skips known owners',async()=>{
  const h=await demandSetup(48,32);h.config.ngUserIds.add(9);h.service.request(h.list);await tick();

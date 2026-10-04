@@ -16,13 +16,14 @@ try {
  const card=await page.locator('[data-decoration-video-id]').first().evaluate(el=>{
   el.querySelectorAll('a[href*="/user/"]').forEach(e=>e.remove());return el.outerHTML.replace(/sm\d+/g,'sm12345678');
  });
- const install=async(hold=false,nameOnly=false,nativePlaceholder=false)=>{
+ const install=async(hold=false,nameOnly=false,nativePlaceholder=false,missingOwner=false)=>{
   await page.setContent('<main aria-label="nicovideo-content"><section><div id="results">'+card+'</div></section></main>');
   // Decorations outside the result cards must not hold initial setup for 15s.
   await page.evaluate(()=>{const decoration=document.createElement('div');decoration.dataset.decorationVideoId='sm999999';document.body.append(decoration);});
-  await page.evaluate(({hold,nameOnly,nativePlaceholder})=>{
+  await page.evaluate(({hold,nameOnly,nativePlaceholder,missingOwner})=>{
    const meta=document.createElement('meta');meta.name='server-response';
-   meta.content=JSON.stringify({data:{response:{$getSearchVideoV2:{data:{items:[{id:'sm12345678',owner:{ownerType:'hidden',type:'user',visibility:'hidden',id:'55',name:null}}]}}}}});document.head.append(meta);
+   const item=missingOwner?{id:'sm12345678'}:{id:'sm12345678',owner:{ownerType:'hidden',type:'user',visibility:'hidden',id:'55',name:null}};
+   meta.content=JSON.stringify({data:{response:{$getSearchVideoV2:{data:{items:[item]}}}}});document.head.append(meta);
    if(nativePlaceholder){
     meta.remove();
     const root=document.querySelector('[data-decoration-video-id]'),watch=root.querySelector('a[href*="/watch/"]');
@@ -43,7 +44,7 @@ try {
     const result={ok:true,status:200,url,text:async()=>JSON.stringify({data:{id:'sm12345678',ownerId:55,ownerName:'restored synthetic account',decoration:'none'}})};
     return hold?new Promise(resolve=>{window.deliverOwner=()=>resolve(result);}):result;
    };
-  },{hold,nameOnly,nativePlaceholder});
+  },{hold,nameOnly,nativePlaceholder,missingOwner});
   await page.addScriptTag({content:source});
   if(hold){
    await page.waitForFunction(()=>__nrnDiagnostics.snapshot().current?.phase==='initial-ng');
@@ -137,6 +138,14 @@ try {
  assert.equal(await page.evaluate(()=>ownerCalls),1,'native placeholder must not suppress name recovery');
  assert.equal(await page.evaluate(()=>testModel.movies.get('sm12345678').contributor.name),'restored synthetic account');
  assert.equal(await page.evaluate(()=>testModel.movies.get('sm12345678').ng),true,'recovered name participates in NG');
+ // BRUSH-052: if every ordinary owner source is absent, the visible card still
+ // gets one nicoad display-recovery lookup even when no NG/filter needs owner data.
+ await page.reload();await page.evaluate(()=>sessionStorage.clear());await install(false,true,false,true);
+ await page.waitForFunction(()=>ownerCalls===1&&testModel.movies.get('sm12345678')?.contributor.name==='restored synthetic account');
+ assert.deepEqual(await page.evaluate(()=>[detailCalls,ownerCalls]),[1,1],'missing owner detail triggers exactly one display recovery lookup');
+ assert.equal(await page.evaluate(()=>testModel.movies.get('sm12345678').ownerResolution.source),'nicoad');
+ assert.equal(await page.evaluate(()=>testModel.movies.get('sm12345678')._nrnOwnerNameSource),'nicoad');
+ await page.locator('.nrn-compact-owner .nrn-owner-name').filter({hasText:'restored synthetic account'}).waitFor();
  // An injected card owns its compact owner row; recovery must update that row too.
  await page.evaluate(()=>{
   testModel.config.ngUserNames.clear();
