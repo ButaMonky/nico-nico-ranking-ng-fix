@@ -11,6 +11,16 @@
 - カード・状態表示のUI改善と、論理回路NGエディターの操作・判定理由の改善。実装済みとは扱いません。[NRN-003](docs/TASKS.md#nrn-003)、[NRN-004](docs/TASKS.md#nrn-004)。
 - 製品160.24の履歴整理・新規クローン検証は完了。独立した研究ブランチの旧履歴は今回の製品送信対象外です。[NRN-005](docs/TASKS.md#nrn-005)。
 
+## 160.29 — 2026-10-06（統合ブランチ候補・未公開）
+
+### 改善・修正
+
+- Diagnostics v2 の匿名化されたskip理由・metadata provenance集計を追加。
+- Snapshot検証で再利用した候補にもcheap CandidateFilterを適用し、不要なDOM生成を削減。
+- AutoFillのDOM処理を協調的にyieldし、長いmain-thread占有を抑制。
+- 詳細情報が権威的にNGを確定できる候補をDOM生成前にparkし、弱いsearch-owner証拠や失敗・UNKNOWNは従来経路を維持。
+- 以後、修正を反映するたびにUserscript版番号も更新してブラウザ上で識別できるようにする。
+
 ## 160.28 — 2026-10-05
 
 ### 改善・修正
