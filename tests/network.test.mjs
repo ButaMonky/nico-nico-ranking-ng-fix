@@ -174,7 +174,7 @@ test('Snapshot: validation on later pages resumes from the fetched window, small
   const ctx=vm.createContext({console:quiet,LOG:'test',useSnapshot:true,snapshotValidated:false,snapshotValidation:null,snapshotValidationOffset:320,snapshotOffset:352,
    snapshotFetchOffset:async()=>({offset:320,items,hasNextPage:true}),page:{_currentPageNumber:11,doc:{querySelectorAll:()=>Array.from({length:3},(_,i)=>({getAttribute:()=>mismatch?'different'+i:'sm'+i}))}},
    setPhase(){},model:{movies:new Map()},requestedMode:mode,filterFreshItems:items=>({freshItems:items.slice(3)}),apiQuickNgReason:()=>'',logCandidateTable(){},
-   candidatePool:[],candidatePoolSeen:new Set(),candidateFilter:{clear(){}},sourceLabel:'',fallbackReason:'',totalFetchedItems:0,fetchedExtraPages:0,lastFetchedHadNext:null,totalApiPrefilteredNg:0});
+   candidatePool:[],candidatePoolSeen:new Set(),candidateFilter:{clear(){},partition(rows){return {passed:rows,rejected:0,reasons:{movieId:0,title:0,advanced:0}}}},sourceLabel:'',fallbackReason:'',totalFetchedItems:0,fetchedExtraPages:0,lastFetchedHadNext:null,totalApiPrefilteredNg:0,totalCheapPrefilteredNg:0,totalCheapPrefilterReasons:{movieId:0,title:0,advanced:0}});
   const a=auto.indexOf('      var validateSnapshotAgainstCurrentDom = async function(signal)'),b=auto.indexOf('      // -------------------- PagerManager',a);
   const run=vm.runInContext(auto.slice(a,b)+';validateSnapshotAgainstCurrentDom',ctx);await run();
   assert.equal(ctx.useSnapshot,!mismatch);
@@ -182,19 +182,23 @@ test('Snapshot: validation on later pages resumes from the fetched window, small
  }
 });
 
-test('Diagnostics v2: Snapshot validation reuse contributes fixed API reason buckets',async()=>{
+test('Snapshot validation reuse applies API and CandidateFilter prefilters exactly once',async()=>{
  const helperStart=auto.indexOf('      var apiQuickNgReasonKey = function(reason)'),helperEnd=auto.indexOf('      var getMovieNgReasons',helperStart);
  const helper=vm.runInContext(auto.slice(helperStart,helperEnd)+';apiQuickNgReasonKey',vm.createContext({}));
- const items=[{id:'sm0',quick:'NG動画ID'},{id:'sm1',quick:'NGタグ'},{id:'sm2'}];
+ // sm4 models a matched candidate allowed through on CandidateFilter capacity exhaustion.
+ const cheapInputs=[];const items=[{id:'sm0',quick:'NG動画ID'},{id:'sm1',quick:'NGタグ'},{id:'sm2'},{id:'sm3'},{id:'sm4'}];
  const ctx=vm.createContext({console:quiet,LOG:'test',useSnapshot:true,snapshotValidated:false,snapshotValidation:null,snapshotValidationOffset:0,snapshotOffset:0,
   snapshotFetchOffset:async()=>({offset:0,items,hasNextPage:false}),page:{_currentPageNumber:0,doc:{querySelectorAll:()=>items.map(x=>({getAttribute:()=>x.id}))}},
   setPhase(){},model:{movies:new Map()},requestedMode:'snapshot',filterFreshItems:rows=>({freshItems:rows}),apiQuickNgReason:item=>item.quick||'',apiQuickNgReasonKey:helper,logCandidateTable(){},
-  candidatePool:[],candidatePoolSeen:new Set(),candidateFilter:{clear(){}},sourceLabel:'',fallbackReason:'',totalFetchedItems:0,fetchedExtraPages:0,lastFetchedHadNext:null,totalApiPrefilteredNg:0,
-  totalApiPrefilterReasons:{movieId:0,title:0,tag:0,userId:0,channelId:0}});
+  candidatePool:[],candidatePoolSeen:new Set(),candidateFilter:{clear(){},partition(rows){cheapInputs.push(Array.from(rows,x=>x.id));return {passed:rows.filter(x=>x.id==='sm3'||x.id==='sm4'),rejected:1,reasons:{movieId:0,title:0,advanced:1}}}},sourceLabel:'',fallbackReason:'',totalFetchedItems:0,fetchedExtraPages:0,lastFetchedHadNext:null,totalApiPrefilteredNg:0,
+  totalApiPrefilterReasons:{movieId:0,title:0,tag:0,userId:0,channelId:0},totalCheapPrefilteredNg:0,
+  totalCheapPrefilterReasons:{movieId:0,title:0,advanced:0}});
  const a=auto.indexOf('      var validateSnapshotAgainstCurrentDom = async function(signal)'),b=auto.indexOf('      // -------------------- PagerManager',a);
  const run=vm.runInContext(auto.slice(a,b)+';validateSnapshotAgainstCurrentDom',ctx);await run();
  assert.equal(ctx.totalApiPrefilteredNg,2);assert.deepEqual({...ctx.totalApiPrefilterReasons},{movieId:1,title:0,tag:1,userId:0,channelId:0});
- assert.deepEqual(ctx.candidatePool.map(x=>x.id),['sm2']);
+ assert.deepEqual(cheapInputs,[['sm2','sm3','sm4']]);
+ assert.equal(ctx.totalCheapPrefilteredNg,1);assert.deepEqual({...ctx.totalCheapPrefilterReasons},{movieId:0,title:0,advanced:1});
+ assert.deepEqual(ctx.candidatePool.map(x=>x.id),['sm3','sm4']);
 });
 
 test('Diagnostics v2: API and cheap prefilter reason counters use fixed buckets in both source modes',async()=>{

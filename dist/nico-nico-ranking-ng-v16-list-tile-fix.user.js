@@ -12775,6 +12775,16 @@ var CardActionData = (function () {
           fresh = passed
         }
 
+        var cheap = candidateFilter.partition(fresh)
+        totalCheapPrefilteredNg += cheap.rejected
+        if (cheap.reasons && typeof totalCheapPrefilterReasons !== 'undefined') {
+          Object.keys(totalCheapPrefilterReasons).forEach(function(key) {
+            var count = Number(cheap.reasons[key])
+            if (Number.isFinite(count) && count > 0) totalCheapPrefilterReasons[key] += count
+          })
+        }
+        fresh = cheap.passed
+
         fresh.forEach(function(item) { candidatePool.push(item) })
         totalFetchedItems += result.items.length
         fetchedExtraPages++
