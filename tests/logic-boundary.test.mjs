@@ -68,6 +68,9 @@ test('source guard keeps weak search owner undecided until authoritative detail 
  assert.equal(AdvancedNgRules.evaluateState(m,group('AND',[ownerRule],true),null,0,guard),null);
  const trace=[];AdvancedNgRules.evaluateState(m,ownerRule,trace,0,guard);
  assert.equal(trace[0].sourceBlocked,true);assert.equal(trace[0].source,'search');
+ ThumbInfoListener.forErrorOccurred(movies)({id:'sm1',error:{type:'NETWORK'}});
+ assert.equal(AdvancedNgRules.evaluateState(m,ownerRule,null,0,guard),null,
+   'failed detail must not promote the retained search owner into an authoritative reject');
  ThumbInfoListener.forCompleted(movies)({id:'sm1',description:'',tags:[],contributor:{type:'user',id:99,name:'detail owner'}});
  assert.equal(AdvancedNgRules.evaluateState(m,ownerRule,null,0,guard),true);
  assert.equal(AdvancedNgRules.fieldOrigin(m,'userId').source,'detail');

@@ -24,4 +24,14 @@ for(const [name,limit] of Object.entries(expected)){
     assert.equal(run.wire.otherRequests,0,name+' '+run.cache+' cannot add other transport');
   }
 }
-console.log('AutoFill authoritative detail staging PASS: detail/cache NG stays out of DOM; search-owner guard and request budgets preserved. Offline only.');
+const replayOutput=execFileSync(process.execPath,[
+  'scripts/benchmark-autofill.mjs','--scenario','tag','--exercise-settings'
+],{cwd:root,encoding:'utf8',timeout:30000,maxBuffer:4*1024*1024});
+const replay=JSON.parse(replayOutput).scenarios[0];
+for(const run of replay.runs){
+  assert.deepEqual(run.settingsReplay.allowedIds,Array.from({length:12},(_,i)=>'sm'+(i+1)),
+    'tag unblock restores parked candidates in original order');
+  assert.equal(run.settingsReplay.detailRequestsAfter,run.settingsReplay.detailRequestsBefore,
+    'tag unblock/reblock reuses staged detail without another request');
+}
+console.log('AutoFill authoritative detail staging PASS: detail/cache NG stays out of DOM; search-owner guard, request budgets and setting replay are preserved. Offline only.');
