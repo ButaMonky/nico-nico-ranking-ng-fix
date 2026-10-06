@@ -1759,7 +1759,7 @@
     }
 
     // null is undecided: NOT must not turn unavailable metadata into a match.
-    var evaluateState = function(movie, node, trace, depth) {
+    var evaluateState = function(movie, node, trace, depth, sourceGuard) {
       depth = depth || 0
       if (!node || depth > 12) return null
 
@@ -1767,13 +1767,16 @@
         var meta = FIELD_META[node.field]
         if (!meta) return null
         var actual = fieldValue(movie, node.field)
+        var origin = fieldOrigin(movie, node.field)
         var pending = Boolean(actual && actual.__notReady)
+        var sourceBlocked = Boolean(sourceGuard && sourceGuard(node.field, origin) === false)
         // BRUSH-016: a numeric metadata threshold must be a non-negative
         // integer as written. An unusable threshold leaves the condition
         // undecided, so NOT cannot turn it into a match.
         var badThreshold = Boolean(meta.metadata && OP_META[node.operator] && OP_META[node.operator].needsValue
           && numericThreshold(node.value) === null)
-        var raw = pending || badThreshold ? null : compare(actual, node.operator, node.value, meta.type)
+        var raw = pending || badThreshold || sourceBlocked
+          ? null : compare(actual, node.operator, node.value, meta.type)
         var result = raw === null ? null : (node.not ? !raw : raw)
         if (trace) {
           trace.push({
@@ -1787,8 +1790,9 @@
             actual:Array.isArray(actual) ? actual.join(', ') : actual,
             not:Boolean(node.not),
             result:result,
+            sourceBlocked:sourceBlocked,
             // BRUSH-018: where the value came from and how settled it is.
-            ...fieldOrigin(movie, node.field)
+            ...origin
           })
         }
         return result
@@ -1799,7 +1803,7 @@
         var children = Array.isArray(node.children) ? node.children : []
         if (!children.length) return null
         var childResults = children.map(function(child) {
-          return evaluateState(movie, child, trace, depth + 1)
+          return evaluateState(movie, child, trace, depth + 1, sourceGuard)
         })
         var rawGroup = node.op === 'OR'
           ? (childResults.includes(true) ? true : childResults.includes(null) ? null : false)
@@ -10500,9 +10504,9 @@ var CardActionData = (function () {
         schedule()
       }
       for (var key of MetadataReadiness.settings) movies.config[key].on('changed',settingsChanged)
-      var request = function(prefer) {
+      var requestIds = function(ids, prefer) {
         if (disposed || !movies.config.useGetThumbInfo.value) return
-        var allIds = movieViewModes.sort().map(function(m) { return m.movie.id })
+        var allIds = [...new Set(ids || [])].filter(function(id) { return Boolean(movies.get(id)) })
         for (var id of allIds) {
           var movie = movies.get(id)
           if (!watched.has(movie)) {
@@ -10525,6 +10529,12 @@ var CardActionData = (function () {
         })
         thumbInfo.request(pendingIds, prefer)
         request.ownerNames?.request(allIds.map(id => movies.get(id)))
+      }
+      var request = function(prefer) {
+        return requestIds(movieViewModes.sort().map(function(m) { return m.movie.id }), prefer)
+      }
+      request.forIds = function(ids, prefer) {
+        return requestIds(ids, prefer)
       }
       request.dispose = function() {
         disposed = true
@@ -10563,6 +10573,25 @@ var CardActionData = (function () {
         requestThumbInfo,
         refreshSearchOwners(rows) {
           for (const row of rows) applySearchOwner(row.movie.id, OwnerEvidence.fromRow(row))
+        },
+        primeCandidates(items) {
+          var valid = (items || []).filter(function(item) { return item && item.id })
+          movies.setIfAbsent(valid.map(function(item) { return new Movie(item.id,item.title || '') }))
+          for (var item of valid) {
+            var movie = movies.get(item.id)
+            var search = item.__nrnSearchItem?.videoId === item.id ? item.__nrnSearchItem : null
+            if (search) {
+              applySearchOwner(item.id,search.owner)
+              var values = {}
+              for (var field of SearchItemAdapter.fields) {
+                if (search[field] !== null && search[field] !== undefined) values[field] = search[field]
+              }
+              movie.observeSearchFields(values,'search')
+            }
+            var count = Number(item.__nrnPageContributorCount)
+            if (Number.isFinite(count) && count > 0) movie.setPageContributorCount(count)
+          }
+          return valid.map(function(item) { return movies.get(item.id) })
         },
         createMovies(resultsOfParsing) {
           movies.setIfAbsent(resultsOfParsing.map(function(r) {
@@ -11563,6 +11592,9 @@ var CardActionData = (function () {
       var candidatePool = []
       var candidatePoolSeen = new Set()
       var candidateFilter = CandidateFilter.create(model.config)
+      // BRUSH-054B: candidates rejected only after authoritative detail/cache
+      // stay outside the DOM but retain source order for setting-unblock replay.
+      var detailParked = new Map()
       var totalCheapPrefilteredNg = 0
       var totalCheapPrefilterReasons = {movieId:0,title:0,advanced:0}
       var nextPageToFetch = page._currentPageNumber + 1
@@ -12760,6 +12792,7 @@ var CardActionData = (function () {
           candidatePool = []
           candidatePoolSeen.clear()
           candidateFilter.clear()
+          if (typeof detailParked !== 'undefined') detailParked.clear()
           snapshotOffset = Math.max(0, page._currentPageNumber * 32)
           console.warn(LOG,
             'API結果と現在ページの一致率が低いため、正確性優先で従来方式へfallbackします。',
@@ -13744,6 +13777,46 @@ var CardActionData = (function () {
         console.groupEnd()
       }
 
+      var preDomDetailSources = new Set(['detail','cache'])
+      var authoritativeRuleSource = function(field, origin) {
+        var ownerFields = ['contributorId','userId','channelId','contributorName']
+        var detailFields = ['tag','tagCount','lockedTag','lockedTagCount','description']
+        if (ownerFields.includes(field) || detailFields.includes(field)) {
+          return preDomDetailSources.has(origin?.source)
+        }
+        if (field === 'selfAdIdMatch' || field === 'selfAdNameMatch') return false
+        return origin?.state === 'known'
+      }
+      var advancedNgAuthoritativeBeforeDom = function(movie) {
+        if (!model.config.advancedNgRulesEnabled.value) return false
+        return AdvancedNgRules.parse(model.config.advancedNgRulesJson.value).some(function(rule) {
+          return rule.enabled !== false
+            && AdvancedNgRules.evaluateState(movie,rule.expression,null,0,authoritativeRuleSource) === true
+        })
+      }
+      var detailFieldIsAuthoritative = function(movie, field) {
+        return preDomDetailSources.has(MetadataReadiness.sourceOf(movie,field)?.source)
+      }
+      var isAuthoritativePreDomNg = function(movie) {
+        if (!movie) return false
+        if (movie.ngId || movie.ngTitle) return true
+        if (detailFieldIsAuthoritative(movie,'tags')
+            && (movie.tags || []).some(function(tag) { return Boolean(tag.ng) })) return true
+        if (detailFieldIsAuthoritative(movie,'lockedTags') && movie.ngByLockedTagCount) return true
+        if (movie.contributor?.ng) {
+          var identityAuthoritative = detailFieldIsAuthoritative(movie,'ownerId')
+            && detailFieldIsAuthoritative(movie,'ownerType')
+          if (identityAuthoritative && movie.contributor.ngId) return true
+          if (identityAuthoritative && detailFieldIsAuthoritative(movie,'ownerName')
+              && movie.contributor.ngName) return true
+        }
+        return advancedNgAuthoritativeBeforeDom(movie)
+      }
+      var parkAuthoritativeCandidate = function(item) {
+        detailParked.set(item.id,{item:item,ordinal:candidateFilter.order(item)})
+        knownMovieIds.add(item.id)
+      }
+
       var evaluateCandidateBatch = async function(items) {
         if (page._disposed) return
         if (!items.length) {
@@ -13751,17 +13824,65 @@ var CardActionData = (function () {
         }
 
         logCacheCandidateAudit(items)
-        setPhase('adding', items.length + '件を詳細判定用に追加中')
 
         var wholeStart = performance.now()
+        var itemById = new Map(items.map(function(item) { return [item.id,item] }))
+        var checkedIds = items.map(function(item) { return item.id })
+        checkedIds.forEach(function(id) { knownMovieIds.add(id) })
+
+        // BRUSH-054B: establish the same Movie/search evidence used after DOM
+        // creation, then consume only detail work the current SourcePlan already
+        // requires. This may move existing work earlier; it must not invent I/O.
+        model.primeCandidates(items)
+        restoreCachedMovieDetails(checkedIds, '自動追加候補 / DOM前')
+        var detailIds = checkedIds.filter(function(id) {
+          var movie = model.movies.get(id)
+          if (!movie || movie.thumbInfoDone) return false
+          var plan = SourcePlan.planMovie(movie,model.config,{available:['detail']})
+          return Boolean(plan.requests.detail?.length)
+        })
+        var preDomDetailStart = performance.now()
+        var preDomSettled = true
+        if (detailIds.length) {
+          setPhase('ng-check', detailIds.length + '件をDOM作成前に詳細判定中')
+          model.requestThumbInfo.forIds(detailIds,true)
+          preDomSettled = await waitForThumbInfo(detailIds,30000)
+          if (cooperativeWorkStopped()) return
+        }
+        var preDomDetailEnd = performance.now()
+
+        var renderItems = []
+        var parkedItems = []
+        items.forEach(function(item) {
+          var movie = model.movies.get(item.id)
+          if (preDomSettled && isAuthoritativePreDomNg(movie)) {
+            parkAuthoritativeCandidate(item)
+            parkedItems.push(item)
+          } else {
+            detailParked.delete(item.id)
+            renderItems.push(item)
+          }
+        })
+
+        // Only create as many non-authoritative cards as the current
+        // visible shortage can consume. Already-detailed surplus stays in the
+        // ordered pool and can be reused without another detail request.
+        var domNeeded = Math.max(0,targetCount() - visibleTotalCount())
+        var deferredItems = parkedItems.length && renderItems.length > domNeeded
+          ? renderItems.splice(domNeeded) : []
+        if (deferredItems.length) {
+          candidatePool = candidateFilter.sort(deferredItems.concat(candidatePool))
+        }
+        var deferredIds = new Set(deferredItems.map(function(item) { return item.id }))
+
+        setPhase('adding', renderItems.length + '件を表示候補として追加中')
         var addStart = performance.now()
         var addedIds = []
-        var itemById = new Map()
 
         var batchTiles = await page._createInjectedTilesCooperatively(
-          items, yieldToMainThread, autoFillMainThreadBudgetMs, cooperativeWorkStopped)
-        if (cooperativeWorkStopped() || batchTiles.length !== items.length) return
-        var parsedResults = items.map(function(item, itemIndex) {
+          renderItems, yieldToMainThread, autoFillMainThreadBudgetMs, cooperativeWorkStopped)
+        if (cooperativeWorkStopped() || batchTiles.length !== renderItems.length) return
+        var parsedResults = renderItems.map(function(item, itemIndex) {
           var tile = batchTiles[itemIndex]
           var ordinal = candidateFilter.order(item)
           tile.dataset.nrnCandidateOrder = String(ordinal)
@@ -13770,8 +13891,6 @@ var CardActionData = (function () {
           })
           if (later) tile.parentNode.insertBefore(tile,later.elem)
           addedIds.push(item.id)
-          itemById.set(item.id, item)
-          knownMovieIds.add(item.id)
           return {
             type: 'main',
             movie: {id: item.id, title: item.title},
@@ -13780,10 +13899,9 @@ var CardActionData = (function () {
         })
 
         var setupStartedAt = performance.now()
-        setup(parsedResults, model, page, controller)
+        if (parsedResults.length) setup(parsedResults, model, page, controller)
         if (performance.now() - setupStartedAt >= autoFillMainThreadBudgetMs
             && !(await yieldToMainThread())) return
-        restoreCachedMovieDetails(addedIds, '自動追加候補')
         var addEnd = performance.now()
 
         var addedRootMap = new Map()
@@ -13872,7 +13990,7 @@ var CardActionData = (function () {
         }
         window.__nrnInjectedToggleAudit = toggleAuditRows
 
-        var rows = addedIds.map(function(id, i) {
+        var rows = checkedIds.map(function(id, i) {
           var movie = model.movies.get(id)
           var item = itemById.get(id)
           var reasons = getMovieNgReasons(movie)
@@ -13884,21 +14002,26 @@ var CardActionData = (function () {
             source: item && item.__nrnSnapshot
               ? 'API:' + item.__nrnSnapshotOffset
               : item ? 'page:' + item.__nrnSourcePage + '#' + item.__nrnSourceIndex : '',
+            preDomParked:detailParked.has(id),
+            deferred:deferredIds.has(id),
             ng: Boolean(movie && movie.ng),
             ngReasons: reasons,
-            decision: movie && movie.ng ? 'NG' : '表示候補'
+            decision: detailParked.has(id) ? 'NG（DOM作成前確定）'
+              : deferredIds.has(id) ? '詳細済み予備'
+              : movie && movie.ng ? 'NG' : '表示候補'
           }
         })
 
         if (model.config.sessionDetailCacheEnabled.value) {
-          addedIds.forEach(cacheMovieAfterCheck)
+          checkedIds.forEach(cacheMovieAfterCheck)
         }
 
-        var accepted = rows.filter(function(r) { return !r.ng }).length
-        var ngCount = rows.length - accepted
+        var accepted = rows.filter(function(r) { return !r.ng && !r.deferred }).length
+        var ngCount = rows.filter(function(r) { return r.ng }).length
+        var detailAccepted = rows.filter(function(r) { return !r.ng }).length
         totalDetailChecked += rows.length
         totalAcceptedFromAdded += accepted
-        lastAcceptanceRate = rows.length ? accepted / rows.length : lastAcceptanceRate
+        lastAcceptanceRate = rows.length ? detailAccepted / rows.length : lastAcceptanceRate
 
         rebalanceOverflow()
         renderStoredSelfAdWarnings(addedIds, 'overflow調整後')
@@ -13930,6 +14053,9 @@ var CardActionData = (function () {
 
         var end = performance.now()
         var timings = {
+          preDomDetailMs:Math.round(preDomDetailEnd - preDomDetailStart),
+          preDomDetailCount:detailIds.length,
+          preDomParkedCount:parkedItems.length,
           domAddMs:Math.round(addEnd - addStart),
           thumbInfoMs:Math.round(thumbEnd - thumbStart),
           selfAdMs:candidateSelfAdMs,
@@ -14183,6 +14309,7 @@ var CardActionData = (function () {
             candidatePool = []
             candidatePoolSeen.clear()
             candidateFilter.clear()
+            if (typeof detailParked !== 'undefined') detailParked.clear()
             lastFetchedHadNext = null
             nextPageToFetch = page._currentPageNumber + 1
             console.warn(LOG, 'APIから従来方式へfallbackして続行します')
@@ -15089,25 +15216,52 @@ var CardActionData = (function () {
       }
 
       var restorePrefilteredCandidates = function() {
-        if (page._disposed) return
+        if (page._disposed) return false
         lastAcceptanceRate = null
         var inPool = new Set(candidatePool.map(function(item) { return item.id }))
         var replay = candidateFilter.release().filter(function(item) {
           return !inPool.has(item.id) && !isMovieAlreadyOnPage(item.id)
         })
-        if (!replay.length) return
+        if (!replay.length) return false
         candidatePool = candidateFilter.sort(candidatePool.concat(replay))
-        gaveUp = false
-        stopReason = ''
-        completionReported = false
-        noProgressStreak = 0
-        if (initialized) {
-          updatePagerUi('prefilter criteria changed')
-          maybeFetchMore()
-        }
+        return true
       }
-      for (var key of ['ngMovies','ngTitles','advancedNgRulesEnabled','advancedNgRulesJson']) {
-        model.config[key].on('changed',restorePrefilteredCandidates)
+      var restoreDetailParkedCandidates = function() {
+        if (page._disposed || !detailParked.size) return false
+        var inPool = new Set(candidatePool.map(function(item) { return item.id }))
+        var replay = []
+        for (var [id,entry] of detailParked) {
+          if (isAuthoritativePreDomNg(model.movies.get(id))) continue
+          detailParked.delete(id)
+          if (!inPool.has(id) && !isMovieAlreadyOnPage(id)) replay.push(entry.item)
+        }
+        if (!replay.length) return false
+        var partitioned = candidateFilter.partition(replay)
+        candidatePool = candidateFilter.sort(candidatePool.concat(partitioned.passed))
+        return true
+      }
+      var restoreCandidateDecisions = function() {
+        // Candidate Movies are created after these AutoFill listeners, so let
+        // their own Config/Tag/Contributor listeners settle first.
+        queueMicrotask(function() {
+          if (page._disposed) return
+          var changed = restorePrefilteredCandidates()
+          changed = restoreDetailParkedCandidates() || changed
+          if (!changed) return
+          gaveUp = false
+          stopReason = ''
+          completionReported = false
+          noProgressStreak = 0
+          if (initialized) {
+            updatePagerUi('prefilter criteria changed')
+            maybeFetchMore()
+          }
+        })
+      }
+      for (var key of ['ngMovies','ngTitles','ngUserIds','ngChannelIds','ngUserNames',
+        'ngTags','ngLockedTags','ngLockedTagCountEnabled','ngLockedTagCountThreshold',
+        'advancedNgRulesEnabled','advancedNgRulesJson']) {
+        model.config[key].on('changed',restoreCandidateDecisions)
       }
 
       model.movieViewModes.on('movieViewModeChanged', function() {

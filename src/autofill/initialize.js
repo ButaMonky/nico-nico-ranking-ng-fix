@@ -292,25 +292,52 @@
       }
 
       var restorePrefilteredCandidates = function() {
-        if (page._disposed) return
+        if (page._disposed) return false
         lastAcceptanceRate = null
         var inPool = new Set(candidatePool.map(function(item) { return item.id }))
         var replay = candidateFilter.release().filter(function(item) {
           return !inPool.has(item.id) && !isMovieAlreadyOnPage(item.id)
         })
-        if (!replay.length) return
+        if (!replay.length) return false
         candidatePool = candidateFilter.sort(candidatePool.concat(replay))
-        gaveUp = false
-        stopReason = ''
-        completionReported = false
-        noProgressStreak = 0
-        if (initialized) {
-          updatePagerUi('prefilter criteria changed')
-          maybeFetchMore()
-        }
+        return true
       }
-      for (var key of ['ngMovies','ngTitles','advancedNgRulesEnabled','advancedNgRulesJson']) {
-        model.config[key].on('changed',restorePrefilteredCandidates)
+      var restoreDetailParkedCandidates = function() {
+        if (page._disposed || !detailParked.size) return false
+        var inPool = new Set(candidatePool.map(function(item) { return item.id }))
+        var replay = []
+        for (var [id,entry] of detailParked) {
+          if (isAuthoritativePreDomNg(model.movies.get(id))) continue
+          detailParked.delete(id)
+          if (!inPool.has(id) && !isMovieAlreadyOnPage(id)) replay.push(entry.item)
+        }
+        if (!replay.length) return false
+        var partitioned = candidateFilter.partition(replay)
+        candidatePool = candidateFilter.sort(candidatePool.concat(partitioned.passed))
+        return true
+      }
+      var restoreCandidateDecisions = function() {
+        // Candidate Movies are created after these AutoFill listeners, so let
+        // their own Config/Tag/Contributor listeners settle first.
+        queueMicrotask(function() {
+          if (page._disposed) return
+          var changed = restorePrefilteredCandidates()
+          changed = restoreDetailParkedCandidates() || changed
+          if (!changed) return
+          gaveUp = false
+          stopReason = ''
+          completionReported = false
+          noProgressStreak = 0
+          if (initialized) {
+            updatePagerUi('prefilter criteria changed')
+            maybeFetchMore()
+          }
+        })
+      }
+      for (var key of ['ngMovies','ngTitles','ngUserIds','ngChannelIds','ngUserNames',
+        'ngTags','ngLockedTags','ngLockedTagCountEnabled','ngLockedTagCountThreshold',
+        'advancedNgRulesEnabled','advancedNgRulesJson']) {
+        model.config[key].on('changed',restoreCandidateDecisions)
       }
 
       model.movieViewModes.on('movieViewModeChanged', function() {

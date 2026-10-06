@@ -585,6 +585,9 @@
       var candidatePool = []
       var candidatePoolSeen = new Set()
       var candidateFilter = CandidateFilter.create(model.config)
+      // BRUSH-054B: candidates rejected only after authoritative detail/cache
+      // stay outside the DOM but retain source order for setting-unblock replay.
+      var detailParked = new Map()
       var totalCheapPrefilteredNg = 0
       var totalCheapPrefilterReasons = {movieId:0,title:0,advanced:0}
       var nextPageToFetch = page._currentPageNumber + 1

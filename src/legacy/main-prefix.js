@@ -102,9 +102,9 @@
         schedule()
       }
       for (var key of MetadataReadiness.settings) movies.config[key].on('changed',settingsChanged)
-      var request = function(prefer) {
+      var requestIds = function(ids, prefer) {
         if (disposed || !movies.config.useGetThumbInfo.value) return
-        var allIds = movieViewModes.sort().map(function(m) { return m.movie.id })
+        var allIds = [...new Set(ids || [])].filter(function(id) { return Boolean(movies.get(id)) })
         for (var id of allIds) {
           var movie = movies.get(id)
           if (!watched.has(movie)) {
@@ -127,6 +127,12 @@
         })
         thumbInfo.request(pendingIds, prefer)
         request.ownerNames?.request(allIds.map(id => movies.get(id)))
+      }
+      var request = function(prefer) {
+        return requestIds(movieViewModes.sort().map(function(m) { return m.movie.id }), prefer)
+      }
+      request.forIds = function(ids, prefer) {
+        return requestIds(ids, prefer)
       }
       request.dispose = function() {
         disposed = true
@@ -165,6 +171,25 @@
         requestThumbInfo,
         refreshSearchOwners(rows) {
           for (const row of rows) applySearchOwner(row.movie.id, OwnerEvidence.fromRow(row))
+        },
+        primeCandidates(items) {
+          var valid = (items || []).filter(function(item) { return item && item.id })
+          movies.setIfAbsent(valid.map(function(item) { return new Movie(item.id,item.title || '') }))
+          for (var item of valid) {
+            var movie = movies.get(item.id)
+            var search = item.__nrnSearchItem?.videoId === item.id ? item.__nrnSearchItem : null
+            if (search) {
+              applySearchOwner(item.id,search.owner)
+              var values = {}
+              for (var field of SearchItemAdapter.fields) {
+                if (search[field] !== null && search[field] !== undefined) values[field] = search[field]
+              }
+              movie.observeSearchFields(values,'search')
+            }
+            var count = Number(item.__nrnPageContributorCount)
+            if (Number.isFinite(count) && count > 0) movie.setPageContributorCount(count)
+          }
+          return valid.map(function(item) { return movies.get(item.id) })
         },
         createMovies(resultsOfParsing) {
           movies.setIfAbsent(resultsOfParsing.map(function(r) {

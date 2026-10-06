@@ -93,14 +93,23 @@ try{
    assert.deepEqual(result.state.ids,data.expectedIds,name+' must retain the original filtered order');assert.equal(result.wire.otherRequests,0,name);
    assert.deepEqual(errors,[],name);
    if(args.includes('--exercise-settings')){
-    assert.equal(name,'title90','settings replay fixture is title90 only');
+    assert.ok(['title90','tag'].includes(name),'settings replay fixture must be title90 or tag');
     const allowedIds=Array.from({length:12},(_,i)=>'sm'+(i+1));
-    await page.evaluate(()=>window.__nrnBenchModel.config.ngTitles.clear());
+    const beforeWire=await page.evaluate(()=>({...window.__nrnBenchWire}));
+    if(name==='title90') await page.evaluate(()=>window.__nrnBenchModel.config.ngTitles.clear());
+    else await page.evaluate(()=>window.__nrnBenchModel.config.ngTags.clear());
     await page.waitForFunction(ids=>{const s=window.__nrnBenchState();return !s.fetching&&s.phase==='completed'&&JSON.stringify(s.ids)===JSON.stringify(ids);},allowedIds,{timeout:10000});
-    const restored=await page.evaluate(()=>window.__nrnBenchState().ids);
-    await page.evaluate(()=>window.__nrnBenchModel.config.ngTitles.add('DROP'));
+    const restored=await page.evaluate(()=>({state:window.__nrnBenchState(),wire:{...window.__nrnBenchWire}}));
+    if(name==='tag') assert.equal(restored.wire.detailRequests,beforeWire.detailRequests,
+      name+' unblock must reuse staged detail/cache');
+    if(name==='title90') await page.evaluate(()=>window.__nrnBenchModel.config.ngTitles.add('DROP'));
+    else await page.evaluate(()=>window.__nrnBenchModel.config.ngTags.add('tag-block'));
     await page.waitForFunction(ids=>{const s=window.__nrnBenchState();return !s.fetching&&s.phase==='completed'&&JSON.stringify(s.ids)===JSON.stringify(ids);},data.expectedIds,{timeout:10000});
-    result.settingsReplay={allowedIds:restored,filteredIds:await page.evaluate(()=>window.__nrnBenchState().ids)};
+    const filtered=await page.evaluate(()=>({state:window.__nrnBenchState(),wire:{...window.__nrnBenchWire}}));
+    assert.equal(filtered.wire.detailRequests,name==='tag' ? beforeWire.detailRequests : restored.wire.detailRequests,
+      name+' reblock must not refetch already-known detail');
+    result.settingsReplay={allowedIds:restored.state.ids,filteredIds:filtered.state.ids,
+      detailRequestsBefore:beforeWire.detailRequests,detailRequestsAfter:filtered.wire.detailRequests};
    }
    pair.push(result);await page.evaluate(()=>window.__nrnSessionDetailCacheService?.flush());
   }

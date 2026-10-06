@@ -254,6 +254,46 @@
         console.groupEnd()
       }
 
+      var preDomDetailSources = new Set(['detail','cache'])
+      var authoritativeRuleSource = function(field, origin) {
+        var ownerFields = ['contributorId','userId','channelId','contributorName']
+        var detailFields = ['tag','tagCount','lockedTag','lockedTagCount','description']
+        if (ownerFields.includes(field) || detailFields.includes(field)) {
+          return preDomDetailSources.has(origin?.source)
+        }
+        if (field === 'selfAdIdMatch' || field === 'selfAdNameMatch') return false
+        return origin?.state === 'known'
+      }
+      var advancedNgAuthoritativeBeforeDom = function(movie) {
+        if (!model.config.advancedNgRulesEnabled.value) return false
+        return AdvancedNgRules.parse(model.config.advancedNgRulesJson.value).some(function(rule) {
+          return rule.enabled !== false
+            && AdvancedNgRules.evaluateState(movie,rule.expression,null,0,authoritativeRuleSource) === true
+        })
+      }
+      var detailFieldIsAuthoritative = function(movie, field) {
+        return preDomDetailSources.has(MetadataReadiness.sourceOf(movie,field)?.source)
+      }
+      var isAuthoritativePreDomNg = function(movie) {
+        if (!movie) return false
+        if (movie.ngId || movie.ngTitle) return true
+        if (detailFieldIsAuthoritative(movie,'tags')
+            && (movie.tags || []).some(function(tag) { return Boolean(tag.ng) })) return true
+        if (detailFieldIsAuthoritative(movie,'lockedTags') && movie.ngByLockedTagCount) return true
+        if (movie.contributor?.ng) {
+          var identityAuthoritative = detailFieldIsAuthoritative(movie,'ownerId')
+            && detailFieldIsAuthoritative(movie,'ownerType')
+          if (identityAuthoritative && movie.contributor.ngId) return true
+          if (identityAuthoritative && detailFieldIsAuthoritative(movie,'ownerName')
+              && movie.contributor.ngName) return true
+        }
+        return advancedNgAuthoritativeBeforeDom(movie)
+      }
+      var parkAuthoritativeCandidate = function(item) {
+        detailParked.set(item.id,{item:item,ordinal:candidateFilter.order(item)})
+        knownMovieIds.add(item.id)
+      }
+
       var evaluateCandidateBatch = async function(items) {
         if (page._disposed) return
         if (!items.length) {
@@ -261,17 +301,65 @@
         }
 
         logCacheCandidateAudit(items)
-        setPhase('adding', items.length + '件を詳細判定用に追加中')
 
         var wholeStart = performance.now()
+        var itemById = new Map(items.map(function(item) { return [item.id,item] }))
+        var checkedIds = items.map(function(item) { return item.id })
+        checkedIds.forEach(function(id) { knownMovieIds.add(id) })
+
+        // BRUSH-054B: establish the same Movie/search evidence used after DOM
+        // creation, then consume only detail work the current SourcePlan already
+        // requires. This may move existing work earlier; it must not invent I/O.
+        model.primeCandidates(items)
+        restoreCachedMovieDetails(checkedIds, '自動追加候補 / DOM前')
+        var detailIds = checkedIds.filter(function(id) {
+          var movie = model.movies.get(id)
+          if (!movie || movie.thumbInfoDone) return false
+          var plan = SourcePlan.planMovie(movie,model.config,{available:['detail']})
+          return Boolean(plan.requests.detail?.length)
+        })
+        var preDomDetailStart = performance.now()
+        var preDomSettled = true
+        if (detailIds.length) {
+          setPhase('ng-check', detailIds.length + '件をDOM作成前に詳細判定中')
+          model.requestThumbInfo.forIds(detailIds,true)
+          preDomSettled = await waitForThumbInfo(detailIds,30000)
+          if (cooperativeWorkStopped()) return
+        }
+        var preDomDetailEnd = performance.now()
+
+        var renderItems = []
+        var parkedItems = []
+        items.forEach(function(item) {
+          var movie = model.movies.get(item.id)
+          if (preDomSettled && isAuthoritativePreDomNg(movie)) {
+            parkAuthoritativeCandidate(item)
+            parkedItems.push(item)
+          } else {
+            detailParked.delete(item.id)
+            renderItems.push(item)
+          }
+        })
+
+        // Only create as many non-authoritative cards as the current
+        // visible shortage can consume. Already-detailed surplus stays in the
+        // ordered pool and can be reused without another detail request.
+        var domNeeded = Math.max(0,targetCount() - visibleTotalCount())
+        var deferredItems = parkedItems.length && renderItems.length > domNeeded
+          ? renderItems.splice(domNeeded) : []
+        if (deferredItems.length) {
+          candidatePool = candidateFilter.sort(deferredItems.concat(candidatePool))
+        }
+        var deferredIds = new Set(deferredItems.map(function(item) { return item.id }))
+
+        setPhase('adding', renderItems.length + '件を表示候補として追加中')
         var addStart = performance.now()
         var addedIds = []
-        var itemById = new Map()
 
         var batchTiles = await page._createInjectedTilesCooperatively(
-          items, yieldToMainThread, autoFillMainThreadBudgetMs, cooperativeWorkStopped)
-        if (cooperativeWorkStopped() || batchTiles.length !== items.length) return
-        var parsedResults = items.map(function(item, itemIndex) {
+          renderItems, yieldToMainThread, autoFillMainThreadBudgetMs, cooperativeWorkStopped)
+        if (cooperativeWorkStopped() || batchTiles.length !== renderItems.length) return
+        var parsedResults = renderItems.map(function(item, itemIndex) {
           var tile = batchTiles[itemIndex]
           var ordinal = candidateFilter.order(item)
           tile.dataset.nrnCandidateOrder = String(ordinal)
@@ -280,8 +368,6 @@
           })
           if (later) tile.parentNode.insertBefore(tile,later.elem)
           addedIds.push(item.id)
-          itemById.set(item.id, item)
-          knownMovieIds.add(item.id)
           return {
             type: 'main',
             movie: {id: item.id, title: item.title},
@@ -290,10 +376,9 @@
         })
 
         var setupStartedAt = performance.now()
-        setup(parsedResults, model, page, controller)
+        if (parsedResults.length) setup(parsedResults, model, page, controller)
         if (performance.now() - setupStartedAt >= autoFillMainThreadBudgetMs
             && !(await yieldToMainThread())) return
-        restoreCachedMovieDetails(addedIds, '自動追加候補')
         var addEnd = performance.now()
 
         var addedRootMap = new Map()
@@ -382,7 +467,7 @@
         }
         window.__nrnInjectedToggleAudit = toggleAuditRows
 
-        var rows = addedIds.map(function(id, i) {
+        var rows = checkedIds.map(function(id, i) {
           var movie = model.movies.get(id)
           var item = itemById.get(id)
           var reasons = getMovieNgReasons(movie)
@@ -394,21 +479,26 @@
             source: item && item.__nrnSnapshot
               ? 'API:' + item.__nrnSnapshotOffset
               : item ? 'page:' + item.__nrnSourcePage + '#' + item.__nrnSourceIndex : '',
+            preDomParked:detailParked.has(id),
+            deferred:deferredIds.has(id),
             ng: Boolean(movie && movie.ng),
             ngReasons: reasons,
-            decision: movie && movie.ng ? 'NG' : '表示候補'
+            decision: detailParked.has(id) ? 'NG（DOM作成前確定）'
+              : deferredIds.has(id) ? '詳細済み予備'
+              : movie && movie.ng ? 'NG' : '表示候補'
           }
         })
 
         if (model.config.sessionDetailCacheEnabled.value) {
-          addedIds.forEach(cacheMovieAfterCheck)
+          checkedIds.forEach(cacheMovieAfterCheck)
         }
 
-        var accepted = rows.filter(function(r) { return !r.ng }).length
-        var ngCount = rows.length - accepted
+        var accepted = rows.filter(function(r) { return !r.ng && !r.deferred }).length
+        var ngCount = rows.filter(function(r) { return r.ng }).length
+        var detailAccepted = rows.filter(function(r) { return !r.ng }).length
         totalDetailChecked += rows.length
         totalAcceptedFromAdded += accepted
-        lastAcceptanceRate = rows.length ? accepted / rows.length : lastAcceptanceRate
+        lastAcceptanceRate = rows.length ? detailAccepted / rows.length : lastAcceptanceRate
 
         rebalanceOverflow()
         renderStoredSelfAdWarnings(addedIds, 'overflow調整後')
@@ -440,6 +530,9 @@
 
         var end = performance.now()
         var timings = {
+          preDomDetailMs:Math.round(preDomDetailEnd - preDomDetailStart),
+          preDomDetailCount:detailIds.length,
+          preDomParkedCount:parkedItems.length,
           domAddMs:Math.round(addEnd - addStart),
           thumbInfoMs:Math.round(thumbEnd - thumbStart),
           selfAdMs:candidateSelfAdMs,

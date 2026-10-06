@@ -57,6 +57,22 @@ test('page contributor count stays undecided under NOT until the page is complet
  m.setPageContributorCount(null); assert.equal(AdvancedNgRules.evaluateNode(m,group('AND',[rule],true)),false);
 });
 
+test('source guard keeps weak search owner undecided until authoritative detail arrives',async()=>{
+ const config=new Config((k,d)=>d,()=>{});await config.sync();
+ const movies=new Movies(config),m=new Movie('sm1','title');movies.setIfAbsent([m]);
+ const ownerRule=condition('userId','eq',99);
+ const guard=(field,origin)=>!['contributorId','userId','channelId','contributorName'].includes(field)
+   || ['detail','cache'].includes(origin?.source);
+ ThumbInfoListener.forSearch(movies)('sm1',{type:'user',id:99,name:'search owner'});
+ assert.equal(AdvancedNgRules.evaluateState(m,ownerRule,null,0,guard),null);
+ assert.equal(AdvancedNgRules.evaluateState(m,group('AND',[ownerRule],true),null,0,guard),null);
+ const trace=[];AdvancedNgRules.evaluateState(m,ownerRule,trace,0,guard);
+ assert.equal(trace[0].sourceBlocked,true);assert.equal(trace[0].source,'search');
+ ThumbInfoListener.forCompleted(movies)({id:'sm1',description:'',tags:[],contributor:{type:'user',id:99,name:'detail owner'}});
+ assert.equal(AdvancedNgRules.evaluateState(m,ownerRule,null,0,guard),true);
+ assert.equal(AdvancedNgRules.fieldOrigin(m,'userId').source,'detail');
+});
+
 test('cached rules never reuse a decision or expose mutable settings objects',()=>{
  const yes=new Movie('sm1','yes'), no=new Movie('sm2','no');
  const rules=JSON.stringify([{id:'a',expression:condition('title','eq','yes')}]);

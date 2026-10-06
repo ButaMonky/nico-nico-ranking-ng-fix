@@ -209,6 +209,7 @@
             candidatePool = []
             candidatePoolSeen.clear()
             candidateFilter.clear()
+            if (typeof detailParked !== 'undefined') detailParked.clear()
             lastFetchedHadNext = null
             nextPageToFetch = page._currentPageNumber + 1
             console.warn(LOG, 'APIから従来方式へfallbackして続行します')

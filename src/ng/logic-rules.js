@@ -358,7 +358,7 @@
     }
 
     // null is undecided: NOT must not turn unavailable metadata into a match.
-    var evaluateState = function(movie, node, trace, depth) {
+    var evaluateState = function(movie, node, trace, depth, sourceGuard) {
       depth = depth || 0
       if (!node || depth > 12) return null
 
@@ -366,13 +366,16 @@
         var meta = FIELD_META[node.field]
         if (!meta) return null
         var actual = fieldValue(movie, node.field)
+        var origin = fieldOrigin(movie, node.field)
         var pending = Boolean(actual && actual.__notReady)
+        var sourceBlocked = Boolean(sourceGuard && sourceGuard(node.field, origin) === false)
         // BRUSH-016: a numeric metadata threshold must be a non-negative
         // integer as written. An unusable threshold leaves the condition
         // undecided, so NOT cannot turn it into a match.
         var badThreshold = Boolean(meta.metadata && OP_META[node.operator] && OP_META[node.operator].needsValue
           && numericThreshold(node.value) === null)
-        var raw = pending || badThreshold ? null : compare(actual, node.operator, node.value, meta.type)
+        var raw = pending || badThreshold || sourceBlocked
+          ? null : compare(actual, node.operator, node.value, meta.type)
         var result = raw === null ? null : (node.not ? !raw : raw)
         if (trace) {
           trace.push({
@@ -386,8 +389,9 @@
             actual:Array.isArray(actual) ? actual.join(', ') : actual,
             not:Boolean(node.not),
             result:result,
+            sourceBlocked:sourceBlocked,
             // BRUSH-018: where the value came from and how settled it is.
-            ...fieldOrigin(movie, node.field)
+            ...origin
           })
         }
         return result
@@ -398,7 +402,7 @@
         var children = Array.isArray(node.children) ? node.children : []
         if (!children.length) return null
         var childResults = children.map(function(child) {
-          return evaluateState(movie, child, trace, depth + 1)
+          return evaluateState(movie, child, trace, depth + 1, sourceGuard)
         })
         var rawGroup = node.op === 'OR'
           ? (childResults.includes(true) ? true : childResults.includes(null) ? null : false)
