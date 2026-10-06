@@ -695,6 +695,30 @@
         pairs.forEach(function(pair) { self._cardActions?.attach(pair.root,pair.item) })
         return roots
       },
+      async _createInjectedTilesCooperatively(items, yieldFn, budgetMs, shouldStop) {
+        var self = this
+        var pairs = []
+        var values = items || []
+        var startedAt = performance.now()
+        var budget = Math.max(0, Number(budgetMs) || 0)
+        for (var i = 0; i < values.length; i++) {
+          if (shouldStop?.()) return []
+          var item = values[i]
+          pairs.push({item:item, root:self._createInjectedTile(item,{deferAppend:true,deferActions:true})})
+          // Keep all work detached until the whole batch is ready. Yielding after
+          // insertion but before setup would let the page observer see an
+          // incomplete AutoFill card as a native result.
+          if (i + 1 < values.length && performance.now() - startedAt >= budget) {
+            if (yieldFn && !(await yieldFn())) return []
+            startedAt = performance.now()
+          }
+        }
+        if (shouldStop?.()) return []
+        var roots = pairs.map(function(pair) { return pair.root })
+        this._appendInjectedTiles(roots)
+        pairs.forEach(function(pair) { self._cardActions?.attach(pair.root,pair.item) })
+        return roots
+      },
       async _applyAdDecoration(root, videoId) {
         try {
           if (this._disposed || root.dataset.nrnAdDecorated === 'true') return

@@ -6599,6 +6599,30 @@ html[data-nrn-ui-theme="dark"] .nrn-contributor-ng-name-button:hover {
         pairs.forEach(function(pair) { self._cardActions?.attach(pair.root,pair.item) })
         return roots
       },
+      async _createInjectedTilesCooperatively(items, yieldFn, budgetMs, shouldStop) {
+        var self = this
+        var pairs = []
+        var values = items || []
+        var startedAt = performance.now()
+        var budget = Math.max(0, Number(budgetMs) || 0)
+        for (var i = 0; i < values.length; i++) {
+          if (shouldStop?.()) return []
+          var item = values[i]
+          pairs.push({item:item, root:self._createInjectedTile(item,{deferAppend:true,deferActions:true})})
+          // Keep all work detached until the whole batch is ready. Yielding after
+          // insertion but before setup would let the page observer see an
+          // incomplete AutoFill card as a native result.
+          if (i + 1 < values.length && performance.now() - startedAt >= budget) {
+            if (yieldFn && !(await yieldFn())) return []
+            startedAt = performance.now()
+          }
+        }
+        if (shouldStop?.()) return []
+        var roots = pairs.map(function(pair) { return pair.root })
+        this._appendInjectedTiles(roots)
+        pairs.forEach(function(pair) { self._cardActions?.attach(pair.root,pair.item) })
+        return roots
+      },
       async _applyAdDecoration(root, videoId) {
         try {
           if (this._disposed || root.dataset.nrnAdDecorated === 'true') return
@@ -13493,6 +13517,61 @@ var CardActionData = (function () {
         })
       }
 
+      // BRUSH-054C: keep AutoFill responsive without adding fixed sleeps or
+      // changing network concurrency. scheduler.yield is preferred where
+      // available; MessageChannel is the cross-browser fallback.
+      var autoFillMainThreadBudgetMs = 10
+      var cooperativeWorkStopped = function() {
+        return page._disposed || runLifetime.signal.aborted
+      }
+      var messageChannelYield = function() {
+        if (cooperativeWorkStopped()) return Promise.resolve(false)
+        return new Promise(function(resolve) {
+          var channel = new MessageChannel()
+          var done = false
+          var finish = function(value) {
+            if (done) return
+            done = true
+            runLifetime.signal.removeEventListener('abort',cancel)
+            channel.port1.onmessage = null
+            channel.port1.close()
+            channel.port2.close()
+            resolve(Boolean(value) && !cooperativeWorkStopped())
+          }
+          var cancel = function() { finish(false) }
+          runLifetime.signal.addEventListener('abort',cancel,{once:true})
+          channel.port1.onmessage = function() { finish(true) }
+          channel.port2.postMessage(0)
+        })
+      }
+      var yieldToMainThread = function() {
+        if (cooperativeWorkStopped()) return Promise.resolve(false)
+        var schedulerApi = globalThis.scheduler
+        if (schedulerApi && typeof schedulerApi.yield === 'function') {
+          try {
+            return Promise.resolve(schedulerApi.yield()).then(function() {
+              return !cooperativeWorkStopped()
+            }, function() {
+              return messageChannelYield()
+            })
+          } catch (e) {}
+        }
+        return messageChannelYield()
+      }
+      var mapCooperatively = async function(values, mapper) {
+        var result = []
+        var startedAt = performance.now()
+        for (var i = 0; i < values.length; i++) {
+          if (cooperativeWorkStopped()) return null
+          result.push(mapper(values[i],i))
+          if (i + 1 < values.length && performance.now() - startedAt >= autoFillMainThreadBudgetMs) {
+            if (!(await yieldToMainThread())) return null
+            startedAt = performance.now()
+          }
+        }
+        return result
+      }
+
       var chooseDetailBatchSize = function(shortage) {
         if (typeof shortage !== 'number' || !Number.isFinite(shortage) || shortage <= 0) return 0
         var need = Math.ceil(shortage)
@@ -13679,7 +13758,9 @@ var CardActionData = (function () {
         var addedIds = []
         var itemById = new Map()
 
-        var batchTiles = page._createInjectedTiles(items)
+        var batchTiles = await page._createInjectedTilesCooperatively(
+          items, yieldToMainThread, autoFillMainThreadBudgetMs, cooperativeWorkStopped)
+        if (cooperativeWorkStopped() || batchTiles.length !== items.length) return
         var parsedResults = items.map(function(item, itemIndex) {
           var tile = batchTiles[itemIndex]
           var ordinal = candidateFilter.order(item)
@@ -13698,7 +13779,10 @@ var CardActionData = (function () {
           }
         })
 
+        var setupStartedAt = performance.now()
         setup(parsedResults, model, page, controller)
+        if (performance.now() - setupStartedAt >= autoFillMainThreadBudgetMs
+            && !(await yieldToMainThread())) return
         restoreCachedMovieDetails(addedIds, '自動追加候補')
         var addEnd = performance.now()
 
@@ -13743,7 +13827,7 @@ var CardActionData = (function () {
 
         renderStoredSelfAdWarnings(addedIds, '自動追加カード表示後')
 
-        var toggleAuditRows = addedRoots.map(function(root) {
+        var toggleAuditRows = await mapCooperatively(addedRoots,function(root) {
           var movie = model.movies.get(root.movieId)
           var expectedVisible = Boolean(movie && !movie.ng
             && !root.elem.classList.contains('nrn-autofill-pending')
@@ -13768,6 +13852,7 @@ var CardActionData = (function () {
             result:expectedVisible ? (ok ? 'OK' : '要確認') : '対象外（NG/予備）'
           }
         })
+        if (!toggleAuditRows) return
         var checkedToggleRows = toggleAuditRows.filter(function(r){ return r.expectedVisible })
         var toggleMissing = checkedToggleRows.filter(function(r) {
           return !r.present || !r.visible || !r.pinned
