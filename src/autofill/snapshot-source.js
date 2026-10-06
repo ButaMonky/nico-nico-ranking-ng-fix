@@ -255,6 +255,14 @@
           )) return 'NGチャンネルID'
         return ''
       }
+      var apiQuickNgReasonKey = function(reason) {
+        if (reason === 'NG動画ID') return 'movieId'
+        if (reason === 'NGタイトル') return 'title'
+        if (reason === 'NGタグ') return 'tag'
+        if (reason === 'NGユーザーID') return 'userId'
+        if (reason === 'NGチャンネルID') return 'channelId'
+        return null
+      }
 
       var getMovieNgReasons = function(movie) {
         if (!movie) return ['Movieなし']
@@ -449,6 +457,11 @@
             var reason = apiQuickNgReason(item)
             if (reason) {
               totalApiPrefilteredNg++
+              var reasonKey = apiQuickNgReasonKey(reason)
+              if (reasonKey && typeof totalApiPrefilterReasons !== 'undefined'
+                  && Object.prototype.hasOwnProperty.call(totalApiPrefilterReasons,reasonKey)) {
+                totalApiPrefilterReasons[reasonKey]++
+              }
               quickRows.push({item: item, reason: reason})
             } else {
               passed.push(item)

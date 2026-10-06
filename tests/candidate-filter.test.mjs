@@ -29,7 +29,7 @@ test('candidate filter: weak search owner and partial counts cannot trigger pre-
 test('candidate filter: parked entries return in source order after an NG change, without mutating items',()=>{
  const c=config();c.ngTitles.set.add('DROP');const q=C.create(c,8),a=item(1,'DROP'),b=item(2),d=item(3,'DROP');
  const original=JSON.stringify([a,b,d]);const r=q.partition([a,b,d]);
- assert.deepEqual([...r.passed].map(x=>x.id),['sm2']);assert.equal(r.rejected,2);assert.equal(q.isRejected('sm1'),true);
+ assert.deepEqual([...r.passed].map(x=>x.id),['sm2']);assert.equal(r.rejected,2);assert.deepEqual({...r.reasons},{movieId:0,title:2,advanced:0});assert.equal(q.isRejected('sm1'),true);
  c.ngTitles.set.clear();assert.equal(q.isRejected('sm1'),false);
  const replay=q.release();assert.deepEqual([...replay].map(x=>x.id),['sm1','sm3']);
  assert.deepEqual([...q.sort([b,...replay])].map(x=>x.id),['sm1','sm2','sm3']);
@@ -38,7 +38,8 @@ test('candidate filter: parked entries return in source order after an NG change
 test('candidate filter: capacity exhaustion falls back to normal processing, never loses a candidate',()=>{
  const c=config();c.ngTitles.set.add('DROP');const q=C.create(c,2),rows=Array.from({length:4},(_,i)=>item(i+1,'DROP'));
  const r=q.partition(rows);assert.equal(r.rejected,2);assert.deepEqual([...r.passed].map(x=>x.id),['sm3','sm4']);
- assert.equal(q.snapshot().retained,2);c.ngTitles.set.clear();assert.equal(q.release().length,2);
+ assert.deepEqual({...r.reasons},{movieId:0,title:2,advanced:0},'capacity fallback is not counted as a rejected reason');
+ assert.equal(q.snapshot().retained,2);assert.equal(q.snapshot().capacityFallback,2);c.ngTitles.set.clear();assert.equal(q.release().length,2);
 });
 test('candidate filter: repeated pending identities are bounded and source reset discards parked-only state',()=>{
  const c=config();c.ngTitles.set.add('DROP');const q=C.create(c,4),a=item(1,'DROP');

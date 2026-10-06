@@ -38,6 +38,7 @@
       const sort = items => [...items].sort((a,b)=>order(a)-order(b))
       function partition(items) {
         const passed = []
+        const reasons = {movieId:0,title:0,advanced:0}
         let rejected = 0
         for (const item of items) {
           order(item)
@@ -45,12 +46,13 @@
           if (match && (parked.has(item.id) || parked.size < limit)) {
             if (!parked.has(item.id)) parked.set(item.id,item)
             rejected++; rejectedTotal++
+            if (Object.prototype.hasOwnProperty.call(reasons,match)) reasons[match]++
           } else {
             if (match) capacityFallback++
             passed.push(item)
           }
         }
-        return {passed,rejected}
+        return {passed,rejected,reasons}
       }
       function release() {
         const result = []

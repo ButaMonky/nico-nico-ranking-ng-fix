@@ -84,6 +84,24 @@ test('required unknown fields survive failures in the report',async()=>{
  h.ThumbInfoListener.forErrorOccurred(h.movies)({id:'sm888881',error:{type:'TIMEOUT'}});
  s=h.Diagnostics.snapshot().current;assert.equal(s.detailPlan.terminalUnresolved,1);assert.equal(s.fieldStates.tags.failed,1);
 });
+test('diagnostics v2 exposes only fixed skip buckets and known-field provenance sources',async()=>{
+ const h=await setup();
+ h.movie.metadata.likeCount='known';assert.equal(h.MetadataReadiness.noteSource(h.movie,'likeCount','snapshot',123),true);
+ h.movie.metadata.commentCount='failed';h.movie.metadataSource.commentCount={source:'detail',failureKind:'PRIVATE_FAILURE'};
+ h.movie.metadata.mylistCount='unknown';h.movie.metadataSource.mylistCount={source:'search',observedAt:456};
+ h.movie.metadata.viewCount='known';h.movie.metadataSource.viewCount={source:'PRIVATE_SOURCE',observedAt:789};
+ h.run.runtime(()=>({totalCheapPrefilteredNg:3,cheapSkipReasons:{movieId:1,title:2,advanced:0,PRIVATE_BUCKET:99},
+  apiSkipReasons:{movieId:1,title:0,tag:2,userId:3,channelId:4,PRIVATE_BUCKET:99}}));
+ const s=h.Diagnostics.snapshot().current;
+ assert.equal(s.runtime.totalCheapPrefilteredNg,3);
+ assert.deepEqual({...s.skipReasons.cheap},{movieId:1,title:2,advanced:0});
+ assert.deepEqual({...s.skipReasons.api},{movieId:1,title:0,tag:2,userId:3,channelId:4});
+ assert.equal(s.metadataSources.likeCount.snapshot,1);
+ assert.equal(s.metadataSources.commentCount.detail,0,'failed provenance is not a successful source');
+ assert.equal(s.metadataSources.mylistCount.search,0,'stale provenance is ignored');
+ assert.deepEqual({...s.metadataSources.viewCount},{search:0,detail:0,cache:0,nicoad:0,snapshot:0},'unknown sources are ignored');
+ assert.doesNotMatch(JSON.stringify(s),/PRIVATE/);
+});
 test('summary contains snapshots, not mutable references, and no copy operation sends requests',async()=>{
  const h=await setup();const s=h.Diagnostics.snapshot();s.current.network.run.detail.attempts=123;
  assert.equal(h.Diagnostics.snapshot().current.network.run.detail.attempts,0);

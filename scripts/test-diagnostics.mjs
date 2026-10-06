@@ -33,6 +33,8 @@ try {
  let s=await page.evaluate(()=>__nrnDiagnostics.snapshot());
  assert.equal(s.version,'160.28');assert.equal(s.current.network.run.detail.attempts,0);
  assert.equal(s.current.detailPlan.readyWithoutRequest,1);assert.equal(s.current.fieldStates.tags.unknown,1);
+ assert.deepEqual(s.current.skipReasons.cheap,{movieId:0,title:0,advanced:0});
+ assert.deepEqual(s.current.skipReasons.api,{movieId:0,title:0,tag:0,userId:0,channelId:0});
  for(let i=0;i<10;i++)assert.equal(await page.evaluate(()=>__nrnDiagnostics.snapshot().current.detailPlan.readyWithoutRequest),1);
  await page.locator('.nrn-movie-info-toggle').first().click();
  await page.waitForFunction(()=>requests.length===1);
@@ -41,6 +43,7 @@ try {
  s=await page.evaluate(()=>__nrnDiagnostics.snapshot());assert.equal(s.current.network.run.detail.ok,1);
  assert.equal(s.current.network.run.detail.attempts,await page.evaluate(()=>requests.length));
  assert.equal(s.current.detailPlan.readyWithoutRequest,0);assert.equal(s.current.fieldStates.tags.known,1);
+ assert.equal(s.current.metadataSources.tags.detail,1);
  // Real settings iframe with the clipboard permission denied; provide a manual-copy fallback.
  await page.evaluate(()=>{
   const frame=document.createElement('iframe');frame.id='test-settings';frame.style='width:100%;height:900px';

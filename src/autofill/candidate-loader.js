@@ -33,10 +33,19 @@
             if (requestedMode === 'snapshot') {
               var passed = []
               var quickRows = []
+              var quickReasonKeys = {
+                'NG動画ID':'movieId','NGタイトル':'title','NGタグ':'tag',
+                'NGユーザーID':'userId','NGチャンネルID':'channelId'
+              }
               fresh.forEach(function(item) {
                 var reason = apiQuickNgReason(item)
                 if (reason) {
                   totalApiPrefilteredNg++
+                  var reasonKey = quickReasonKeys[reason]
+                  if (reasonKey && typeof totalApiPrefilterReasons !== 'undefined'
+                      && Object.prototype.hasOwnProperty.call(totalApiPrefilterReasons,reasonKey)) {
+                    totalApiPrefilterReasons[reasonKey]++
+                  }
                   quickRows.push({item: item, reason: reason})
                 } else {
                   passed.push(item)
@@ -57,6 +66,12 @@
 
             var cheap = candidateFilter.partition(fresh)
             totalCheapPrefilteredNg += cheap.rejected
+            if (cheap.reasons && typeof totalCheapPrefilterReasons !== 'undefined') {
+              Object.keys(totalCheapPrefilterReasons).forEach(function(key) {
+                var count = Number(cheap.reasons[key])
+                if (Number.isFinite(count) && count > 0) totalCheapPrefilterReasons[key] += count
+              })
+            }
             fresh = cheap.passed
             logCandidateTable('API取得 offset=' + result.offset, fresh)
             fresh.forEach(function(item) { candidatePool.push(item) })
@@ -182,6 +197,12 @@
             var filtered = filterFreshItems(items)
             var cheap = candidateFilter.partition(filtered.freshItems)
             totalCheapPrefilteredNg += cheap.rejected
+            if (cheap.reasons && typeof totalCheapPrefilterReasons !== 'undefined') {
+              Object.keys(totalCheapPrefilterReasons).forEach(function(key) {
+                var count = Number(cheap.reasons[key])
+                if (Number.isFinite(count) && count > 0) totalCheapPrefilterReasons[key] += count
+              })
+            }
             logCandidateTable('ページ ' + pageNumber + ' 候補', cheap.passed)
             cheap.passed.forEach(function(item) { candidatePool.push(item) })
 

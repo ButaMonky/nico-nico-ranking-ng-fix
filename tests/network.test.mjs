@@ -182,6 +182,43 @@ test('Snapshot: validation on later pages resumes from the fetched window, small
  }
 });
 
+test('Diagnostics v2: Snapshot validation reuse contributes fixed API reason buckets',async()=>{
+ const helperStart=auto.indexOf('      var apiQuickNgReasonKey = function(reason)'),helperEnd=auto.indexOf('      var getMovieNgReasons',helperStart);
+ const helper=vm.runInContext(auto.slice(helperStart,helperEnd)+';apiQuickNgReasonKey',vm.createContext({}));
+ const items=[{id:'sm0',quick:'NG動画ID'},{id:'sm1',quick:'NGタグ'},{id:'sm2'}];
+ const ctx=vm.createContext({console:quiet,LOG:'test',useSnapshot:true,snapshotValidated:false,snapshotValidation:null,snapshotValidationOffset:0,snapshotOffset:0,
+  snapshotFetchOffset:async()=>({offset:0,items,hasNextPage:false}),page:{_currentPageNumber:0,doc:{querySelectorAll:()=>items.map(x=>({getAttribute:()=>x.id}))}},
+  setPhase(){},model:{movies:new Map()},requestedMode:'snapshot',filterFreshItems:rows=>({freshItems:rows}),apiQuickNgReason:item=>item.quick||'',apiQuickNgReasonKey:helper,logCandidateTable(){},
+  candidatePool:[],candidatePoolSeen:new Set(),candidateFilter:{clear(){}},sourceLabel:'',fallbackReason:'',totalFetchedItems:0,fetchedExtraPages:0,lastFetchedHadNext:null,totalApiPrefilteredNg:0,
+  totalApiPrefilterReasons:{movieId:0,title:0,tag:0,userId:0,channelId:0}});
+ const a=auto.indexOf('      var validateSnapshotAgainstCurrentDom = async function(signal)'),b=auto.indexOf('      // -------------------- PagerManager',a);
+ const run=vm.runInContext(auto.slice(a,b)+';validateSnapshotAgainstCurrentDom',ctx);await run();
+ assert.equal(ctx.totalApiPrefilteredNg,2);assert.deepEqual({...ctx.totalApiPrefilterReasons},{movieId:1,title:0,tag:1,userId:0,channelId:0});
+ assert.deepEqual(ctx.candidatePool.map(x=>x.id),['sm2']);
+});
+
+test('Diagnostics v2: API and cheap prefilter reason counters use fixed buckets in both source modes',async()=>{
+ const a=auto.indexOf('      var fetchMoreCandidates = async function(minNeeded, signal)'),b=auto.indexOf('      // -------------------- AdService --------------------',a);
+ const source=auto.slice(a,b)+';fetchMoreCandidates';
+ const base=()=>({performance:{now:()=>0},console:quiet,LOG:'test',page:{_disposed:false},
+  model:{config:{autoFillMaxExtraPages:{value:0},autoFillEnabled:{value:true}}},
+  candidatePool:[],lastFetchedHadNext:true,fetchedExtraPages:0,totalFetchedItems:0,totalApiPrefilteredNg:0,
+  totalApiPrefilterReasons:{movieId:0,title:0,tag:0,userId:0,channelId:0},totalCheapPrefilteredNg:0,
+  totalCheapPrefilterReasons:{movieId:0,title:0,advanced:0},filterFreshItems:items=>({freshItems:items}),
+  logCandidateTable(){},snapshotValidated:true});
+ const api=base();Object.assign(api,{useSnapshot:true,requestedMode:'snapshot',snapshotOffset:0,
+  snapshotFetchOffset:async()=>({offset:0,items:[{id:'a',quick:'NG動画ID'},{id:'b',quick:'NGタグ'},{id:'c'},{id:'d'}],hasNextPage:false}),
+  apiQuickNgReason:item=>item.quick||'',candidateFilter:{partition:items=>({passed:items.filter(x=>x.id==='d'),rejected:1,reasons:{movieId:0,title:1,advanced:0}})}});
+ const apiRun=vm.runInContext(source,vm.createContext(api));await apiRun(4);
+ assert.equal(api.totalApiPrefilteredNg,2);assert.deepEqual({...api.totalApiPrefilterReasons},{movieId:1,title:0,tag:1,userId:0,channelId:0});
+ assert.equal(api.totalCheapPrefilteredNg,1);assert.deepEqual({...api.totalCheapPrefilterReasons},{movieId:0,title:1,advanced:0});
+ const legacy=base();Object.assign(legacy,{useSnapshot:false,nextPageToFetch:2,knownLastPage:null,endReachedWithoutRequest:false,
+  endPageDetectionSource:'unknown',fetchedPageNumbers:new Set(),currentPageNumber:()=>1,updatePagerUi(){},journey:{record(){}},
+  candidateFilter:{partition:items=>({passed:items.filter(x=>x.id==='keep'),rejected:1,reasons:{movieId:0,title:0,advanced:1}})}});
+ legacy.page.fetchPageItems=async()=>({items:[{id:'drop'},{id:'keep'}],hasNextPage:false,maxPage:2});
+ const legacyRun=vm.runInContext(source,vm.createContext(legacy));await legacyRun(2);
+ assert.equal(legacy.totalCheapPrefilteredNg,1);assert.deepEqual({...legacy.totalCheapPrefilterReasons},{movieId:0,title:0,advanced:1});
+});
 test('source context: player URL cannot change search descriptor or page navigation',()=>{
  const sourceHref='https://www.nicovideo.jp/tag/original?sort=registeredAt&order=desc&page=11';
  const ctx=vm.createContext({URL,sourceHref,location:new URL('https://www.nicovideo.jp/watch/sm1')});

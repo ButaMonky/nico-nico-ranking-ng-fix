@@ -1958,6 +1958,7 @@
       const sort = items => [...items].sort((a,b)=>order(a)-order(b))
       function partition(items) {
         const passed = []
+        const reasons = {movieId:0,title:0,advanced:0}
         let rejected = 0
         for (const item of items) {
           order(item)
@@ -1965,12 +1966,13 @@
           if (match && (parked.has(item.id) || parked.size < limit)) {
             if (!parked.has(item.id)) parked.set(item.id,item)
             rejected++; rejectedTotal++
+            if (Object.prototype.hasOwnProperty.call(reasons,match)) reasons[match]++
           } else {
             if (match) capacityFallback++
             passed.push(item)
           }
         }
-        return {passed,rejected}
+        return {passed,rejected,reasons}
       }
       function release() {
         const result = []
@@ -8077,12 +8079,18 @@ div:has(> div > a[data-anchor-page="ranking_genre"][href^="/watch/"] > div > p),
     const now = () => typeof performance === 'object' ? performance.now() : Date.now()
     const clone = value => JSON.parse(JSON.stringify(value))
     const number = value => typeof value === 'number' && Number.isFinite(value) ? Math.max(0,Math.round(value)) : null
+    const fixedCounts = (value,keys) => Object.fromEntries(keys.map(key => [key,number(value?.[key]) ?? 0]))
     const fields = ['ownerId','ownerType','ownerName','ownerVisibility','tags','lockedTags','description']
+    const metadataReadiness = typeof MetadataReadiness === 'object' ? MetadataReadiness : null
+    const provenanceFields = Array.isArray(metadataReadiness?.fields) ? [...metadataReadiness.fields] : [...fields]
+    const provenanceSources = ['search','detail','cache','nicoad','snapshot']
+    const cheapReasonKeys = ['movieId','title','advanced']
+    const apiReasonKeys = ['movieId','title','tag','userId','channelId']
     const kinds = ['detail','page','snapshot','adsThanks','adsDecoration','ownerName','other']
     const outcomes = ['ok','http','network','timeout','aborted','invalid','apiFailure']
     const phases = ['starting','waiting-dom','initial-ng','validating-api','fetching','ng-check','adding','completed','stopped','error','disabled','disposed']
     const runtimeKeys = ['visibleTotal','visibleOriginal','visibleInjected','originalNg','injectedNg','pending',
-      'candidatePool','fetchedUnits','fetchedItems','detailChecked','acceptedFromAdded','apiPrefilteredNg',
+      'candidatePool','fetchedUnits','fetchedItems','detailChecked','acceptedFromAdded','apiPrefilteredNg','totalCheapPrefilteredNg',
       'duplicatesRemoved','adPending','detailCacheHits','detailCacheMisses','detailCacheRestores',
       'detailCacheRestoreFailures','searchedPhysicalPageCount']
     const history = [], previous = []
@@ -8125,6 +8133,8 @@ div:has(> div > a[data-anchor-page="ranking_genre"][href^="/watch/"] > div > p),
         const plan = {total:0,readyWithoutRequest:0,cacheOnly:0,requestedVideos:attempted.size,queued:queue?._pendingIds?.length || 0,terminalUnresolved:0,awaitingRequired:0}
         const states = Object.fromEntries(fields.map(field => [field,{unknown:0,known:0,failed:0}]))
         const missing = Object.fromEntries(fields.map(field => [field,0]))
+        const metadataSources = Object.fromEntries(provenanceFields.map(field => [field,
+          Object.fromEntries(provenanceSources.map(source => [source,0]))]))
         const ownerNameRecovery = {known:0,nicoad:0,pending:0,accepted:0,rejected:0,failed:0,untyped:0,budget:0,cached:0,
           hiddenUnknown:0,skippedNg:0,awaitingDetails:0}
         for (const movie of movies?._idToMovie?.values() || []) {
@@ -8132,7 +8142,7 @@ div:has(> div > a[data-anchor-page="ranking_genre"][href^="/watch/"] > div > p),
           if (movie._nrnOwnerNameSource === 'nicoad') ownerNameRecovery.nicoad++
           if (Object.hasOwn(ownerNameRecovery,movie._nrnOwnerNameStatus)) ownerNameRecovery[movie._nrnOwnerNameStatus]++
           plan.total++
-          const required = MetadataReadiness.required(movie,config)
+          const required = metadataReadiness?.required ? metadataReadiness.required(movie,config) : new Set()
           if (movie.metadata.ownerName !== 'known') {
             if (movie.owner?.visibility === 'hidden') ownerNameRecovery.hiddenUnknown++
             if (movie.ng && !movie._detailsRequested) ownerNameRecovery.skippedNg++
@@ -8144,6 +8154,11 @@ div:has(> div > a[data-anchor-page="ranking_genre"][href^="/watch/"] > div > p),
             states[field][['known','failed'].includes(state) ? state : 'unknown']++
             if (required.has(field) && state !== 'known') { missing[field]++; ready = false }
           }
+          for (const field of provenanceFields) {
+            if (movie.metadata[field] !== 'known') continue
+            const record = metadataReadiness?.sourceOf ? metadataReadiness.sourceOf(movie,field) : null
+            if (record && Object.hasOwn(metadataSources[field],record.source)) metadataSources[field][record.source]++
+          }
           if (movie.thumbInfoDone && !ready) plan.terminalUnresolved++
           if (!movie.thumbInfoDone && !ready) plan.awaitingRequired++
           if (!attempted.has(movie.id)) {
@@ -8151,19 +8166,23 @@ div:has(> div > a[data-anchor-page="ranking_genre"][href^="/watch/"] > div > p),
             else if (ready) plan.readyWithoutRequest++
           }
         }
-        return {detailPlan:plan,fieldStates:states,missingRequired:missing,ownerNameRecovery}
+        return {detailPlan:plan,fieldStates:states,missingRequired:missing,metadataSources,ownerNameRecovery}
       }
       function snapshot() {
         if (closed) return clone(frozen)
         const data = typeof runtime === 'function' ? runtime() : {}
         const safeRuntime = Object.fromEntries(runtimeKeys.map(key => [key,number(data?.[key])]))
+        const skipReasons = {
+          cheap:fixedCounts(data?.cheapSkipReasons,cheapReasonKeys),
+          api:fixedCounts(data?.apiSkipReasons,apiReasonKeys)
+        }
         const net = clone(network);net.run.detail.uniqueVideos = attempted.size
         const p = typeof preview === 'function' ? preview() : {}
         const previewState = Object.fromEntries(['started','playing','stopped','blocked','error','unavailable','commentsUnavailable','preview','rights','comments','http','invalid','aborted','network'].map(k=>[k,number(p[k])]))
         Object.assign(previewState,{active:p.active===true,enabled:Boolean(config?.hoverPreviewEnabled?.value),controlRequestsOnly:true})
         return {
           sequence:seq,routeKind,phase,endedPhase,elapsedSinceRouteStartMs:number(now()-started),terminalElapsedMs,
-          settings:settings(config),network:net,payloadFailures:clone(payloadFailures),...detailState(),runtime:safeRuntime,
+          settings:settings(config),network:net,payloadFailures:clone(payloadFailures),...detailState(),runtime:safeRuntime,skipReasons,
           cache:{recentRestoredVideos:recent.size,sessionRestoredVideos:session.size,
             restoredAfterRequestStarted:[...new Set([...recent,...session])].filter(id => attempted.has(id)).length},
           initialProcessing:clone(initial),sourceComparison:clone(comparison),audit:clone(audit),preview:previewState
@@ -11513,6 +11532,7 @@ var CardActionData = (function () {
       var fetchedExtraPages = 0
       var totalFetchedItems = 0
       var totalApiPrefilteredNg = 0
+      var totalApiPrefilterReasons = {movieId:0,title:0,tag:0,userId:0,channelId:0}
       var totalDuplicatesRemoved = 0
       var totalDetailChecked = 0
       var totalAcceptedFromAdded = 0
@@ -11520,6 +11540,7 @@ var CardActionData = (function () {
       var candidatePoolSeen = new Set()
       var candidateFilter = CandidateFilter.create(model.config)
       var totalCheapPrefilteredNg = 0
+      var totalCheapPrefilterReasons = {movieId:0,title:0,advanced:0}
       var nextPageToFetch = page._currentPageNumber + 1
       var fetching = false
       var initialized = false
@@ -12086,6 +12107,9 @@ var CardActionData = (function () {
           detailChecked: totalDetailChecked,
           acceptedFromAdded: totalAcceptedFromAdded,
           apiPrefilteredNg: totalApiPrefilteredNg,
+          totalCheapPrefilteredNg: totalCheapPrefilteredNg,
+          apiSkipReasons: {...totalApiPrefilterReasons},
+          cheapSkipReasons: {...totalCheapPrefilterReasons},
           duplicatesRemoved: totalDuplicatesRemoved,
           knownIds: knownMovieIds.size,
           thumbInfoConcurrency: model.config.thumbInfoConcurrency.value,
@@ -12123,6 +12147,8 @@ var CardActionData = (function () {
           originalNg:initialized ? originalNgCount() : null,injectedNg:injectedNgCount(),pending:pendingInjectedCount(),
           candidatePool:candidatePool.length,fetchedUnits:fetchedExtraPages,fetchedItems:totalFetchedItems,
           detailChecked:totalDetailChecked,acceptedFromAdded:totalAcceptedFromAdded,apiPrefilteredNg:totalApiPrefilteredNg,
+          totalCheapPrefilteredNg:totalCheapPrefilteredNg,apiSkipReasons:totalApiPrefilterReasons,
+          cheapSkipReasons:totalCheapPrefilterReasons,
           duplicatesRemoved:totalDuplicatesRemoved,adPending:adPending,searchedPhysicalPageCount:searchedPhysicalPageCount(),
           detailCacheHits:cacheHits,detailCacheMisses:cacheMisses,detailCacheRestores:cacheRestores,detailCacheRestoreFailures:cacheRestoreFailures}
       })
@@ -12527,6 +12553,14 @@ var CardActionData = (function () {
           )) return 'NGチャンネルID'
         return ''
       }
+      var apiQuickNgReasonKey = function(reason) {
+        if (reason === 'NG動画ID') return 'movieId'
+        if (reason === 'NGタイトル') return 'title'
+        if (reason === 'NGタグ') return 'tag'
+        if (reason === 'NGユーザーID') return 'userId'
+        if (reason === 'NGチャンネルID') return 'channelId'
+        return null
+      }
 
       var getMovieNgReasons = function(movie) {
         if (!movie) return ['Movieなし']
@@ -12721,6 +12755,11 @@ var CardActionData = (function () {
             var reason = apiQuickNgReason(item)
             if (reason) {
               totalApiPrefilteredNg++
+              var reasonKey = apiQuickNgReasonKey(reason)
+              if (reasonKey && typeof totalApiPrefilterReasons !== 'undefined'
+                  && Object.prototype.hasOwnProperty.call(totalApiPrefilterReasons,reasonKey)) {
+                totalApiPrefilterReasons[reasonKey]++
+              }
               quickRows.push({item: item, reason: reason})
             } else {
               passed.push(item)
@@ -13236,10 +13275,19 @@ var CardActionData = (function () {
             if (requestedMode === 'snapshot') {
               var passed = []
               var quickRows = []
+              var quickReasonKeys = {
+                'NG動画ID':'movieId','NGタイトル':'title','NGタグ':'tag',
+                'NGユーザーID':'userId','NGチャンネルID':'channelId'
+              }
               fresh.forEach(function(item) {
                 var reason = apiQuickNgReason(item)
                 if (reason) {
                   totalApiPrefilteredNg++
+                  var reasonKey = quickReasonKeys[reason]
+                  if (reasonKey && typeof totalApiPrefilterReasons !== 'undefined'
+                      && Object.prototype.hasOwnProperty.call(totalApiPrefilterReasons,reasonKey)) {
+                    totalApiPrefilterReasons[reasonKey]++
+                  }
                   quickRows.push({item: item, reason: reason})
                 } else {
                   passed.push(item)
@@ -13260,6 +13308,12 @@ var CardActionData = (function () {
 
             var cheap = candidateFilter.partition(fresh)
             totalCheapPrefilteredNg += cheap.rejected
+            if (cheap.reasons && typeof totalCheapPrefilterReasons !== 'undefined') {
+              Object.keys(totalCheapPrefilterReasons).forEach(function(key) {
+                var count = Number(cheap.reasons[key])
+                if (Number.isFinite(count) && count > 0) totalCheapPrefilterReasons[key] += count
+              })
+            }
             fresh = cheap.passed
             logCandidateTable('API取得 offset=' + result.offset, fresh)
             fresh.forEach(function(item) { candidatePool.push(item) })
@@ -13385,6 +13439,12 @@ var CardActionData = (function () {
             var filtered = filterFreshItems(items)
             var cheap = candidateFilter.partition(filtered.freshItems)
             totalCheapPrefilteredNg += cheap.rejected
+            if (cheap.reasons && typeof totalCheapPrefilterReasons !== 'undefined') {
+              Object.keys(totalCheapPrefilterReasons).forEach(function(key) {
+                var count = Number(cheap.reasons[key])
+                if (Number.isFinite(count) && count > 0) totalCheapPrefilterReasons[key] += count
+              })
+            }
             logCandidateTable('ページ ' + pageNumber + ' 候補', cheap.passed)
             cheap.passed.forEach(function(item) { candidatePool.push(item) })
 

@@ -578,6 +578,7 @@
       var fetchedExtraPages = 0
       var totalFetchedItems = 0
       var totalApiPrefilteredNg = 0
+      var totalApiPrefilterReasons = {movieId:0,title:0,tag:0,userId:0,channelId:0}
       var totalDuplicatesRemoved = 0
       var totalDetailChecked = 0
       var totalAcceptedFromAdded = 0
@@ -585,6 +586,7 @@
       var candidatePoolSeen = new Set()
       var candidateFilter = CandidateFilter.create(model.config)
       var totalCheapPrefilteredNg = 0
+      var totalCheapPrefilterReasons = {movieId:0,title:0,advanced:0}
       var nextPageToFetch = page._currentPageNumber + 1
       var fetching = false
       var initialized = false
@@ -1151,6 +1153,9 @@
           detailChecked: totalDetailChecked,
           acceptedFromAdded: totalAcceptedFromAdded,
           apiPrefilteredNg: totalApiPrefilteredNg,
+          totalCheapPrefilteredNg: totalCheapPrefilteredNg,
+          apiSkipReasons: {...totalApiPrefilterReasons},
+          cheapSkipReasons: {...totalCheapPrefilterReasons},
           duplicatesRemoved: totalDuplicatesRemoved,
           knownIds: knownMovieIds.size,
           thumbInfoConcurrency: model.config.thumbInfoConcurrency.value,
@@ -1188,6 +1193,8 @@
           originalNg:initialized ? originalNgCount() : null,injectedNg:injectedNgCount(),pending:pendingInjectedCount(),
           candidatePool:candidatePool.length,fetchedUnits:fetchedExtraPages,fetchedItems:totalFetchedItems,
           detailChecked:totalDetailChecked,acceptedFromAdded:totalAcceptedFromAdded,apiPrefilteredNg:totalApiPrefilteredNg,
+          totalCheapPrefilteredNg:totalCheapPrefilteredNg,apiSkipReasons:totalApiPrefilterReasons,
+          cheapSkipReasons:totalCheapPrefilterReasons,
           duplicatesRemoved:totalDuplicatesRemoved,adPending:adPending,searchedPhysicalPageCount:searchedPhysicalPageCount(),
           detailCacheHits:cacheHits,detailCacheMisses:cacheMisses,detailCacheRestores:cacheRestores,detailCacheRestoreFailures:cacheRestoreFailures}
       })
