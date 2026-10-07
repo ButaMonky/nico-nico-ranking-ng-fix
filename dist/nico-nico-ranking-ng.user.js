@@ -7,7 +7,7 @@
 // @match        *://www.nicovideo.jp/ranking*
 // @match        *://www.nicovideo.jp/search/*
 // @match        *://www.nicovideo.jp/tag/*
-// @version      160.30
+// @version      160.31
 // @grant        unsafeWindow
 // @grant        GM_getValue
 // @grant        GM_setValue
@@ -205,7 +205,7 @@
 
   // This facade is scoped to this userscript; other scripts keep their console.
   var nrnConsoleConfig = null
-  var NRN_VERSION = '160.30'
+  var NRN_VERSION = '160.31'
   var nrnNativeConsole = globalThis.console
   var nrnConsoleCounts = {warnings:0,errors:0}
   var nrnSetConsoleConfig = function(config) { nrnConsoleConfig = config }
@@ -12128,6 +12128,7 @@ var CardActionData = (function () {
           return
         }
         badge.style.display = ''
+        badge.title = 'クリックでコンパクト/詳細を切替。文字選択中は切り替えません。ダブルクリックで診断情報をConsoleへ出力。'
         var elapsed = (finishedAt || performance.now()) - runStartedAt
 
         if (mode === 'compact') {
@@ -12145,7 +12146,6 @@ var CardActionData = (function () {
               : '',
             '経過 ' + elapsedText(elapsed)
           ].filter(Boolean).join('\n')
-          badge.title = '設定で詳細表示に変更できます。ダブルクリックで診断情報をConsoleへ出力。'
           return
         }
 
@@ -12266,7 +12266,35 @@ var CardActionData = (function () {
           duplicatesRemoved:totalDuplicatesRemoved,adPending:adPending,searchedPhysicalPageCount:searchedPhysicalPageCount(),
           detailCacheHits:cacheHits,detailCacheMisses:cacheMisses,detailCacheRestores:cacheRestores,detailCacheRestoreFailures:cacheRestoreFailures}
       })
-      listen(badge, 'dblclick', function() { Diagnostics.publish('manual') })
+      var statusSelectionActive = function() {
+        if (typeof page.doc.getSelection !== 'function') return false
+        var selection = page.doc.getSelection()
+        if (!selection || selection.isCollapsed) return false
+        var insideBadge = function(node) {
+          if (!node) return false
+          return node === badge || badge.contains(node)
+        }
+        return insideBadge(selection.anchorNode) || insideBadge(selection.focusNode)
+      }
+      var toggleStatusPanelMode = function() {
+        var mode = model.config.statusPanelMode.value
+        if (mode === 'compact') model.config.statusPanelMode.value = 'detailed'
+        else if (mode === 'detailed') model.config.statusPanelMode.value = 'compact'
+        else return false
+        return true
+      }
+      var statusPanelClickToggled = false
+      listen(badge, 'click', function(event) {
+        if (event.detail !== 1) return
+        statusPanelClickToggled = false
+        if (statusSelectionActive()) return
+        statusPanelClickToggled = toggleStatusPanelMode()
+      })
+      listen(badge, 'dblclick', function() {
+        if (statusPanelClickToggled) toggleStatusPanelMode()
+        statusPanelClickToggled = false
+        Diagnostics.publish('manual')
+      })
 
       // -------------------- waiting helpers --------------------
       var waitForPaint = function() {
