@@ -15,7 +15,7 @@ async function setup(){
  const window={addEventListener:(k,v)=>events[k]=v};
  const document={title:'test',querySelectorAll:()=>results};
  const context=vm.createContext({window,location,history,URL,document,
-  ListPage:{is:l=>l.pathname.startsWith('/ranking/genre')},SearchPage:{is:l=>/^\/(tag|search)\//.test(l.pathname)},
+  ListPage:{is:l=>l.pathname.startsWith('/ranking/genre')||l.pathname==='/ranking/custom'},SearchPage:{is:l=>/^\/(tag|search)\//.test(l.pathname)},
   MutationObserver:class{constructor(fn){observe=fn;}observe(){}},
   setTimeout:(f)=>{timers.set(++id,f);return id;},clearTimeout:n=>timers.delete(n),setInterval:f=>intervals.push(f)});
  vm.runInContext(source.slice(a,b)+';setupSpaNavigationGuard()',context);
@@ -45,6 +45,17 @@ test('SPA: same cards, zero results, unsupported page and return',async()=>{
  h.history.pushState(null,'','/tag/empty');h.commit([]);h.flush();assert.equal(h.starts.length,2);
  h.history.pushState(null,'','/my');h.commit([]);h.flush();assert.equal(h.starts.length,2);
  h.history.pushState(null,'','/ranking/genre/all');h.commit(['sm4']);h.flush();assert.equal(h.starts.length,3);
+});
+test('SPA: custom ranking and genre ranking transition without reload',async()=>{
+ const h=await setup();h.history.pushState(null,'','/ranking/custom');h.commit(['sm4']);h.flush();
+ assert.deepEqual(h.starts,['https://www.nicovideo.jp/ranking/custom']);
+ h.history.pushState(null,'','/ranking/genre/all');h.commit(['sm5']);h.flush();
+ h.history.pushState(null,'','/ranking/custom');h.commit(['sm6']);h.flush();
+ assert.deepEqual(h.starts,[
+  'https://www.nicovideo.jp/ranking/custom',
+  'https://www.nicovideo.jp/ranking/genre/all',
+  'https://www.nicovideo.jp/ranking/custom'
+ ]);
 });
 test('SPA: hash is ignored; popstate and polling start new routes',async()=>{
  const h=await setup();h.history.pushState(null,'','#details');h.flush();assert.equal(h.stops.length,0);

@@ -11,8 +11,15 @@ async function load(path){
 for(const [label,path] of [['baseline',baseline],['generated',output]]){
  test(`${label}: existing page URL predicates`,async()=>{
   const {ListPage,SearchPage}=await load(path);
-  const cases=[['/ranking/genre/all',true,false],['/ranking',false,false],['/search/test',false,true],['/tag/test',false,true],['/tag',false,false],['/watch/sm1',false,false]];
+  const customSupported=label==='generated';
+  const cases=[['/ranking/genre/all',true,false],['/ranking/custom',customSupported,false],['/ranking',false,false],['/search/test',false,true],['/tag/test',false,true],['/tag',false,false],['/watch/sm1',false,false]];
   for(const [pathname,list,search] of cases){assert.equal(ListPage.is({pathname}),list);assert.equal(SearchPage.is({pathname}),search);}
+  if(customSupported){
+   assert.equal(ListPage.isCustom({pathname:'/ranking/custom'}),true);
+   assert.equal(ListPage.supportsAutoFill({pathname:'/ranking/custom'}),false);
+   assert.equal(ListPage.supportsAutoFill({pathname:'/ranking/genre/all'}),true);
+   assert.equal(typeof Object.getOwnPropertyDescriptor(ListPage.MovieRoot.prototype,'viewMode')?.set,'function','custom viewMode getter must preserve the inherited setter');
+  }
  });
  test(`${label}: base page toggle mapping and ad visibility transition`,async()=>{
   const {NicoPage,SearchPage}=await load(path),page=new NicoPage({});

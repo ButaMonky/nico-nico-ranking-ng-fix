@@ -7,7 +7,7 @@
 // @match        *://www.nicovideo.jp/ranking*
 // @match        *://www.nicovideo.jp/search/*
 // @match        *://www.nicovideo.jp/tag/*
-// @version      160.29
+// @version      160.30
 // @grant        unsafeWindow
 // @grant        GM_getValue
 // @grant        GM_setValue
@@ -205,7 +205,7 @@
 
   // This facade is scoped to this userscript; other scripts keep their console.
   var nrnConsoleConfig = null
-  var NRN_VERSION = '160.29'
+  var NRN_VERSION = '160.30'
   var nrnNativeConsole = globalThis.console
   var nrnConsoleCounts = {warnings:0,errors:0}
   var nrnSetConsoleConfig = function(config) { nrnConsoleConfig = config }
@@ -5963,6 +5963,34 @@ html[data-nrn-ui-theme="dark"] .nrn-contributor-ng-name-button:hover {
           }
           return e;
         },
+        get _preserveCustomSlot() {
+          return this.elem.matches('[data-decoration-video-id][data-anchor-area="main"][data-anchor-page="ranking_custom"]');
+        },
+        get _hidden() {
+          return this.elem.classList.contains('nrn-hide')
+            || this.elem.classList.contains('nrn-custom-hide');
+        },
+        _hide() {
+          if (!this._preserveCustomSlot) {
+            _super.prototype._hide.call(this);
+            return;
+          }
+          if (this._movieInfoVisible) this._movieInfoVisible = false;
+          this.elem.classList.remove('nrn-hide');
+          this.elem.classList.add('nrn-custom-hide');
+        },
+        _show() {
+          this.elem.classList.remove('nrn-custom-hide');
+          _super.prototype._show.call(this);
+        },
+        get viewMode() {
+          if (this.elem.classList.contains('nrn-reduce')) return 'reduce';
+          if (this._hidden) return 'hide';
+          return 'doNothing';
+        },
+        set viewMode(viewMode) {
+          Object.getOwnPropertyDescriptor(_super.prototype, 'viewMode').set.call(this, viewMode);
+        },
         get _movieAnchorSelectors() {
           // 投稿者やタグへのリンクではなく、動画ページへのリンクだけを対象にする。
           return [
@@ -6710,6 +6738,7 @@ html[data-nrn-ui-theme="dark"] .nrn-contributor-ng-name-button:hover {
         return this._parseMain(target).concat(this._parseAds(target));
       },
       _parseMain(target) {
+        if (ListPage.isCustom(location)) return this._parseCustomMain(target);
         return Array.from(target.querySelectorAll('div[data-anchor] > div:not(.pos_relative) > a[data-anchor-area][href^="/watch/"]'))
           .map(function(item) {
             return {
@@ -6724,7 +6753,23 @@ html[data-nrn-ui-theme="dark"] .nrn-contributor-ng-name-button:hover {
             }
           }).filter(e => e.movie.id && e.movie.title && !e.rootElem.classList.contains('nrn-parsed'));
       },
+      _parseCustomMain(target) {
+        const selector = '[data-decoration-video-id][data-anchor-area="main"][data-anchor-page="ranking_custom"]';
+        const roots = Array.from(target.querySelectorAll(selector));
+        if (target.matches?.(selector)) roots.unshift(target);
+        return Array.from(new Set(roots)).map(function(root) {
+          const id = root.getAttribute('data-decoration-video-id');
+          const anchor = root.querySelector('div:not(.pos_relative) > a[data-anchor-area="main"][data-anchor-page="ranking_custom"][href^="/watch/"]');
+          const title = anchor?.textContent?.trim();
+          return {
+            type: 'main',
+            movie: {id:id, title:title},
+            rootElem:root,
+          };
+        }).filter(e => e.movie.id && e.movie.title && !e.rootElem.classList.contains('nrn-parsed'));
+      },
       _parseAds(target) {
+        if (ListPage.isCustom(location)) return [];
         return Array.from(target.querySelectorAll('a[data-anchor-area][href^="/watch/"]:has(> div > p)'))
           .map(function(item) {
             return {
@@ -7046,6 +7091,10 @@ html[data-nrn-ui-theme="dark"] .nrn-contributor-ng-name-button:hover {
 .nrn-hide {
   display: none;
 }
+.nrn-custom-hide {
+  visibility: hidden !important;
+  pointer-events: none !important;
+}
 .nrn-user-ng-button {
   display: inline-block;
 }
@@ -7325,11 +7374,20 @@ html[data-nrn-ui-theme="dark"] .nrn-contributor-ng-name-button:hover {
     })
     Object.assign(ListPage, {
       MovieRoot,
+      isCustom(location) {
+        return location.pathname === '/ranking/custom'
+          || location.pathname.startsWith('/ranking/custom/');
+      },
       is(location) {
-        return location.pathname.startsWith('/ranking/genre');
+        return location.pathname.startsWith('/ranking/genre')
+          || ListPage.isCustom(location);
+      },
+      supportsAutoFill(location) {
+        return !ListPage.isCustom(location);
       },
       pendingMoviesInvisibleCss() {
-        return `div:has(> :not(.pos_relative) > [data-anchor-page="ranking_genre"] > :not(.pos_relative) > [data-anchor-page="ranking_genre"][href^="/watch/"]),
+        return `[data-decoration-video-id][data-anchor-area="main"][data-anchor-page="ranking_custom"],
+div:has(> :not(.pos_relative) > [data-anchor-page="ranking_genre"] > :not(.pos_relative) > [data-anchor-page="ranking_genre"][href^="/watch/"]),
 div:has(> div > a[data-anchor-page="ranking_genre"][href^="/watch/"] > div > p),
 [data-anchor-page="tag"]:has(> :not(.pos_relative) > [data-anchor-page="tag"][href^="/watch/"]),
 [data-anchor-page="search"]:has(> :not(.pos_relative) > [data-anchor-page="search"][href^="/watch/"]) {
@@ -15581,7 +15639,7 @@ var CardActionData = (function () {
             view.bindToWindow()
             view.setup(model)
             view.observeMutation(model)
-            setupAutoFill(model, page, ctrl)
+            if (ListPage.supportsAutoFill(location)) setupAutoFill(model, page, ctrl)
             model.requestThumbInfo()
             console.log('[NicoNicoRankingNG SPA]', 'Start NG checks', page._sourceUrl)
           } catch (e) { console.error(e); Diagnostics.problem('routeSetup'); stop() }

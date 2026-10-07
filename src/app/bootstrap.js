@@ -67,7 +67,7 @@
             view.bindToWindow()
             view.setup(model)
             view.observeMutation(model)
-            setupAutoFill(model, page, ctrl)
+            if (ListPage.supportsAutoFill(location)) setupAutoFill(model, page, ctrl)
             model.requestThumbInfo()
             console.log('[NicoNicoRankingNG SPA]', 'Start NG checks', page._sourceUrl)
           } catch (e) { console.error(e); Diagnostics.problem('routeSetup'); stop() }
