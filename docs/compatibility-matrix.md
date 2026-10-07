@@ -1,6 +1,6 @@
 # 対応画面マトリクス（BRUSH-045）
 
-作成: 2026-10-03 claude-code（Lane C）。対象: integration/brush 9952484 + Lane C（BRUSH-016 / 037 / 036）。
+作成: 2026-10-03 claude-code（Lane C）。更新: 2026-10-07 BRUSH-058。対象: local integration/brush a74efa3（160.30、BRUSH-050 / BRUSH-057 を含む）。
 
 ## 状態の定義
 
@@ -18,7 +18,8 @@
 
 | 対象 | 状態 | 根拠（試験） | 備考 |
 |---|---|---|---|
-| ランキング（/ranking/genre…） | live未確認（offline はページ種別判定とSPA起動のみ） | pages.test（/ranking/genre/all を対象、/ranking 単体は対象外と判定）、navigation.test | ランキングのカードDOMを使ったブラウザ試験は無い。@match は *://www.nicovideo.jp/ranking*。For you・カスタムランキング等は未確認（distribution-16025） |
+| ランキング（/ranking/genre…） | offline確認済み／live未確認 | pages.test、navigation.test | route判定とSPA遷移を回帰確認。genreカードそのものを使った専用offline browser fixtureはまだ無く、実サイト上のuserscript動作も未確認。 |
+| カスタムランキング（/ranking/custom） | offline確認済み／live未確認 | test-ranking-custom、pages.test、navigation.test | BRUSH-057。通常動画カードだけを解析し、promoted/native枠を除外。5スロットの寸法を維持してNG非表示し、flat AutoFillは無効化。custom↔genre SPA遷移も回帰確認。 |
 | タグ検索（/tag/…） | offline確認済み／live未確認 | navigation.test、test-spa、pages.test、test-pager-journey | |
 | キーワード検索（/search/…） | offline確認済み／live未確認 | navigation.test、test-spa、pages.test | |
 | リスト表示 | offline確認済み／live未確認 | test-result-layout（取得済みリストHTML、320px サムネイル、置換追従） | 実サイトCSS全体・旧UIは未確認（list-tile-fix.md） |
@@ -35,8 +36,8 @@
 | 方式 | 状態 | 根拠 | 備考 |
 |---|---|---|---|
 | legacy（ページHTML＋getthumbinfo） | offline確認済み／live未確認 | AutoFill browser試験・benchmark は legacy | 既定値 |
-| hybrid（Snapshot一括＋getthumbinfo確定） | 部分対応（offline単体のみ）／live未確認 | network.test（Snapshot検証・不一致時 fallback）、snapshot-metadata.test（null/欠落を unknown） | ブラウザ試験なし。Snapshot候補の数値は `__nrnSearchItem` 経由のモデル反映が未配線で unknown のまま（FINAL-REPORT） |
-| snapshot（API で事前NG、残りだけ getthumbinfo） | 部分対応（offline単体のみ）／live未確認 | 同上 | 同上。pageContributorCount 利用時の扱いは snapshot-source の分岐あり |
+| hybrid（Snapshot一括＋getthumbinfo確定） | 部分対応（offline確認済み）／live未確認 | network.test（Snapshot検証・不一致時 fallback）、snapshot-metadata.test（null/欠落を unknown）、BRUSH-050 | 実サイト未確認。BRUSH-050でSnapshot候補の正規化済み数値metadataを `__nrnSearchItem` 経由でモデルへ反映する配線を追加済み。欠落値は引き続き unknown。 |
+| snapshot（API で事前NG、残りだけ getthumbinfo） | 部分対応（offline確認済み）／live未確認 | 同上、BRUSH-050 | Snapshot候補の数値metadataはBRUSH-050でモデル配線済み。pageContributorCount利用時の扱いは snapshot-source の分岐あり。 |
 
 ## NG 判定・条件
 
@@ -44,7 +45,7 @@
 |---|---|---|---|
 | 基本NG（動画ID・タイトル・タグ・ロックタグ・投稿者ID/名・チャンネルID） | offline確認済み／live未確認 | core / ng / baseline（v14.1 互換）tests | |
 | 複合NG（AND/OR/NOT・三値） | offline確認済み／live未確認 | logic-boundary、metadata-readiness、test-rule-editor | |
-| 数値条件（いいね・再生・コメント・マイリスト・動画時間）BRUSH-016 | offline確認済み／live未確認 | numeric-ng.test（9）、rule-editor-numeric.test、test-rule-editor-numeric | 値は検索結果/サーバー応答由来のみ。無い動画は判定保留。Snapshot経由の追加カードは現在 unknown |
+| 数値条件（いいね・再生・コメント・マイリスト・動画時間）BRUSH-016 | offline確認済み／live未確認 | numeric-ng.test、rule-editor-numeric.test、test-rule-editor-numeric、BRUSH-050回帰 | 検索/サーバー応答に加え、BRUSH-050でSnapshot添付 `__nrnSearchItem` の正規化済み数値もモデルへ反映。値が欠落・不正なら判定保留（unknown）を維持。 |
 | 投稿日条件（registeredAtMs） | 未対応 | — | BRUSH-016b として保留 |
 | 補完投稿者（nicoad / Snapshot）でのNG | offline確認済み／live未確認 | metadata-readiness（BRUSH-017 マトリクス）、owner-name-source、snapshot-owner-source | |
 | 投稿者アイコン | offline確認済み／live未確認 | owner-icon.test、test-card-enhancements | blank.jpg 実在・実APIのURL形・lazy GET 数は live pending（BRUSH-012） |
@@ -54,9 +55,9 @@
 1. ランキング・タグ・キーワード検索で、リスト/タイル各1ページの表示とNG（既定設定）
 2. AutoFill（legacy）で追加カードの順序・NG・SPA遷移後の停止
 3. hybrid / snapshot の候補取得と fallback
-4. 数値条件（いいね数など）が通常カードで判定されること、AutoFill追加カードで保留になること
+4. 数値条件（いいね数など）が通常カードとSnapshot追加カードで正しく判定され、値が欠落した場合だけ保留になること
 5. 投稿者アイコンの4項目（BRUSH-012 live pending）
 
 ## この表の根拠となる試験件数
-Lane C（BRUSH-016 / 037 / 036）適用後: Node 単体 356 件、offline ブラウザ試験 24 本（Edge・通信遮断・合成データ）。いずれも実サイト確認ではない。
+160.30 / BRUSH-057 統合時点: full Node 374/374 PASS、offline ブラウザ試験 31/31 PASS（Edge・通信遮断・合成データ。初回にcard-budget timeout flake 1件を別記録し、完全rerunは31/31）。いずれも実サイト上のuserscript動作確認ではない。
 実サイトで確認した項目は、確認日・ブラウザ・拡張・ページURLの種類（検索語などの個人情報は書かない）を添えて「確認済み」に移す。
