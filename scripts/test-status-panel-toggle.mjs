@@ -93,7 +93,11 @@ try {
   await page.waitForFunction(()=>window.testModel?.config?.statusPanelMode?.value==='compact');
 
   assert.equal(await badge.evaluate(e=>getComputedStyle(e).display!=='none'),true);
-  assert.equal((await badge.getAttribute('title')).includes('クリックでコンパクト/詳細を切替'),true);
+  assert.equal(await badge.getAttribute('role'),'button');
+  assert.equal(await badge.getAttribute('tabindex'),'0');
+  assert.equal(await badge.getAttribute('aria-expanded'),'false');
+  assert.equal(await badge.getAttribute('aria-hidden'),'false');
+  assert.equal((await badge.getAttribute('title')).includes('Enter/Space'),true);
   assert.equal((await badge.textContent()).includes('Nico Nico Ranking NG / AutoFill'),false);
 
   await badge.click();
@@ -102,6 +106,27 @@ try {
 
   await badge.click();
   await page.waitForFunction(()=>testModel.config.statusPanelMode.value==='compact');
+
+  const enterState=await page.evaluate(()=>{
+    const badge=document.getElementById('nrn-status-badge');
+    badge.focus();
+    const event=new KeyboardEvent('keydown',{key:'Enter',bubbles:true,cancelable:true});
+    badge.dispatchEvent(event);
+    return {prevented:event.defaultPrevented,focused:document.activeElement===badge};
+  });
+  await page.waitForFunction(()=>testModel.config.statusPanelMode.value==='detailed');
+  assert.deepEqual(enterState,{prevented:true,focused:true});
+  assert.equal(await badge.getAttribute('aria-expanded'),'true');
+
+  const spacePrevented=await page.evaluate(()=>{
+    const badge=document.getElementById('nrn-status-badge');
+    const event=new KeyboardEvent('keydown',{key:' ',bubbles:true,cancelable:true});
+    badge.dispatchEvent(event);
+    return event.defaultPrevented;
+  });
+  await page.waitForFunction(()=>testModel.config.statusPanelMode.value==='compact');
+  assert.equal(spacePrevented,true,'Space must prevent native page scrolling');
+  assert.equal(await badge.getAttribute('aria-expanded'),'false');
 
   await page.evaluate(()=>{
     testModel.config.statusPanelMode.value='detailed';
@@ -123,11 +148,13 @@ try {
 
   await page.evaluate(()=>testModel.config.statusPanelMode.value='hidden');
   await page.waitForFunction(()=>getComputedStyle(document.getElementById('nrn-status-badge')).display==='none');
+  assert.equal(await badge.getAttribute('tabindex'),'-1');
+  assert.equal(await badge.getAttribute('aria-hidden'),'true');
   await page.evaluate(()=>document.getElementById('nrn-status-badge').dispatchEvent(new MouseEvent('click',{bubbles:true,detail:1})));
   assert.equal(await page.evaluate(()=>testModel.config.statusPanelMode.value),'hidden','hidden mode stays settings-only');
 
   assert.deepEqual(errors,[]);
-  console.log('Status panel toggle PASS: click compact/detailed, text selection preserved, double-click restores mode, hidden remains settings-only.');
+  console.log('Status panel toggle PASS: click/keyboard compact-detailed, text selection preserved, semantics synchronized, double-click restores mode, hidden remains settings-only.');
   await context.close();
 } finally {
   await browser.close();

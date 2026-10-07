@@ -7,7 +7,7 @@
 // @match        *://www.nicovideo.jp/ranking*
 // @match        *://www.nicovideo.jp/search/*
 // @match        *://www.nicovideo.jp/tag/*
-// @version      160.31
+// @version      160.32
 // @grant        unsafeWindow
 // @grant        GM_getValue
 // @grant        GM_setValue

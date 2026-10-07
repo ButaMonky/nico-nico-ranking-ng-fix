@@ -278,6 +278,8 @@
 
       badge = doc.createElement('div')
       badge.id = 'nrn-status-badge'
+      badge.setAttribute('role', 'button')
+      badge.tabIndex = -1
       badge.style.cssText = 'position:fixed;right:8px;bottom:8px;z-index:99999;background:rgba(28,32,37,0.94);color:#dbe1e8;font-size:12px;padding:8px 10px;border-radius:6px;line-height:1.7;pointer-events:auto;user-select:text;-webkit-user-select:text;cursor:text;white-space:pre-wrap;font-family:ui-monospace,SFMono-Regular,Consolas,monospace;max-width:min(460px,45vw);max-height:45vh;overflow:auto;box-shadow:0 2px 10px rgba(0,0,0,.35);'
       doc.body.appendChild(badge)
       return badge

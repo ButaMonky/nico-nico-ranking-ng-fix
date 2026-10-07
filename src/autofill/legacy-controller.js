@@ -1058,12 +1058,17 @@
         badge.classList.toggle('nrn-status-busy', shouldAnimate)
 
         var mode = model.config.statusPanelMode.value
-        if (mode === 'hidden') {
+        var visible = mode !== 'hidden'
+        badge.tabIndex = visible ? 0 : -1
+        badge.setAttribute('aria-hidden', visible ? 'false' : 'true')
+        badge.setAttribute('aria-expanded', mode === 'detailed' ? 'true' : 'false')
+        badge.setAttribute('aria-label', 'Nico Nico Ranking NG ステータス。EnterまたはSpaceでコンパクト/詳細を切替。')
+        if (!visible) {
           badge.style.display = 'none'
           return
         }
         badge.style.display = ''
-        badge.title = 'クリックでコンパクト/詳細を切替。文字選択中は切り替えません。ダブルクリックで診断情報をConsoleへ出力。'
+        badge.title = 'クリックまたはEnter/Spaceでコンパクト/詳細を切替。文字選択中はクリックで切り替えません。ダブルクリックで診断情報をConsoleへ出力。'
         var elapsed = (finishedAt || performance.now()) - runStartedAt
 
         if (mode === 'compact') {
@@ -1224,6 +1229,12 @@
         statusPanelClickToggled = false
         if (statusSelectionActive()) return
         statusPanelClickToggled = toggleStatusPanelMode()
+      })
+      listen(badge, 'keydown', function(event) {
+        if (event.key !== 'Enter' && event.key !== ' ') return
+        event.preventDefault()
+        if (event.repeat) return
+        toggleStatusPanelMode()
       })
       listen(badge, 'dblclick', function() {
         if (statusPanelClickToggled) toggleStatusPanelMode()
