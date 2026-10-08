@@ -6,7 +6,10 @@ const require=createRequire(import.meta.url);
 const {chromium}=require(process.env.NRN_PLAYWRIGHT || 'playwright');
 await build();
 const fixture=await readFile(new URL('../tests/fixtures/layout-list.html',import.meta.url),'utf8');
-const source=(await readFile(output,'utf8')).replace('model = createModel(config)','model = createModel(config); window.testModel = model')
+const assembled=await readFile(output,'utf8');
+const expectedVersion=assembled.match(/^\/\/\s*@version\s+(\S+)/m)?.[1];
+assert.match(expectedVersion||'',/^\d+\.\d+$/,'assembled userscript must declare its version');
+const source=assembled.replace('model = createModel(config)','model = createModel(config); window.testModel = model')
  .replace('  var Main =','  window.testTypes={ConfigDialog}; var Main =');
 const browser=await chromium.launch({headless:true,executablePath:process.env.NRN_BROWSER});
 try {
@@ -31,7 +34,7 @@ try {
  await page.addScriptTag({content:source});
  await page.waitForFunction(()=>window.__nrnDiagnostics?.snapshot().current?.initialProcessing);
  let s=await page.evaluate(()=>__nrnDiagnostics.snapshot());
- assert.equal(s.version,'160.31');assert.equal(s.current.network.run.detail.attempts,0);
+ assert.equal(s.version,expectedVersion);assert.equal(s.current.network.run.detail.attempts,0);
  assert.equal(s.current.detailPlan.readyWithoutRequest,1);assert.equal(s.current.fieldStates.tags.unknown,1);
  assert.deepEqual(s.current.skipReasons.cheap,{movieId:0,title:0,advanced:0});
  assert.deepEqual(s.current.skipReasons.api,{movieId:0,title:0,tag:0,userId:0,channelId:0});
@@ -60,7 +63,7 @@ try {
  await frame.locator('#copyAnonymousDiagnostics').click();
  await frame.locator('#anonymousDiagnosticStatus').filter({hasText:'Ctrl+C'}).waitFor();
  const report=await frame.locator('#anonymousDiagnosticText').inputValue();
- assert.equal(JSON.parse(report).version,'160.31');assert.doesNotMatch(report,/PRIVATE|sm\d+|https?:|blob:|user_id/);
+ assert.equal(JSON.parse(report).version,expectedVersion);assert.doesNotMatch(report,/PRIVATE|sm\d+|https?:|blob:|user_id/);
  assert.deepEqual(await page.evaluate(()=>({requests:requests.length,fetches:fetchCalls,writes})),before);
  await page.evaluate(()=>{
   const nav=document.getElementById('test-settings').contentDocument.defaultView.navigator;
