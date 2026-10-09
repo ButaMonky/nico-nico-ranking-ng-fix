@@ -24,7 +24,9 @@ while(offset<packed.length){
  const path=names.get(id);if(type==='blob')blobs++;if(type==='commit')commits++;
  for(const [kind,re] of checks)if(re.test(text))failures.push({path,kind});
  if(privateTerms.some(term=>text.toLowerCase().includes(term.toLowerCase())))failures.push({path,kind:'private-term'});
- if(type==='commit'&&[...text.matchAll(/^(?:author|committer) .*?<([^>]+)>/gm)].some(m=>!m[1].endsWith('@users.noreply.github.com')))failures.push({path,kind:'commit-email-not-private'});
+ if(type==='commit'&&[...text.matchAll(/^(?:author|committer) .*?<([^>]+)>/gm)].some(m=>
+  !m[1].endsWith('@users.noreply.github.com') && !['noreply@github.com','web-flow@github.com'].includes(m[1])))
+  failures.push({path,kind:'commit-email-not-private'});
  if(type==='blob'&&/\.(?:har|chlz|zip|log)$/i.test(path))failures.push({path,kind:'raw-artifact'});
  if(type==='blob'&&path.startsWith('tests/fixtures/')&&/https?:\/\/[^\s"'<>]*(?:\.nimg\.jp|nicovideo\.jp\/watch\/)\S*/i.test(text))failures.push({path,kind:'captured-fixture-resource'});
 }

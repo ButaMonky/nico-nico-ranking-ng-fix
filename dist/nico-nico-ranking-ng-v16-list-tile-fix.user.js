@@ -7,7 +7,7 @@
 // @match        *://www.nicovideo.jp/ranking*
 // @match        *://www.nicovideo.jp/search/*
 // @match        *://www.nicovideo.jp/tag/*
-// @version      160.32
+// @version      160.33
 // @grant        unsafeWindow
 // @grant        GM_getValue
 // @grant        GM_setValue
@@ -205,7 +205,7 @@
 
   // This facade is scoped to this userscript; other scripts keep their console.
   var nrnConsoleConfig = null
-  var NRN_VERSION = '160.32'
+  var NRN_VERSION = '160.33'
   var nrnNativeConsole = globalThis.console
   var nrnConsoleCounts = {warnings:0,errors:0}
   var nrnSetConsoleConfig = function(config) { nrnConsoleConfig = config }
@@ -2001,6 +2001,7 @@
       this.ngId = false
       this.visited = false
       this._tags = []
+      this._tagNgListener = this._updateNg.bind(this)
       this._contributor = Contributor.NULL
       this._description = ''
       this._error = Movie.NO_ERROR
@@ -2066,6 +2067,10 @@
       },
       get tags() { return this._tags },
       set tags(tags) {
+        // Replace only this Movie's subscriptions; a Tag may be shared by Movies.
+        for (var previous of new Set(this._tags)) {
+          if (typeof previous.off === 'function') previous.off('ngChanged', this._tagNgListener)
+        }
         this._tags = tags
         this.metadata.tags = 'known'
         this.metadata.lockedTags = 'known'
@@ -2073,8 +2078,7 @@
         this.emit('tagsChanged', this._tags)
         this._updateAdvancedRule()
         this._updateNg()
-        var update = this._updateNg.bind(this)
-        for (var t of this._tags) t.on('ngChanged', update)
+        for (var t of new Set(this._tags)) t.on('ngChanged', this._tagNgListener)
         this.emit('metadataChanged')
       },
       _lockedTagCount() {
@@ -4678,7 +4682,12 @@ html[data-nrn-ui-theme="dark"] .nrn-contributor-ng-name-button:hover {
         a.className = 'nrn-movie-tag-link'
         a.target = '_blank'
         a.textContent = tag.name
-        a.href = 'https://www.nicovideo.jp/tag/' + tag.name
+        try {
+          a.href = 'https://www.nicovideo.jp/tag/' + encodeURIComponent(tag.name)
+        } catch (error) {
+          // A malformed UTF-16 tag must not break its card or create a false link.
+          if (!(error instanceof URIError)) throw error
+        }
         const key = doc.createElement('span');
         key.className = 'nrn-tag-lock-indicator'
         key.textContent = tag.lock ? '🔒' : '';
@@ -6240,11 +6249,27 @@ html[data-nrn-ui-theme="dark"] .nrn-contributor-ng-name-button:hover {
         if (metaElem) {
           try {
             var parsed = JSON.parse(metaElem.getAttribute('content'))
-            var searchData = parsed
-              && parsed.data
-              && parsed.data.response
-              && parsed.data.response['$getSearchVideoV2']
-              && parsed.data.response['$getSearchVideoV2'].data
+            var responseData = parsed && parsed.data && parsed.data.response
+            var searchData = responseData && responseData['$getSearchVideoV2']?.data
+            // Genre ranking uses a different official server-response contract
+            // from tag/search pages. Do not mistake populated ranking pages for
+            // an unparseable result when SSR has no hydrated video-card nodes.
+            var genreData = url.pathname.startsWith('/ranking/genre/')
+              ? responseData && responseData['$getTeibanRanking']?.data
+              : null
+            var listingData = genreData && Array.isArray(genreData.items)
+              ? genreData : searchData
+            // Some genre ranking routes ignore ?page=N and return page 1 for
+            // every request. Never ingest a repeated page as fresh candidates.
+            var servedPage = Number(responseData?.page?.pagination?.page)
+            if (genreData && genreData === listingData && Number.isSafeInteger(servedPage)
+                && servedPage > 0 && servedPage !== pageNumber) {
+              console.warn(fetchLog, 'ジャンルランキングの取得ページ番号が一致しないため補填を停止:', {
+                requestedPage:pageNumber, servedPage:servedPage
+              })
+              return {items:[],hasNextPage:false,
+                maxPage:Math.min(servedPage,pageNumber-1),pageNumber:pageNumber}
+            }
 
             var jsonMaxPage = parsed
               && parsed.data
@@ -6256,13 +6281,16 @@ html[data-nrn-ui-theme="dark"] .nrn-contributor-ng-name-button:hover {
             if (Number.isInteger(Number(jsonMaxPage)) && Number(jsonMaxPage) > 0) {
               maxPage = Number(jsonMaxPage)
             }
-            if (searchData && Array.isArray(searchData.items)) {
+            if (listingData && Array.isArray(listingData.items)) {
               // Preserve this fetched page's official continuous-play context.
               var playlist = parsed.data.response.page && parsed.data.response.page.playlist
-              // __nrnSearchItem: the same normalized fields as the initial document (BRUSH-005b).
-              items = searchData.items.map(item => ({...item, __nrnPlaylist:typeof playlist === 'string' ? playlist : null,
+              // Keep the normal metadata bridge for both search and ranking items.
+              items = listingData.items.map(item => ({...item, __nrnPlaylist:typeof playlist === 'string' ? playlist : null,
                 __nrnSearchItem:SearchItemAdapter.tryNormalize(item)}))
               hasSearchItems = true
+              if (genreData === listingData && typeof genreData.hasNext === 'boolean') {
+                hasNextPage = genreData.hasNext
+              }
             }
           } catch (e) {
             console.warn(fetchLog, 'server-response JSON解析失敗。DOM解析へ切り替えます。', e)
@@ -6414,7 +6442,8 @@ html[data-nrn-ui-theme="dark"] .nrn-contributor-ng-name-button:hover {
         if (selectedLastPage === pageNumber || nextDisabled) {
           hasNextPage = false
           maxPage = pageNumber
-        } else {
+        } else if (hasNextPage === null) {
+          // Respect the ranking API's explicit hasNext on unhydrated SSR pages.
           var nextLink = doc.querySelector('link[rel="next"], a[rel="next"]')
           if (nextLink) hasNextPage = true
           else {
@@ -6541,11 +6570,16 @@ html[data-nrn-ui-theme="dark"] .nrn-contributor-ng-name-button:hover {
         options = options || {}
         var doc = this.doc
         var thumbUrl = (item.thumbnail && (item.thumbnail.listingUrl || item.thumbnail.middleUrl || item.thumbnail.url)) || ''
-        var watchUrl = 'https://www.nicovideo.jp/watch/' + item.id
-        var view = (item.count && item.count.view) || 0
-        var comment = (item.count && item.count.comment) || 0
+        var watchUrl = 'https://www.nicovideo.jp/watch/' + encodeURIComponent(String(item.id || ''))
+        var countValue = value => {
+          const n = Number(value)
+          return Number.isFinite(n) && n >= 0 ? n : 0
+        }
+        var view = countValue(item.count?.view)
+        var comment = countValue(item.count?.comment)
         var owner = item.owner || {}
-        var ownerName = owner.name || (owner.visibility === 'hidden' ? '(投稿者非公開)' : '不明')
+        var ownerName = typeof owner.name === 'string' && owner.name
+          ? owner.name : (owner.visibility === 'hidden' ? '(投稿者非公開)' : '不明')
         var ownerIcon = owner.iconUrl || 'https://secure-dcdn.cdn.nimg.jp/nicoaccount/usericon/defaults/blank.jpg'
         var identity = OwnerEvidence.normalize(owner)
         var ownerUrl = identity ? (identity.type === 'channel' ? 'https://ch.nicovideo.jp/channel/ch' + identity.id : 'https://www.nicovideo.jp/user/' + identity.id) : ''
@@ -6569,29 +6603,40 @@ html[data-nrn-ui-theme="dark"] .nrn-contributor-ng-name-button:hover {
         root.innerHTML =
           '<div class="d_flex flex-d_column w_100% min-h_[calc(_100cqi_*_9_/_16_+_{lineHeights.base}_*_2_*_{fontSizes.l}_+_{sizes.base}_+_{sizes.x0_5}_+_{lineHeights.base}_*_{fontSizes.s}_+_{sizes.base}_+_{sizes.x3}_)]">' +
             '<div class="pos_relative nrn-thumb-anchor-wrap">' +
-              '<a href="' + watchUrl + '" class="hover:c_action.primaryAzure">' +
+              '<a class="hover:c_action.primaryAzure">' +
                 '<div class="pos_relative asp_16:9 bg-c_layer.surfaceHighEmBlack bdr_m ov_hidden content-visibility_auto contain_content w_100% min-w_100% [&_>_img]:obj-f_contain [&_>_img]:h_100%">' +
-                  '<img alt="" class="mx_auto bdr_s" loading="lazy" decoding="async" src="' + thumbUrl + '">' +
+                  '<img alt="" class="mx_auto bdr_s" loading="lazy" decoding="async">' +
                   '<div class="pos_absolute bottom_x0_5 right_x0_5 z_forward p_x0_5 ff_metaNumber fs_s fw_bold lh_1 c_textOnLayer.highEmWhite bg-c_layer.surfaceOverlayBlack bdr_s">' +
                     '<time><span class="white-space_nowrap">' + formatSecondsAsDuration(item.duration) + '</span></time>' +
                   '</div>' +
                 '</div>' +
               '</a>' +
             '</div>' +
-            '<a href="' + watchUrl + '" class="hover:c_action.primaryAzure fs_l mt_x0_5 mb_base fw_bold lc_2 visited:text-layer_visited groupHover:text-layer_accentAzure [@container_(max-width:_320px)]:fs_base h_[calc({lineHeights.base}_*_2em)] nrn-title-anchor"></a>' +
+            '<a class="hover:c_action.primaryAzure fs_l mt_x0_5 mb_base fw_bold lc_2 visited:text-layer_visited groupHover:text-layer_accentAzure [@container_(max-width:_320px)]:fs_base h_[calc({lineHeights.base}_*_2em)] nrn-title-anchor"></a>' +
             '<div class="fs_s flex-wrap_wrap d_flex gap_base mb_base text-layer_lowEm [&_>_*]:d_flex [&_>_*]:ai_center [&_>_*]:gap_x0_5 [&_>_*]:lh_1 [&_>_*]:ff_metaNumber [&_>_*]:fs_s [&_>_*]:white-space_nowrap">' +
               '<time class="nrn-registered-at">' + formatRelativeOrDate(item.registeredAt) + '</time>' +
               '<p>' + VIEW_ICON_SVG + '<span class="white-space_nowrap">' + view.toLocaleString() + '</span></p>' +
               '<p>' + COMMENT_ICON_SVG + '<span class="white-space_nowrap">' + comment.toLocaleString() + '</span></p>' +
             '</div>' +
             (ownerUrl ?
-              '<a href="' + ownerUrl + '" class="hover:c_action.primaryAzure d_flex gap_x0_5 ai_center text-layer_mediumEm w_fit-content fs_base [@container_(max-width:_320px)]:fs_s">' +
-                '<img alt="" class="bdr_full ov_hidden contain_content_size w_x3 min-w_x3 h_x3" loading="lazy" decoding="async" src="' + ownerIcon + '">' +
+              '<a class="nrn-autofill-owner-link hover:c_action.primaryAzure d_flex gap_x0_5 ai_center text-layer_mediumEm w_fit-content fs_base [@container_(max-width:_320px)]:fs_s">' +
+                '<img alt="" class="bdr_full ov_hidden contain_content_size w_x3 min-w_x3 h_x3" loading="lazy" decoding="async">' +
                 '<p class="fw_bold lc_1"></p>' +
-              '</a>' : '<span class="fs_base text-layer_mediumEm">' + ownerName + '</span>') +
+              '</a>' : '<span class="nrn-owner-name-fallback fs_base text-layer_mediumEm"></span>') +
           '</div>'
-        // XSS対策のためテキストはDOM APIで設定する（タイトル・投稿者名にHTMLを解釈させない）
-        root.querySelector('img.mx_auto').alt = item.title || ''
+        // API-derived data must never be interpreted as HTML markup/attributes.
+        var thumbImage = root.querySelector('img.mx_auto')
+        thumbImage.alt = String(item.title || '')
+        if (typeof thumbUrl === 'string' && thumbUrl) {
+          try {
+            const imageUrl = new URL(thumbUrl, doc.baseURI)
+            if (imageUrl.protocol === 'https:' && !imageUrl.username && !imageUrl.password) {
+              thumbImage.src = imageUrl.href
+            }
+          } catch (_) {}
+        }
+        root.querySelector('.nrn-thumb-anchor-wrap > a').href = watchUrl
+        root.querySelector('.nrn-title-anchor').href = watchUrl
         var registeredTime = root.querySelector('.nrn-registered-at')
         var registeredDate = new Date(item.registeredAt)
         if (Number.isFinite(registeredDate.getTime())) {
@@ -6606,8 +6651,13 @@ html[data-nrn-ui-theme="dark"] .nrn-contributor-ng-name-button:hover {
         titleA.classList.add('nrn-movie-title')
         titleA.classList.remove('nrn-title-anchor')
         if (ownerUrl) {
-          root.querySelector('img.bdr_full').alt = ownerName
+          root.querySelector('.nrn-autofill-owner-link').href = ownerUrl
+          var ownerImage = root.querySelector('img.bdr_full')
+          ownerImage.alt = ownerName
+          ownerImage.src = OwnerIcon.valid(ownerIcon) || OwnerIcon.blank
           root.querySelector('p.fw_bold.lc_1').textContent = ownerName
+        } else {
+          root.querySelector('.nrn-owner-name-fallback').textContent = ownerName
         }
         root.firstElementChild.classList.add("nrn-card-body")
         var description = doc.createElement("div")

@@ -7,6 +7,7 @@
       this.ngId = false
       this.visited = false
       this._tags = []
+      this._tagNgListener = this._updateNg.bind(this)
       this._contributor = Contributor.NULL
       this._description = ''
       this._error = Movie.NO_ERROR
@@ -72,6 +73,10 @@
       },
       get tags() { return this._tags },
       set tags(tags) {
+        // Replace only this Movie's subscriptions; a Tag may be shared by Movies.
+        for (var previous of new Set(this._tags)) {
+          if (typeof previous.off === 'function') previous.off('ngChanged', this._tagNgListener)
+        }
         this._tags = tags
         this.metadata.tags = 'known'
         this.metadata.lockedTags = 'known'
@@ -79,8 +84,7 @@
         this.emit('tagsChanged', this._tags)
         this._updateAdvancedRule()
         this._updateNg()
-        var update = this._updateNg.bind(this)
-        for (var t of this._tags) t.on('ngChanged', update)
+        for (var t of new Set(this._tags)) t.on('ngChanged', this._tagNgListener)
         this.emit('metadataChanged')
       },
       _lockedTagCount() {

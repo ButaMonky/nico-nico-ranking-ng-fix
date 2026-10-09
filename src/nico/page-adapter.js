@@ -164,7 +164,12 @@
         a.className = 'nrn-movie-tag-link'
         a.target = '_blank'
         a.textContent = tag.name
-        a.href = 'https://www.nicovideo.jp/tag/' + tag.name
+        try {
+          a.href = 'https://www.nicovideo.jp/tag/' + encodeURIComponent(tag.name)
+        } catch (error) {
+          // A malformed UTF-16 tag must not break its card or create a false link.
+          if (!(error instanceof URIError)) throw error
+        }
         const key = doc.createElement('span');
         key.className = 'nrn-tag-lock-indicator'
         key.textContent = tag.lock ? '🔒' : '';
