@@ -1,13 +1,13 @@
 // ==UserScript==
-// @name         Nico Nico Ranking NG
-// @namespace    http://userscripts.org/users/121129
+// @name         Nico Nico Ranking NG Fix
+// @namespace    https://github.com/ButaMonky/nico-nico-ranking-ng-fix
 // @author       ButaMonky
 // @contributor  kengo321 (original)
 // @description  ニコニコ動画のランキング・検索結果にNG、複合NG、検索結果の自動補充を追加する非公式の改変版
 // @match        *://www.nicovideo.jp/ranking*
 // @match        *://www.nicovideo.jp/search/*
 // @match        *://www.nicovideo.jp/tag/*
-// @version      160.29
+// @version      160.30
 // @grant        unsafeWindow
 // @grant        GM_getValue
 // @grant        GM_setValue
@@ -205,7 +205,7 @@
 
   // This facade is scoped to this userscript; other scripts keep their console.
   var nrnConsoleConfig = null
-  var NRN_VERSION = '160.29'
+  var NRN_VERSION = '160.30'
   var nrnNativeConsole = globalThis.console
   var nrnConsoleCounts = {warnings:0,errors:0}
   var nrnSetConsoleConfig = function(config) { nrnConsoleConfig = config }
@@ -7349,18 +7349,6 @@ html[data-nrn-ui-theme="dark"] .nrn-contributor-ng-name-button:hover {
       is(location) {
         return location.pathname.startsWith('/ranking/genre');
       },
-      pendingMoviesInvisibleCss() {
-        return `div:has(> :not(.pos_relative) > [data-anchor-page="ranking_genre"] > :not(.pos_relative) > [data-anchor-page="ranking_genre"][href^="/watch/"]),
-div:has(> div > a[data-anchor-page="ranking_genre"][href^="/watch/"] > div > p),
-[data-anchor-page="tag"]:has(> :not(.pos_relative) > [data-anchor-page="tag"][href^="/watch/"]),
-[data-anchor-page="search"]:has(> :not(.pos_relative) > [data-anchor-page="search"][href^="/watch/"]) {
-  visibility: hidden;
-  &.nrn-thumb-info-done, &.nrn-metadata-settled {
-    visibility: inherit;
-  }
-}
-`;
-      },
     })
     return ListPage
   })(NicoPage)
@@ -8092,27 +8080,6 @@ div:has(> div > a[data-anchor-page="ranking_genre"][href^="/watch/"] > div > p),
           },
           rootElem: ancestor(item, '.nicoadVideoItemWrapper'),
         }
-      },
-      pendingMoviesInvisibleCss() {
-        return `.contentBody.video.uad .item,
-#tsukuaso .item,
-.contentBody.video.uad .nicoadVideoItemWrapper {
-  visibility: hidden;
-}
-.contentBody.video.uad .item[data-video-item-muted],
-.contentBody.video.uad .item[data-video-item-sensitive],
-.contentBody.video.uad .item.nrn-thumb-info-done,
-.contentBody.video.uad .item.nrn-metadata-settled,
-#tsukuaso .item.nrn-thumb-info-done,
-#tsukuaso .item.nrn-metadata-settled,
-.contentBody.video.uad.searchUad .item,
-.contentBody.video.uad .nicoadVideoItemWrapper.nrn-thumb-info-done,
-.contentBody.video.uad .nicoadVideoItemWrapper.nrn-metadata-settled,
-.contentBody.video.uad .nicoadVideoItemWrapper.nrn-metadata-settled .item,
-.contentBody.video.uad .nicoadVideoItemWrapper.nrn-thumb-info-done .item {
-  visibility: inherit;
-}
-`
       },
     })
     return SearchPage
@@ -11768,7 +11735,9 @@ var CardActionData = (function () {
           if (!r || !r.elem || !r.elem.isConnected || !r.movieId || seen.has(r.elem)) return false
           var movie = model.movies.get(r.movieId)
           if (!movie) return false
-          if (model.config.useGetThumbInfo.value && !movie.metadataSettled) return false
+          // Native cards are visible during initial checks. Injected candidates
+          // still wait for evaluation before occupying a display slot.
+          if (r.elem.dataset.nrnAutofill === 'true' && model.config.useGetThumbInfo.value && !movie.metadataSettled) return false
           if (movie.ng && !model.config.ngMovieVisible.value) return false
           if (r.elem.classList.contains('nrn-hide')) return false
           if (r.elem.classList.contains('nrn-autofill-pending')) return false
@@ -15297,7 +15266,7 @@ var CardActionData = (function () {
         NewTabService.install(config, document)
         var dispose = function() {}
         var pageStyle = null
-        var stop = function() { dispose(); dispose = function() {}; removePendingMovieInvisibleStyle() }
+        var stop = function() { dispose(); dispose = function() {} }
         var start = function() {
           stop()
           if (!(ListPage.is(location) || SearchPage.is(location))) return
@@ -15327,7 +15296,6 @@ var CardActionData = (function () {
             }
           }
           try {
-            if (config.useGetThumbInfo.value) setPendingMoviesInvisible()
             model = createModel(config)
             model.initialOwners = initialSourceUrl === location.href ? initialOwners : null
             model.initialSearchValues = initialSourceUrl === location.href ? initialSearchValues : null
@@ -15360,7 +15328,6 @@ var CardActionData = (function () {
       } catch (e) {
         console.error(e)
         Diagnostics.problem('startup')
-        removePendingMovieInvisibleStyle()
       }
     }
     var getPage = function() {
@@ -15382,34 +15349,10 @@ var CardActionData = (function () {
       console.log('[NicoNicoRankingNG] 現行UIを検出: ListPage')
       return new ListPage(document)
     }
-    const createPendingMoviesInvisibleStyle = css => {
-      const result = document.createElement('style');
-      result.id = 'nrn-pending-movies-hide-style';
-      result.textContent = css;
-      return result;
-    };
-    const addPendingMoviesInvisibleStyle = css => {
-      if (!document.head) {
-        new MutationObserver((recs, observer) => {
-          if (!document.head) return;
-          document.head.appendChild(createPendingMoviesInvisibleStyle(css));
-          observer.disconnect();
-        }).observe(document, {childList: true, subtree: true});
-      } else {
-        document.head.appendChild(createPendingMoviesInvisibleStyle(css));
-      }
-    };
-    const removePendingMovieInvisibleStyle = () => {
-      document.getElementById('nrn-pending-movies-hide-style')?.remove();
-    };
-    const setPendingMoviesInvisible = () => {
-      let css = ListPage.pendingMoviesInvisibleCss();
-      if (SearchPage.is(location)) css += SearchPage.pendingMoviesInvisibleCss();
-      addPendingMoviesInvisibleStyle(css);
-    };
     var main = function() {
       setupSpaNavigationGuard()
-      setPendingMoviesInvisible();
+      // Native cards stay visible while metadata is pending; confirmed NG is
+      // hidden by MovieViewMode as each result arrives.
       if (['interactive', 'complete'].includes(document.readyState)) {
         domContentLoaded();
       } else {

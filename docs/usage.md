@@ -6,7 +6,7 @@
 
 [Tampermonkey](https://www.tampermonkey.net/)を用意し、[READMEのインストールリンク](../README.md#インストール)から導入します。ランキング・キーワード検索・タグ検索のページを開き直し、追加された操作欄の「設定」を開いてください。
 
-インストール画面が開かない場合は、[配布ファイル](../dist/nico-nico-ranking-ng.user.js)の全文をコピーし、Tampermonkeyの「新規スクリプト」へ貼り付けて保存できます。すでに利用している場合は新規項目を作らず、[既存項目への更新手順](distribution.md#設定を保持して更新する)に従います。原配布版とこの改変版を重複して有効にしないでください。
+インストール画面が開かない場合は、[配布ファイル](../dist/nico-nico-ranking-ng.user.js)の全文をコピーし、Tampermonkeyの「新規スクリプト」へ貼り付けて保存できます。160.30からは `Nico Nico Ranking NG Fix` として原作者版とは別に導入します。原作者版の編集画面へ貼り付けないでください。すでにFixを導入済みなら同じFix項目を更新します。[旧版からの設定移行・更新手順](distribution.md#設定を保持して更新する)を確認し、原配布版・旧改変版とFixを重複して有効にしないでください。
 
 動作しないときはページを再読み込みし、ブラウザでユーザースクリプトの実行が許可されているか、[Tampermonkey公式の説明](https://www.tampermonkey.net/faq.php?locale=en&q=Q209)を確認してください。
 

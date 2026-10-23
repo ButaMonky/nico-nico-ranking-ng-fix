@@ -772,7 +772,9 @@
           if (!r || !r.elem || !r.elem.isConnected || !r.movieId || seen.has(r.elem)) return false
           var movie = model.movies.get(r.movieId)
           if (!movie) return false
-          if (model.config.useGetThumbInfo.value && !movie.metadataSettled) return false
+          // Native cards are visible during initial checks. Injected candidates
+          // still wait for evaluation before occupying a display slot.
+          if (r.elem.dataset.nrnAutofill === 'true' && model.config.useGetThumbInfo.value && !movie.metadataSettled) return false
           if (movie.ng && !model.config.ngMovieVisible.value) return false
           if (r.elem.classList.contains('nrn-hide')) return false
           if (r.elem.classList.contains('nrn-autofill-pending')) return false

@@ -18,7 +18,7 @@
         NewTabService.install(config, document)
         var dispose = function() {}
         var pageStyle = null
-        var stop = function() { dispose(); dispose = function() {}; removePendingMovieInvisibleStyle() }
+        var stop = function() { dispose(); dispose = function() {} }
         var start = function() {
           stop()
           if (!(ListPage.is(location) || SearchPage.is(location))) return
@@ -48,7 +48,6 @@
             }
           }
           try {
-            if (config.useGetThumbInfo.value) setPendingMoviesInvisible()
             model = createModel(config)
             model.initialOwners = initialSourceUrl === location.href ? initialOwners : null
             model.initialSearchValues = initialSourceUrl === location.href ? initialSearchValues : null
@@ -81,7 +80,6 @@
       } catch (e) {
         console.error(e)
         Diagnostics.problem('startup')
-        removePendingMovieInvisibleStyle()
       }
     }
     var getPage = function() {
@@ -103,34 +101,10 @@
       console.log('[NicoNicoRankingNG] 現行UIを検出: ListPage')
       return new ListPage(document)
     }
-    const createPendingMoviesInvisibleStyle = css => {
-      const result = document.createElement('style');
-      result.id = 'nrn-pending-movies-hide-style';
-      result.textContent = css;
-      return result;
-    };
-    const addPendingMoviesInvisibleStyle = css => {
-      if (!document.head) {
-        new MutationObserver((recs, observer) => {
-          if (!document.head) return;
-          document.head.appendChild(createPendingMoviesInvisibleStyle(css));
-          observer.disconnect();
-        }).observe(document, {childList: true, subtree: true});
-      } else {
-        document.head.appendChild(createPendingMoviesInvisibleStyle(css));
-      }
-    };
-    const removePendingMovieInvisibleStyle = () => {
-      document.getElementById('nrn-pending-movies-hide-style')?.remove();
-    };
-    const setPendingMoviesInvisible = () => {
-      let css = ListPage.pendingMoviesInvisibleCss();
-      if (SearchPage.is(location)) css += SearchPage.pendingMoviesInvisibleCss();
-      addPendingMoviesInvisibleStyle(css);
-    };
     var main = function() {
       setupSpaNavigationGuard()
-      setPendingMoviesInvisible();
+      // Native cards stay visible while metadata is pending; confirmed NG is
+      // hidden by MovieViewMode as each result arrives.
       if (['interactive', 'complete'].includes(document.readyState)) {
         domContentLoaded();
       } else {

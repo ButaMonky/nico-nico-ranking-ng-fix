@@ -1396,18 +1396,6 @@
       is(location) {
         return location.pathname.startsWith('/ranking/genre');
       },
-      pendingMoviesInvisibleCss() {
-        return `div:has(> :not(.pos_relative) > [data-anchor-page="ranking_genre"] > :not(.pos_relative) > [data-anchor-page="ranking_genre"][href^="/watch/"]),
-div:has(> div > a[data-anchor-page="ranking_genre"][href^="/watch/"] > div > p),
-[data-anchor-page="tag"]:has(> :not(.pos_relative) > [data-anchor-page="tag"][href^="/watch/"]),
-[data-anchor-page="search"]:has(> :not(.pos_relative) > [data-anchor-page="search"][href^="/watch/"]) {
-  visibility: hidden;
-  &.nrn-thumb-info-done, &.nrn-metadata-settled {
-    visibility: inherit;
-  }
-}
-`;
-      },
     })
     return ListPage
   })(NicoPage)
