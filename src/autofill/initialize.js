@@ -309,7 +309,7 @@
           maybeFetchMore()
         }
       }
-      for (var key of ['ngMovies','ngTitles','advancedNgRulesEnabled','advancedNgRulesJson']) {
+      for (var key of ['ngMovies','ngTitles','ngTags','ngUserIds','ngChannelIds','advancedNgRulesEnabled','advancedNgRulesJson']) {
         model.config[key].on('changed',restorePrefilteredCandidates)
       }
 

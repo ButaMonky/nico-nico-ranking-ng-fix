@@ -86,7 +86,11 @@
         }
         try {
           handle = httpRequest({method:'GET', url:url(ids), timeout:10000,
-            onload:res => res?.status === 200 ? done('ok',parse(res.responseText,ids)) : done('http',{status:'http'}),
+            onload:res => {
+              if (res?.status !== 200) { done('http',{status:'http'});return }
+              const result = parse(res.responseText,ids)
+              done(result.status === 'ok' ? 'ok' : 'invalid',result)
+            },
             onerror:() => done('network'), ontimeout:() => done('timeout'), onabort:() => done('aborted')})
           if (handle && !settled) handles.add(handle)
         } catch (_) { done('network') }

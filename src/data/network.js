@@ -13,10 +13,15 @@
     function createQueue(limit) {
       const pending = new Map(), waiting = [];
       let active = 0;
+      function unwatch(job) {
+        for (const [signal, listener] of job.listeners) signal.removeEventListener('abort', listener);
+        job.listeners.length = 0;
+      }
       function drain() {
         while (active < limit && waiting.length) {
           const job = waiting.shift();
           job.started = true;
+          unwatch(job);
           active++;
           Promise.resolve().then(job.task).then(job.resolve, job.reject).finally(() => {
             active--;
@@ -29,6 +34,7 @@
         const at = waiting.indexOf(job);
         if (job.started || at < 0) return;
         waiting.splice(at, 1);
+        unwatch(job);
         if (pending.get(job.key) === job) pending.delete(job.key);
         const error = new Error('request cancelled before start');
         error.name = 'AbortError';
@@ -36,6 +42,8 @@
         job.reject(error);
       }
       function watch(job, signal) {
+        // Only waiting jobs can be dropped here. Running transports own abort.
+        if (job.started) return;
         if (!signal) { job.keepAlive = true; return; }
         job.callers++;
         const onAbort = () => {
@@ -43,12 +51,15 @@
           if (!job.keepAlive && job.aborted >= job.callers) drop(job, signal.reason);
         };
         if (signal.aborted) onAbort();
-        else signal.addEventListener('abort', onAbort, {once:true});
+        else {
+          job.listeners.push([signal, onAbort]);
+          signal.addEventListener('abort', onAbort, {once:true});
+        }
       }
       const enqueue = function(key, task, options) {
         const shared = pending.get(key);
         if (shared) { watch(shared, options?.signal); return shared.promise; }
-        const job = {key, task, started:false, keepAlive:false, callers:0, aborted:0};
+        const job = {key, task, started:false, keepAlive:false, callers:0, aborted:0, listeners:[]};
         job.promise = new Promise((resolve, reject) => { job.resolve = resolve; job.reject = reject; });
         pending.set(key, job);
         waiting.push(job);

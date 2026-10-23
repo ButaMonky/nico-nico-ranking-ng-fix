@@ -82,9 +82,11 @@
           checkedDetailCacheIds.add(id)
           var key = cacheKeyForMovie(id)
           var cached = detailCache.get(key)
-          if (cached && (cached.id !== id || !cached.metadata
+          if (cached && (cached.id !== id || !Number.isFinite(cached.cachedAt)
+              || cached.cachedAt <= 0 || cached.cachedAt > Date.now() || !cached.metadata
               || cached.metadata.tags !== 'known' || cached.metadata.lockedTags !== 'known'
               || cached.metadata.description !== 'known' || !Array.isArray(cached.tags)
+              || !cached.tags.every(t => t && typeof t.name === 'string' && typeof t.lock === 'boolean')
               || typeof cached.description !== 'string')) cached = null
           if (!cached) {
             misses++
@@ -103,6 +105,7 @@
             applyThumbInfoFromCache({
               id: id,
               fetchedAt:cached.cachedAt,
+              ownerFetchedAt:Object.fromEntries(['identity','name','visibility'].map(field => [field,cached.ownerFetchedAt?.[field]])),
               description: cached.description,
               tags: cached.tags,
               contributor: cached.contributor ? {...cached.contributor,
@@ -154,7 +157,9 @@
         if (!movie.thumbInfoDone || movie.metadata.tags !== 'known' || movie.metadata.description !== 'known') {
           if (movie._nrnOwnerNameSupplement) {
             const previous = detailCache.get(cacheKeyForMovie(id))
-            detailCache.set(cacheKeyForMovie(id),{...(previous?.id === id ? previous : {}),id,
+            const retained = previous?.id === id ? {...previous} : {}
+            delete retained.ng;delete retained.ngReasons
+            detailCache.set(cacheKeyForMovie(id),{...retained,id,
               ownerNameSupplement:{...movie._nrnOwnerNameSupplement},
               cachedAt:previous?.id === id ? previous.cachedAt : movie._nrnOwnerNameSupplement.fetchedAt})
             cacheWrites++
@@ -162,19 +167,24 @@
           return
         }
         if (movie.error && movie.error.type && movie.error.type !== 'NO_ERROR') return
+        // Reading/rechecking metadata never supplies a new acquisition time.
+        if (!Number.isFinite(movie._nrnDetailFetchedAt) || movie._nrnDetailFetchedAt <= 0
+            || movie._nrnDetailFetchedAt > Date.now()) return
         var payload = {
           id: id,
           metadata: {...movie.metadata},
           title: movie.title || '',
           description: movie.description || '',
           contributor: movie._nrnDetailContributor ? {...movie._nrnDetailContributor} : null,
+          ownerFetchedAt:Object.fromEntries(['identity','name','visibility'].map(field => {
+            const at = movie._nrnDetailOwnerEvidence?.[field]?.at
+            return [field,Number.isFinite(at) && at > 0 && at <= Date.now() ? at : null]
+          })),
           ownerNameSupplement: movie._nrnOwnerNameSupplement ? {...movie._nrnOwnerNameSupplement} : null,
           tags: (movie.tags || []).map(function(t) {
             return {name:t.name, lock:Boolean(t.lock)}
           }),
-          ng: Boolean(movie.ng),
-          ngReasons: getMovieNgReasons(movie),
-          cachedAt: movie._nrnDetailFetchedAt || Date.now()
+          cachedAt: movie._nrnDetailFetchedAt
         }
         detailCache.set(cacheKeyForMovie(id), payload)
         cacheWrites++
@@ -190,8 +200,7 @@
             id: item.id,
             title: item.title,
             cache: hit ? 'HIT' : 'MISS',
-            cachedNg: cached ? cached.ng : '',
-            cachedReasons: cached ? (cached.ngReasons || []).join(' / ') : ''
+            cachedAt: cached ? cached.cachedAt : ''
           }
         })
         console.groupCollapsed(LOG + ' セッション詳細キャッシュ候補照合')

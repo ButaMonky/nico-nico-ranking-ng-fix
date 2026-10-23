@@ -445,9 +445,11 @@
         if (requestedMode === 'snapshot') {
           var passed = []
           var quickRows = []
+          // Give every candidate its source position before parking quick NG rows.
+          fresh.forEach(function(item) { candidateFilter.order(item) })
           fresh.forEach(function(item) {
             var reason = apiQuickNgReason(item)
-            if (reason) {
+            if (reason && candidateFilter.partition([item],apiQuickNgReason).rejected) {
               totalApiPrefilteredNg++
               quickRows.push({item: item, reason: reason})
             } else {

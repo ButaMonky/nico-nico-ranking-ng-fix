@@ -2,10 +2,10 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import vm from 'node:vm';
 import {readFile} from 'node:fs/promises';
-import {output} from '../scripts/build.mjs';
-const source=await readFile(output,'utf8');
+import {sourceParts} from '../scripts/build.mjs';
+const source=(await Promise.all(sourceParts.map(part=>readFile(new URL('../'+part,import.meta.url),'utf8')))).join('');
 const end=source.indexOf('  var MovieViewMode = (function(_super) {');
-const {Movie,Config,Movies,ThumbInfoListener,OwnerEvidence,AdvancedNgRules}=vm.runInNewContext(source.slice(0,end)+'return {Movie,Config,Movies,ThumbInfoListener,OwnerEvidence,AdvancedNgRules}; })()',{URL});
+const {Movie,Config,Movies,ThumbInfoListener,OwnerEvidence,AdvancedNgRules,MetadataReadiness}=vm.runInNewContext(source.slice(0,end)+'return {Movie,Config,Movies,ThumbInfoListener,OwnerEvidence,AdvancedNgRules,MetadataReadiness}; })()',{URL});
 async function setup(){
  const config=new Config((key,fallback)=>fallback,()=>{}); await config.sync();
  const movies=new Movies(config);movies.setIfAbsent([new Movie('sm1','first'),new Movie('sm2','second')]);
@@ -117,4 +117,45 @@ test('expired supplemental names are not adopted and cache reads preserve origin
  assert.equal(ThumbInfoListener.forOwnerName(h.movies)('sm1',{id:'sm1',ownerId:55,ownerName:'old'},Date.now()-600001),false);
  const fetchedAt=Date.now()-60000;h.detail({...info('sm1'),fetchedAt});
  assert.equal(h.movies.get('sm1')._nrnDetailFetchedAt,fetchedAt);assert.equal(h.movies.get('sm1').metadata.ownerName,'unknown');
+});
+
+function cacheHarness(h,entry=null){
+ h.config.sessionDetailCacheEnabled.value=true;
+ const ctx=vm.createContext({ThumbInfoListener,model:{movies:h.movies,config:h.config,requestThumbInfo(){}},page:{_disposed:false},LOG:'fixture',
+  detailCache:{get:()=>entry,set:(_key,value)=>{entry=value;},configure(){},diagnostics(){return{};}},
+  cacheWrites:0,cacheHits:0,cacheMisses:0,cacheRestores:0,cacheRestoreFailures:0,
+  console:{log(){},warn(){},table(){},groupCollapsed(){},groupEnd(){}}});
+ const begin=source.indexOf('      var cacheKeyForMovie = function(id)'),end=source.indexOf('      var logCacheCandidateAudit',begin);
+ const api=vm.runInContext(source.slice(begin,end)+';({save:cacheMovieAfterCheck,restore:restoreCachedMovieDetails})',ctx);
+ return {...api,get entry(){return entry;}};
+}
+
+test('owner cache provenance: partial detail refresh and repeated cache routes preserve field acquisition times',async()=>{
+ const h=await setup(),old=Date.now()-60000,recent=old+30000;
+ h.detail({...info('sm1',{type:'user',id:55,name:'retained',visibility:'hidden'}),fetchedAt:old});
+ h.detail({...info('sm1',{type:'user',id:55,name:null}),fetchedAt:recent});
+ let cache=cacheHarness(h);cache.save('sm1');
+ assert.deepEqual({...cache.entry.ownerFetchedAt},{identity:recent,name:old,visibility:old});
+ for(let i=0;i<2;i++){
+  const next=await setup();cache=cacheHarness(next,cache.entry);cache.restore(['sm1'],'fixture');
+  const movie=next.movies.get('sm1');assert.equal(movie.contributor.name,'retained');assert.equal(movie.owner.visibility,'hidden');
+  for(const [field,at] of [['ownerId',recent],['ownerName',old],['ownerVisibility',old]])
+   assert.deepEqual({...MetadataReadiness.sourceOf(movie,field)},{source:'cache',observedAt:at});
+  cache.save('sm1');assert.equal(cache.entry.cachedAt,recent);
+  assert.deepEqual({...cache.entry.ownerFetchedAt},{identity:recent,name:old,visibility:old});
+ }
+});
+
+test('owner cache provenance: legacy and malformed field times stay unknown without discarding known owner values',async()=>{
+ const at=Date.now()-10000;
+ for(const ownerFetchedAt of [undefined,{identity:0,name:String(at),visibility:Date.now()+60000},{identity:null,name:null,visibility:null}]){
+  const h=await setup(),cache=cacheHarness(h,{id:'sm1',cachedAt:at,
+   metadata:{tags:'known',lockedTags:'known',description:'known',ownerName:'known'},
+   tags:[],description:'',contributor:{type:'user',id:55,name:'legacy',visibility:'hidden'},ownerFetchedAt});
+  cache.restore(['sm1'],'fixture');const movie=h.movies.get('sm1');
+  assert.equal(movie.thumbInfoDone,true);assert.equal(movie.contributor.name,'legacy');
+  for(const field of ['ownerId','ownerName','ownerVisibility'])
+   assert.deepEqual({...MetadataReadiness.sourceOf(movie,field)},{source:'cache',observedAt:null});
+  cache.save('sm1');assert.deepEqual({...cache.entry.ownerFetchedAt},{identity:null,name:null,visibility:null});
+ }
 });

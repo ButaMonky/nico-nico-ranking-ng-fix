@@ -2,10 +2,12 @@ import test from 'node:test';
 import {readAutoFillSource} from '../scripts/lib/autofill-source.mjs';
 import assert from 'node:assert/strict';
 import vm from 'node:vm';
+import {getEventListeners} from 'node:events';
 import {readFile} from 'node:fs/promises';
 const network=await readFile(new URL('../src/data/network.js',import.meta.url),'utf8');
 const auto=await readAutoFillSource();
 const adapter=await readFile(new URL('../src/data/search-item-adapter.js',import.meta.url),'utf8');
+const candidateFilterSource=await readFile(new URL('../src/ng/candidate-filter.js',import.meta.url),'utf8');
 const quiet=new Proxy({}, {get:()=>()=>{}});
 function loadNetwork(extra={}){return vm.runInNewContext(network+';Network',{AbortController,setTimeout,clearTimeout,...extra});}
 test('network diagnostics record actual fetch outcomes including body timeout and caller cancellation',async()=>{
@@ -174,7 +176,7 @@ test('Snapshot: validation on later pages resumes from the fetched window, small
   const ctx=vm.createContext({console:quiet,LOG:'test',useSnapshot:true,snapshotValidated:false,snapshotValidation:null,snapshotValidationOffset:320,snapshotOffset:352,
    snapshotFetchOffset:async()=>({offset:320,items,hasNextPage:true}),page:{_currentPageNumber:11,doc:{querySelectorAll:()=>Array.from({length:3},(_,i)=>({getAttribute:()=>mismatch?'different'+i:'sm'+i}))}},
    setPhase(){},model:{movies:new Map()},requestedMode:mode,filterFreshItems:items=>({freshItems:items.slice(3)}),apiQuickNgReason:()=>'',logCandidateTable(){},
-   candidatePool:[],candidatePoolSeen:new Set(),candidateFilter:{clear(){}},sourceLabel:'',fallbackReason:'',totalFetchedItems:0,fetchedExtraPages:0,lastFetchedHadNext:null,totalApiPrefilteredNg:0});
+   candidatePool:[],candidatePoolSeen:new Set(),candidateFilter:vm.runInNewContext(candidateFilterSource+';CandidateFilter.create({})'),sourceLabel:'',fallbackReason:'',totalFetchedItems:0,fetchedExtraPages:0,lastFetchedHadNext:null,totalApiPrefilteredNg:0});
   const a=auto.indexOf('      var validateSnapshotAgainstCurrentDom = async function(signal)'),b=auto.indexOf('      // -------------------- PagerManager',a);
   const run=vm.runInContext(auto.slice(a,b)+';validateSnapshotAgainstCurrentDom',ctx);await run();
   assert.equal(ctx.useSnapshot,!mismatch);
@@ -234,6 +236,32 @@ test('broker: aborting after start leaves the running task to its own signal',as
  const q=loadNetwork().createQueue(1),{runs,task}=held(),controller=new AbortController();
  const running=q('k',task('k'),{signal:controller.signal});await tick();controller.abort();
  assert.equal(runs.length,1);runs[0].resolve('done');assert.equal(await running,'done');
+});
+
+test('broker: completed and failed requests release caller abort listeners',async()=>{
+ const q=loadNetwork().createQueue(1),controller=new AbortController();
+ for(let i=0;i<20;i++){
+  assert.equal(await q('ok-'+i,()=>i,{signal:controller.signal}),i);
+  await tick();
+  assert.equal(getEventListeners(controller.signal,'abort').length,0,'completed jobs must not accumulate on a long-lived route signal');
+ }
+ await assert.rejects(q('failed',()=>Promise.reject(Error('network')),{signal:controller.signal}),/network/);
+ await tick();assert.equal(getEventListeners(controller.signal,'abort').length,0);
+});
+
+test('broker: listeners belong only to waiting requests, including shared callers',async()=>{
+ const q=loadNetwork().createQueue(1),{runs,task}=held();
+ const busy=q('busy',task('busy')),first=new AbortController(),second=new AbortController();
+ const a=q('waiting',task('waiting'),{signal:first.signal});
+ const b=q('waiting',task('duplicate'),{signal:second.signal});
+ assert.equal(getEventListeners(first.signal,'abort').length,1);
+ assert.equal(getEventListeners(second.signal,'abort').length,1);
+ await tick();runs[0].resolve();await busy;await tick();
+ assert.equal(getEventListeners(first.signal,'abort').length,0,'the broker no longer needs cancellation listeners once the task starts');
+ assert.equal(getEventListeners(second.signal,'abort').length,0);
+ const c=q('waiting',task('duplicate'),{signal:first.signal});
+ assert.equal(getEventListeners(first.signal,'abort').length,0,'joining running work does not add a waiting-only listener');
+ runs[1].resolve('done');assert.deepEqual(await Promise.all([a,b,c]),['done','done','done']);
 });
 // BRUSH-022: negative cache primitive.
 test('negative cache: entries expire, future stamps are ignored and the size is bounded',()=>{

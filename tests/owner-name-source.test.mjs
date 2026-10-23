@@ -2,9 +2,10 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import vm from 'node:vm';
 import {readFile} from 'node:fs/promises';
-import {output} from '../scripts/build.mjs';
+import {sourceParts} from '../scripts/build.mjs';
+const source=(await Promise.all(sourceParts.map(part=>readFile(new URL('../'+part,import.meta.url),'utf8')))).join('');
 async function setup(extra={}){
- const source=await readFile(output,'utf8'),calls=[];
+ const calls=[];
  const context=vm.createContext({URL,AbortController,setTimeout,clearTimeout,performance,
   fetch:(url,{signal,credentials})=>new Promise((resolve,reject)=>{
    assert.equal(credentials,'omit');calls.push({url,reply:data=>resolve({ok:true,status:200,url,text:async()=>JSON.stringify({data})})});
@@ -95,6 +96,33 @@ test('owner ID supplement: 404 and failures keep the owner unknown and are disti
  const b=await idSetup();b.service.request([b.m]);await tick();b.pending[0].status(503);await tick();assert.equal(b.m._nrnOwnerIdStatus,'failed');
  const c=await idSetup();c.service.request([c.m]);await tick();c.pending[0].fail();await tick();assert.equal(c.m._nrnOwnerIdStatus,'failed');
  for(const h of [a,b,c]){assert.equal(h.m.metadata.ownerId,'unknown');h.service.request([h.m]);await tick();assert.equal(h.pending.length,1,'not retried in the same scope');h.service.dispose();}
+});
+
+test('owner recovery: an earlier decoration failure does not poison a later owner lookup',async t=>{
+ for(const fail of [h=>h.pending[0].status(503),h=>h.pending[0].fail(),h=>h.pending[0].reply({id:'sm9',ownerId:77})]){
+  const h=await idSetup();t.after(()=>h.service.dispose());
+  const decoration=h.service.getData('sm2');const rejected=assert.rejects(decoration);
+  await tick();fail(h);await rejected;await tick();
+  h.service.request([h.m]);await tick();
+  assert.equal(h.pending.length,2,'a failed decoration response is not a successful shared owner cache entry');
+  h.pending[1].reply({id:'sm2',ownerId:77,ownerName:'recovered'});await tick();
+  assert.equal(h.m.contributor.id,77);assert.equal(h.m.contributor.name,'recovered');
+  assert.equal(h.m._nrnOwnerIdStatus,'accepted');assert.equal(h.m.metadataSettled,true);
+  for(let i=0;i<20;i++)h.service.request([h.m]);
+  await h.service.getData('sm2');assert.equal(h.pending.length,2,'the recovered response is reused');
+ }
+});
+
+test('owner recovery: a second failure still settles unknown without automatic retries',async t=>{
+ const h=await idSetup();t.after(()=>h.service.dispose());
+ const decoration=h.service.getData('sm2');const rejected=assert.rejects(decoration);
+ await tick();h.pending[0].fail();await rejected;await tick();
+ h.service.request([h.m]);await tick();assert.equal(h.pending.length,2);
+ h.pending[1].fail();await tick();
+ for(let i=0;i<20;i++)h.service.request([h.m]);await tick();
+ assert.equal(h.pending.length,2,'attempt tracking still prevents model-event retry loops');
+ assert.equal(h.m._nrnOwnerIdStatus,'failed');assert.equal(h.m.metadata.ownerId,'unknown');
+ assert.equal(h.m.metadataSettled,true);
 });
 test('owner ID supplement: only sm/nm videos whose detail answer had no owner are looked up',async()=>{
  const so=await idSetup('so5');so.service.request([so.m]);await tick();assert.equal(so.pending.length,0,'channel-style IDs are skipped');

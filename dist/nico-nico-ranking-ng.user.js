@@ -7,7 +7,7 @@
 // @match        *://www.nicovideo.jp/ranking*
 // @match        *://www.nicovideo.jp/search/*
 // @match        *://www.nicovideo.jp/tag/*
-// @version      160.28
+// @version      160.29
 // @grant        unsafeWindow
 // @grant        GM_getValue
 // @grant        GM_setValue
@@ -205,7 +205,7 @@
 
   // This facade is scoped to this userscript; other scripts keep their console.
   var nrnConsoleConfig = null
-  var NRN_VERSION = '160.28'
+  var NRN_VERSION = '160.29'
   var nrnNativeConsole = globalThis.console
   var nrnConsoleCounts = {warnings:0,errors:0}
   var nrnSetConsoleConfig = function(config) { nrnConsoleConfig = config }
@@ -774,10 +774,15 @@
     function createQueue(limit) {
       const pending = new Map(), waiting = [];
       let active = 0;
+      function unwatch(job) {
+        for (const [signal, listener] of job.listeners) signal.removeEventListener('abort', listener);
+        job.listeners.length = 0;
+      }
       function drain() {
         while (active < limit && waiting.length) {
           const job = waiting.shift();
           job.started = true;
+          unwatch(job);
           active++;
           Promise.resolve().then(job.task).then(job.resolve, job.reject).finally(() => {
             active--;
@@ -790,6 +795,7 @@
         const at = waiting.indexOf(job);
         if (job.started || at < 0) return;
         waiting.splice(at, 1);
+        unwatch(job);
         if (pending.get(job.key) === job) pending.delete(job.key);
         const error = new Error('request cancelled before start');
         error.name = 'AbortError';
@@ -797,6 +803,8 @@
         job.reject(error);
       }
       function watch(job, signal) {
+        // Only waiting jobs can be dropped here. Running transports own abort.
+        if (job.started) return;
         if (!signal) { job.keepAlive = true; return; }
         job.callers++;
         const onAbort = () => {
@@ -804,12 +812,15 @@
           if (!job.keepAlive && job.aborted >= job.callers) drop(job, signal.reason);
         };
         if (signal.aborted) onAbort();
-        else signal.addEventListener('abort', onAbort, {once:true});
+        else {
+          job.listeners.push([signal, onAbort]);
+          signal.addEventListener('abort', onAbort, {once:true});
+        }
       }
       const enqueue = function(key, task, options) {
         const shared = pending.get(key);
         if (shared) { watch(shared, options?.signal); return shared.promise; }
-        const job = {key, task, started:false, keepAlive:false, callers:0, aborted:0};
+        const job = {key, task, started:false, keepAlive:false, callers:0, aborted:0, listeners:[]};
         job.promise = new Promise((resolve, reject) => { job.resolve = resolve; job.reject = reject; });
         pending.set(key, job);
         waiting.push(job);
@@ -1949,19 +1960,21 @@
     }
     function create(config, capacity = 2048) {
       const limit = Number.isSafeInteger(capacity) && capacity > 0 ? Math.min(capacity,10000) : 2048
-      const parked = new Map(), ordinals = new WeakMap()
+      const parked = new Map(), ordinals = new WeakMap(), additionalReasons = new WeakMap()
       let sequence = 0, rejectedTotal = 0, releasedTotal = 0, capacityFallback = 0
       function order(item) {
         if (!ordinals.has(item)) ordinals.set(item,++sequence)
         return ordinals.get(item)
       }
       const sort = items => [...items].sort((a,b)=>order(a)-order(b))
-      function partition(items) {
+      const currentReason = item => reason(item,config) || additionalReasons.get(item)?.(item)
+      function partition(items, additionalReason) {
         const passed = []
         let rejected = 0
         for (const item of items) {
           order(item)
-          const match = reason(item,config)
+          if (typeof additionalReason === 'function') additionalReasons.set(item,additionalReason)
+          const match = currentReason(item)
           if (match && (parked.has(item.id) || parked.size < limit)) {
             if (!parked.has(item.id)) parked.set(item.id,item)
             rejected++; rejectedTotal++
@@ -1974,13 +1987,13 @@
       }
       function release() {
         const result = []
-        for (const [id,item] of parked) if (!reason(item,config)) {
+        for (const [id,item] of parked) if (!currentReason(item)) {
           parked.delete(id); result.push(item); releasedTotal++
         }
         return sort(result)
       }
       return {order,sort,partition,release,
-        isRejected:id=>parked.has(id) && Boolean(reason(parked.get(id),config)),
+        isRejected:id=>parked.has(id) && Boolean(currentReason(parked.get(id))),
         clear:()=>parked.clear(),
         snapshot:()=>({retained:parked.size,rejectedTotal,releasedTotal,capacityFallback,limit})}
     }
@@ -2510,8 +2523,10 @@
     }
     // input: {videoId, detail, search, nameSupplement, supplement:{owner, source, at}, detailCompleted}
     // nameSupplement: a nicoad name already checked by OwnerEvidence.nicoadName.
-    // Returns {owner, status, identity, name, visibility, conflict}; each source
+    // Returns {owner, status, identity, name, visibility, conflict, origins}; each source
     // field is a tier/source name or null. status: known | supplemented | missing | unresolved.
+    // origins identifies the input that supplied each field independently of
+    // its reported source, so retained evidence keeps its own acquisition time.
     function select(input) {
       const same = OwnerEvidence.same
       const {detail = null, search = null} = input || {}
@@ -2519,9 +2534,10 @@
       let identity = detail ? 'detail' : search ? 'search' : null
       let name = owner?.name != null ? identity : null
       let visibility = owner ? identity : null
+      const origins = {identity,name,visibility}
       if (owner && same(owner,search)) {
-        if (owner.name === null && search.name !== null) name = 'search'
-        if (owner.visibility == null && search.visibility != null) visibility = 'search'
+        if (owner.name === null && search.name !== null) name = origins.name = 'search'
+        if (owner.visibility == null && search.visibility != null) visibility = origins.visibility = 'search'
         owner = {...owner,name:owner.name ?? search.name,visibility:owner.visibility ?? search.visibility}
         if (!owner.iconUrl && search.iconUrl) owner.iconUrl = search.iconUrl
       }
@@ -2529,6 +2545,7 @@
       if (owner?.name === null && nameSupplement && same(owner,nameSupplement)) {
         owner = {...owner,name:nameSupplement.name}
         name = 'nicoad'
+        origins.name = 'nameSupplement'
       }
       let conflict = false
       const extra = input?.supplement
@@ -2536,16 +2553,22 @@
         if (!owner) {
           owner = extra.owner
           identity = extra.source
-          name = owner.name != null ? extra.source : null
-          visibility = owner.visibility != null ? extra.source : null
+          name = owner.name != null ? extra.evidence?.name?.source || extra.source : null
+          visibility = owner.visibility != null ? extra.evidence?.visibility?.source || extra.source : null
+          origins.identity = 'supplement'
+          origins.name = name ? 'supplement' : null
+          origins.visibility = visibility ? 'supplement' : null
         } else if (same(owner,extra.owner)) {
-          if (owner.name === null && extra.owner.name != null) { owner = {...owner,name:extra.owner.name};name = extra.source }
+          if (owner.name === null && extra.owner.name != null) {
+            owner = {...owner,name:extra.owner.name};name = extra.evidence?.name?.source || extra.source
+            origins.name = 'supplement'
+          }
           if (!owner.iconUrl && extra.owner.iconUrl) owner = {...owner,iconUrl:extra.owner.iconUrl}
         } else conflict = true
       }
       const status = identity === 'detail' || identity === 'search' ? 'known'
         : identity ? 'supplemented' : input?.detailCompleted ? 'missing' : 'unresolved'
-      return {owner:owner || null, status, identity, name, visibility, conflict}
+      return {owner:owner || null, status, identity, name, visibility, conflict, origins}
     }
     return {priority, supplementSources, acceptsSupplement, select}
   })()
@@ -2637,7 +2660,11 @@
         }
         try {
           handle = httpRequest({method:'GET', url:url(ids), timeout:10000,
-            onload:res => res?.status === 200 ? done('ok',parse(res.responseText,ids)) : done('http',{status:'http'}),
+            onload:res => {
+              if (res?.status !== 200) { done('http',{status:'http'});return }
+              const result = parse(res.responseText,ids)
+              done(result.status === 'ok' ? 'ok' : 'invalid',result)
+            },
             onerror:() => done('network'), ontimeout:() => done('timeout'), onabort:() => done('aborted')})
           if (handle && !settled) handles.add(handle)
         } catch (_) { done('network') }
@@ -2807,6 +2834,10 @@
       if (!builders.has(movies)) builders.set(movies,createContributorBuilder(movies.config))
       return builders.get(movies)
     }
+    function ownerEvidence(owner, source, at) {
+      const mark = {source,at}
+      return {identity:mark,name:owner.name !== null ? mark : null,visibility:owner.visibility !== null ? mark : null}
+    }
     // Priority and merge rules live in OwnerResolver; this applies the result.
     function selectOwner(movie, getContributorBy) {
       const primary = movie._nrnDetailContributor || movie._nrnSearchContributor
@@ -2819,15 +2850,13 @@
       movie._nrnContributorSource = result.identity || 'unknown'
       movie._nrnOwnerNameSource = result.name || 'unknown'
       movie.ownerResolution = {status:result.status, source:result.identity, conflict:result.conflict}
-      // Provenance: detail/search carry their own observation times; a
-      // supplement source uses the time of the lookup that supplied it.
-      const mark = (source, supplementAt) => !source ? null
-        : source === 'detail' ? {source:movie._nrnDetailOwnerSource || 'detail',at:movie._nrnDetailOwnerAt}
-        : source === 'search' ? {source,at:movie._nrnSearchObservedAt} : {source,at:supplementAt}
-      const nameAt = result.name === result.identity ? extra?.at : nameData?.fetchedAt
-      movie.setOwnerKnowledge(owner,owner ? {ownerId:mark(result.identity,extra?.at),
-        ownerType:mark(result.identity,extra?.at),ownerName:mark(result.name,nameAt),
-        ownerVisibility:mark(result.visibility,extra?.at)} : null)
+      // A partial refresh can retain a name/visibility from an older answer.
+      // Read the selected field's evidence, not the latest identity timestamp.
+      const evidence = {detail:movie._nrnDetailOwnerEvidence,search:movie._nrnSearchOwnerEvidence,
+        supplement:extra?.evidence,nameSupplement:{name:{source:'nicoad',at:nameData?.fetchedAt}}}
+      const mark = field => evidence[result.origins[field]]?.[field] || null
+      movie.setOwnerKnowledge(owner,owner ? {ownerId:mark('identity'),
+        ownerType:mark('identity'),ownerName:mark('name'),ownerVisibility:mark('visibility')} : null)
       const selected = owner ? getContributorBy(owner,movie._nrnContributorSource) : Contributor.NULL
       if (movie.contributor !== selected) movie.contributor = selected
       movie.metadataChanged()
@@ -2846,7 +2875,9 @@
           if (primary && !OwnerEvidence.same(primary,owner)) return false
           const previous = movie._nrnOwnerSupplement
           if (previous && !OwnerEvidence.same(previous.owner,owner)) return false
-          movie._nrnOwnerSupplement = {owner:previous ? {...owner,name:owner.name ?? previous.owner.name} : owner,source,at:observedAt}
+          const provenance = ownerEvidence(owner,source,observedAt)
+          if (previous && owner.name === null) provenance.name = previous.evidence.name
+          movie._nrnOwnerSupplement = {owner:previous ? {...owner,name:owner.name ?? previous.owner.name} : owner,source,at:observedAt,evidence:provenance}
           selectOwner(movie,getContributorBy)
           return true
         }
@@ -2875,10 +2906,16 @@
             movie._nrnSearchContributor = null
             movie._nrnSearchOwnerConflict = true
           } else {
+            const evidence = ownerEvidence(owner,'search',Date.now())
+            if (previous) {
+              if (previous.name || owner.name === null) evidence.name = movie._nrnSearchOwnerEvidence.name
+              if (previous.visibility !== null) evidence.visibility = movie._nrnSearchOwnerEvidence.visibility
+            }
             movie._nrnSearchContributor = previous ? {...owner,
               name:previous.name || (owner.name ?? previous.name),visibility:previous.visibility ?? owner.visibility,
               ...(owner.iconUrl || previous.iconUrl ? {iconUrl:owner.iconUrl || previous.iconUrl} : {})} : owner
             movie._nrnSearchObservedAt = Date.now()
+            movie._nrnSearchOwnerEvidence = evidence
           }
           selectOwner(movie,getContributorBy)
         }
@@ -2907,10 +2944,24 @@
           const detailOwner = OwnerEvidence.normalize(thumbInfo.contributor)
           if (detailOwner) {
             const previous = m._nrnDetailContributor
+            const evidence = ownerEvidence(detailOwner,m._nrnDetailSource,m._nrnDetailFetchedAt)
+            // Schema 3 caches may contain names retained from an older detail.
+            // Without a field timestamp, keep the value but do not invent age
+            // from the enclosing cache record or the time it was read.
+            if (m._nrnDetailSource === 'cache') for (const field of ['identity','name','visibility']) {
+              const at = thumbInfo.ownerFetchedAt?.[field]
+              if (evidence[field]) evidence[field] = {source:'cache',
+                at:Number.isFinite(at) && at > 0 && at <= Date.now() ? at : null}
+            }
+            if (OwnerEvidence.same(previous,detailOwner)) {
+              if (detailOwner.name === null) evidence.name = m._nrnDetailOwnerEvidence.name
+              if (detailOwner.visibility === null) evidence.visibility = m._nrnDetailOwnerEvidence.visibility
+            }
             m._nrnDetailContributor = OwnerEvidence.same(previous,detailOwner) ? {...detailOwner,
               name:detailOwner.name ?? previous.name,visibility:detailOwner.visibility ?? previous.visibility} : detailOwner
             m._nrnDetailOwnerSource = m._nrnDetailSource
             m._nrnDetailOwnerAt = m._nrnDetailFetchedAt
+            m._nrnDetailOwnerEvidence = evidence
           }
           selectOwner(m,getContributorBy)
           m.setThumbInfoDone()
@@ -9149,6 +9200,13 @@ a.nrn-parsed[data-anchor-detail="nicoad"] > .nrn-movie-info-toggle { background:
           if (disposed || !result) return null
           if (apply(id,result.data,result.fetchedAt)) api.onRecovered?.(id)
           return result
+        }).catch(error => {
+          // Share in-flight and successful data, not a rejected decoration
+          // lookup that would prevent a later owner lookup in the same route.
+          // attempted/idAttempted still bound automatic metadata retries;
+          // confirmed 404s remain in the separate expiring absent cache.
+          if (responses.get(id) === promise) responses.delete(id)
+          throw error
         })
         responses.set(id,promise)
         return promise
@@ -9934,8 +9992,8 @@ var PreviewData = (function () {
       }
       function departures(root) {
         for(const s of sessions) {
-          clearTimeout(s.leaveTimer);s.leaveTimer=null
-          if(s.root!==root&&!s.closing)s.leaveTimer=setTimeout(()=>close(s),200)
+          if(s.root===root){clearTimeout(s.leaveTimer);s.leaveTimer=null}
+          else if(!s.closing&&!s.leaveTimer)s.leaveTimer=setTimeout(()=>{s.leaveTimer=null;close(s)},200)
         }
       }
       function reopen(s) {
@@ -10033,7 +10091,7 @@ var PreviewData = (function () {
           s.layer.dataset.phase='playing';counts.playing++;s.spinner.remove();s.button.hidden=false;updateButton(s)
           if(prefs.commentVisible){s.canvas=doc.createElement('canvas');s.canvas.setAttribute('aria-hidden','true');s.canvas.style.opacity=String(prefs.commentOpacity);s.surface.insertBefore(s.canvas,s.status)}
           draw(s)
-          if(!prefs.commentVisible)return
+          if(!live(s)||!prefs.commentVisible)return
           s.commentAbort=new AbortController();s.commentDeadline=setTimeout(()=>s.commentAbort.abort(),8000)
           fetchComments(s.data,{signal:s.commentAbort.signal,report,scoreThreshold:prefs.scoreThreshold,userNgEnabled:prefs.userNgEnabled}).then(comments=>{
             if(!live(s))return
@@ -10071,6 +10129,7 @@ var PreviewData = (function () {
       function over(event) {
         if(!setting?.value||disposed)return
         const target=scope(event.target),root=target.root
+        if(root&&root===scope(event.relatedTarget).root)return
         departures(root)
         clearTimeout(timer);timer=null
         if(root&&root===blockedRoot){hovered=null;return}
@@ -10467,9 +10526,11 @@ var CardActionData = (function () {
             movie.on('metadataDemandChanged',schedule).on('metadataChanged',schedule)
           }
           var cached = recentDetails.get(id)
-          if (cached && Date.now() - cached.at > 120000) { recentDetails.delete(id); cached = null }
+          if (cached && (cached.at > Date.now() || Date.now() - cached.at > 120000)) { recentDetails.delete(id); cached = null }
           if (cached && !movies.get(id).thumbInfoDone) {
-            applyDetails(cached.info)
+            // This cache holds the raw successful response, not merged owners.
+            const at = cached.info.fetchedAt
+            applyDetails({...cached.info,source:'cache',ownerFetchedAt:{identity:at,name:at,visibility:at}})
             if (movie.thumbInfoDone) diagnostics?.cache(id,'recent')
           }
         }
@@ -12717,9 +12778,11 @@ var CardActionData = (function () {
         if (requestedMode === 'snapshot') {
           var passed = []
           var quickRows = []
+          // Give every candidate its source position before parking quick NG rows.
+          fresh.forEach(function(item) { candidateFilter.order(item) })
           fresh.forEach(function(item) {
             var reason = apiQuickNgReason(item)
-            if (reason) {
+            if (reason && candidateFilter.partition([item],apiQuickNgReason).rejected) {
               totalApiPrefilteredNg++
               quickRows.push({item: item, reason: reason})
             } else {
@@ -13236,9 +13299,11 @@ var CardActionData = (function () {
             if (requestedMode === 'snapshot') {
               var passed = []
               var quickRows = []
+              // Give every candidate its source position before parking quick NG rows.
+              fresh.forEach(function(item) { candidateFilter.order(item) })
               fresh.forEach(function(item) {
                 var reason = apiQuickNgReason(item)
-                if (reason) {
+                if (reason && candidateFilter.partition([item],apiQuickNgReason).rejected) {
                   totalApiPrefilteredNg++
                   quickRows.push({item: item, reason: reason})
                 } else {
@@ -13478,9 +13543,11 @@ var CardActionData = (function () {
           checkedDetailCacheIds.add(id)
           var key = cacheKeyForMovie(id)
           var cached = detailCache.get(key)
-          if (cached && (cached.id !== id || !cached.metadata
+          if (cached && (cached.id !== id || !Number.isFinite(cached.cachedAt)
+              || cached.cachedAt <= 0 || cached.cachedAt > Date.now() || !cached.metadata
               || cached.metadata.tags !== 'known' || cached.metadata.lockedTags !== 'known'
               || cached.metadata.description !== 'known' || !Array.isArray(cached.tags)
+              || !cached.tags.every(t => t && typeof t.name === 'string' && typeof t.lock === 'boolean')
               || typeof cached.description !== 'string')) cached = null
           if (!cached) {
             misses++
@@ -13499,6 +13566,7 @@ var CardActionData = (function () {
             applyThumbInfoFromCache({
               id: id,
               fetchedAt:cached.cachedAt,
+              ownerFetchedAt:Object.fromEntries(['identity','name','visibility'].map(field => [field,cached.ownerFetchedAt?.[field]])),
               description: cached.description,
               tags: cached.tags,
               contributor: cached.contributor ? {...cached.contributor,
@@ -13550,7 +13618,9 @@ var CardActionData = (function () {
         if (!movie.thumbInfoDone || movie.metadata.tags !== 'known' || movie.metadata.description !== 'known') {
           if (movie._nrnOwnerNameSupplement) {
             const previous = detailCache.get(cacheKeyForMovie(id))
-            detailCache.set(cacheKeyForMovie(id),{...(previous?.id === id ? previous : {}),id,
+            const retained = previous?.id === id ? {...previous} : {}
+            delete retained.ng;delete retained.ngReasons
+            detailCache.set(cacheKeyForMovie(id),{...retained,id,
               ownerNameSupplement:{...movie._nrnOwnerNameSupplement},
               cachedAt:previous?.id === id ? previous.cachedAt : movie._nrnOwnerNameSupplement.fetchedAt})
             cacheWrites++
@@ -13558,19 +13628,24 @@ var CardActionData = (function () {
           return
         }
         if (movie.error && movie.error.type && movie.error.type !== 'NO_ERROR') return
+        // Reading/rechecking metadata never supplies a new acquisition time.
+        if (!Number.isFinite(movie._nrnDetailFetchedAt) || movie._nrnDetailFetchedAt <= 0
+            || movie._nrnDetailFetchedAt > Date.now()) return
         var payload = {
           id: id,
           metadata: {...movie.metadata},
           title: movie.title || '',
           description: movie.description || '',
           contributor: movie._nrnDetailContributor ? {...movie._nrnDetailContributor} : null,
+          ownerFetchedAt:Object.fromEntries(['identity','name','visibility'].map(field => {
+            const at = movie._nrnDetailOwnerEvidence?.[field]?.at
+            return [field,Number.isFinite(at) && at > 0 && at <= Date.now() ? at : null]
+          })),
           ownerNameSupplement: movie._nrnOwnerNameSupplement ? {...movie._nrnOwnerNameSupplement} : null,
           tags: (movie.tags || []).map(function(t) {
             return {name:t.name, lock:Boolean(t.lock)}
           }),
-          ng: Boolean(movie.ng),
-          ngReasons: getMovieNgReasons(movie),
-          cachedAt: movie._nrnDetailFetchedAt || Date.now()
+          cachedAt: movie._nrnDetailFetchedAt
         }
         detailCache.set(cacheKeyForMovie(id), payload)
         cacheWrites++
@@ -13586,8 +13661,7 @@ var CardActionData = (function () {
             id: item.id,
             title: item.title,
             cache: hit ? 'HIT' : 'MISS',
-            cachedNg: cached ? cached.ng : '',
-            cachedReasons: cached ? (cached.ngReasons || []).join(' / ') : ''
+            cachedAt: cached ? cached.cachedAt : ''
           }
         })
         console.groupCollapsed(LOG + ' セッション詳細キャッシュ候補照合')
@@ -14951,7 +15025,7 @@ var CardActionData = (function () {
           maybeFetchMore()
         }
       }
-      for (var key of ['ngMovies','ngTitles','advancedNgRulesEnabled','advancedNgRulesJson']) {
+      for (var key of ['ngMovies','ngTitles','ngTags','ngUserIds','ngChannelIds','advancedNgRulesEnabled','advancedNgRulesJson']) {
         model.config[key].on('changed',restorePrefilteredCandidates)
       }
 

@@ -54,8 +54,11 @@ try {
  await tick(100);assert.notEqual((await state('#a')).serial,second.serial);
  const third=(await state('#a')).serial;
  // Different cards have independent presence: outgoing media fades while new media starts.
- await move('#b');await tick(199);assert.equal((await state('#a')).serial,third);assert.equal((await state('#b')).serial,null);
- await tick(1);assert.ok((await state('#b')).serial);assert.equal((await state('#a')).closing,true);
+ await move('#b');await tick(100);
+ // Bubbling child transitions are not another departure from the old card.
+ await move('#b .nrn-thumb-anchor-wrap');await tick(99);
+ assert.equal((await state('#a')).serial,third);assert.equal((await state('#b')).serial,null);
+ await tick(1);assert.equal((await state('#a')).closing,true,'child movement in another card cannot postpone this card exit');assert.ok((await state('#b')).serial);
  await tick(150);assert.equal(await page.locator('video').count(),2);
  await tick(150);assert.equal((await state('#a')).serial,null);const fourth=(await state('#b')).serial;
  await move('#portal button');await tick(600);

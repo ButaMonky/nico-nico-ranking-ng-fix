@@ -67,6 +67,13 @@
           if (disposed || !result) return null
           if (apply(id,result.data,result.fetchedAt)) api.onRecovered?.(id)
           return result
+        }).catch(error => {
+          // Share in-flight and successful data, not a rejected decoration
+          // lookup that would prevent a later owner lookup in the same route.
+          // attempted/idAttempted still bound automatic metadata retries;
+          // confirmed 404s remain in the separate expiring absent cache.
+          if (responses.get(id) === promise) responses.delete(id)
+          throw error
         })
         responses.set(id,promise)
         return promise

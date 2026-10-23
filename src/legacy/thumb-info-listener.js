@@ -51,6 +51,10 @@
       if (!builders.has(movies)) builders.set(movies,createContributorBuilder(movies.config))
       return builders.get(movies)
     }
+    function ownerEvidence(owner, source, at) {
+      const mark = {source,at}
+      return {identity:mark,name:owner.name !== null ? mark : null,visibility:owner.visibility !== null ? mark : null}
+    }
     // Priority and merge rules live in OwnerResolver; this applies the result.
     function selectOwner(movie, getContributorBy) {
       const primary = movie._nrnDetailContributor || movie._nrnSearchContributor
@@ -63,15 +67,13 @@
       movie._nrnContributorSource = result.identity || 'unknown'
       movie._nrnOwnerNameSource = result.name || 'unknown'
       movie.ownerResolution = {status:result.status, source:result.identity, conflict:result.conflict}
-      // Provenance: detail/search carry their own observation times; a
-      // supplement source uses the time of the lookup that supplied it.
-      const mark = (source, supplementAt) => !source ? null
-        : source === 'detail' ? {source:movie._nrnDetailOwnerSource || 'detail',at:movie._nrnDetailOwnerAt}
-        : source === 'search' ? {source,at:movie._nrnSearchObservedAt} : {source,at:supplementAt}
-      const nameAt = result.name === result.identity ? extra?.at : nameData?.fetchedAt
-      movie.setOwnerKnowledge(owner,owner ? {ownerId:mark(result.identity,extra?.at),
-        ownerType:mark(result.identity,extra?.at),ownerName:mark(result.name,nameAt),
-        ownerVisibility:mark(result.visibility,extra?.at)} : null)
+      // A partial refresh can retain a name/visibility from an older answer.
+      // Read the selected field's evidence, not the latest identity timestamp.
+      const evidence = {detail:movie._nrnDetailOwnerEvidence,search:movie._nrnSearchOwnerEvidence,
+        supplement:extra?.evidence,nameSupplement:{name:{source:'nicoad',at:nameData?.fetchedAt}}}
+      const mark = field => evidence[result.origins[field]]?.[field] || null
+      movie.setOwnerKnowledge(owner,owner ? {ownerId:mark('identity'),
+        ownerType:mark('identity'),ownerName:mark('name'),ownerVisibility:mark('visibility')} : null)
       const selected = owner ? getContributorBy(owner,movie._nrnContributorSource) : Contributor.NULL
       if (movie.contributor !== selected) movie.contributor = selected
       movie.metadataChanged()
@@ -90,7 +92,9 @@
           if (primary && !OwnerEvidence.same(primary,owner)) return false
           const previous = movie._nrnOwnerSupplement
           if (previous && !OwnerEvidence.same(previous.owner,owner)) return false
-          movie._nrnOwnerSupplement = {owner:previous ? {...owner,name:owner.name ?? previous.owner.name} : owner,source,at:observedAt}
+          const provenance = ownerEvidence(owner,source,observedAt)
+          if (previous && owner.name === null) provenance.name = previous.evidence.name
+          movie._nrnOwnerSupplement = {owner:previous ? {...owner,name:owner.name ?? previous.owner.name} : owner,source,at:observedAt,evidence:provenance}
           selectOwner(movie,getContributorBy)
           return true
         }
@@ -119,10 +123,16 @@
             movie._nrnSearchContributor = null
             movie._nrnSearchOwnerConflict = true
           } else {
+            const evidence = ownerEvidence(owner,'search',Date.now())
+            if (previous) {
+              if (previous.name || owner.name === null) evidence.name = movie._nrnSearchOwnerEvidence.name
+              if (previous.visibility !== null) evidence.visibility = movie._nrnSearchOwnerEvidence.visibility
+            }
             movie._nrnSearchContributor = previous ? {...owner,
               name:previous.name || (owner.name ?? previous.name),visibility:previous.visibility ?? owner.visibility,
               ...(owner.iconUrl || previous.iconUrl ? {iconUrl:owner.iconUrl || previous.iconUrl} : {})} : owner
             movie._nrnSearchObservedAt = Date.now()
+            movie._nrnSearchOwnerEvidence = evidence
           }
           selectOwner(movie,getContributorBy)
         }
@@ -151,10 +161,24 @@
           const detailOwner = OwnerEvidence.normalize(thumbInfo.contributor)
           if (detailOwner) {
             const previous = m._nrnDetailContributor
+            const evidence = ownerEvidence(detailOwner,m._nrnDetailSource,m._nrnDetailFetchedAt)
+            // Schema 3 caches may contain names retained from an older detail.
+            // Without a field timestamp, keep the value but do not invent age
+            // from the enclosing cache record or the time it was read.
+            if (m._nrnDetailSource === 'cache') for (const field of ['identity','name','visibility']) {
+              const at = thumbInfo.ownerFetchedAt?.[field]
+              if (evidence[field]) evidence[field] = {source:'cache',
+                at:Number.isFinite(at) && at > 0 && at <= Date.now() ? at : null}
+            }
+            if (OwnerEvidence.same(previous,detailOwner)) {
+              if (detailOwner.name === null) evidence.name = m._nrnDetailOwnerEvidence.name
+              if (detailOwner.visibility === null) evidence.visibility = m._nrnDetailOwnerEvidence.visibility
+            }
             m._nrnDetailContributor = OwnerEvidence.same(previous,detailOwner) ? {...detailOwner,
               name:detailOwner.name ?? previous.name,visibility:detailOwner.visibility ?? previous.visibility} : detailOwner
             m._nrnDetailOwnerSource = m._nrnDetailSource
             m._nrnDetailOwnerAt = m._nrnDetailFetchedAt
+            m._nrnDetailOwnerEvidence = evidence
           }
           selectOwner(m,getContributorBy)
           m.setThumbInfoDone()

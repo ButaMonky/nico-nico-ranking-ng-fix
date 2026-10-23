@@ -2,13 +2,13 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import vm from 'node:vm';
 import {readFile} from 'node:fs/promises';
-import {output} from '../scripts/build.mjs';
-const source=await readFile(output,'utf8');
+import {sourceParts} from '../scripts/build.mjs';
+const source=(await Promise.all(sourceParts.map(part=>readFile(new URL('../'+part,import.meta.url),'utf8')))).join('');
 const boundary=source.indexOf('  var MovieViewMode = (function(_super) {');
 const plain=value=>JSON.parse(JSON.stringify(value));
 const condition=(field,operator='exists',value)=>({kind:'condition',field,operator,value});
-async function setup(id='sm1'){
- const calls=[],context=vm.createContext({URL,queueMicrotask,console:{log(){}},GM_xmlhttpRequest:o=>{calls.push(o);return {abort(){}};},fetch:(...a)=>{calls.push(a);return new Promise(()=>{});}});
+async function setup(id='sm1',extra={}){
+ const calls=[],context=vm.createContext({URL,queueMicrotask,console:{log(){}},GM_xmlhttpRequest:o=>{calls.push(o);return {abort(){}};},fetch:(...a)=>{calls.push(a);return new Promise(()=>{});},...extra});
  const lib=vm.runInContext(source.slice(0,boundary)+'return {Movie,Movies,Config,ThumbInfoListener,OwnerEvidence,AdvancedNgRules,MetadataReadiness,OwnerResolver:typeof OwnerResolver==="undefined"?null:OwnerResolver}; })()',context);
  const config=new lib.Config((k,d)=>d,()=>{});await config.sync();
  const movies=new lib.Movies(config),movie=new lib.Movie(id,'synthetic');movies.setIfAbsent([movie]);
@@ -74,4 +74,46 @@ test('owner resolver: existing detail/search/nicoad-name behaviour is unchanged'
  assert.equal(h.movie.contributor.name,'recovered');assert.equal(h.movie._nrnOwnerNameSource,'nicoad');assert.equal(h.movie._nrnContributorSource,'search');
  h.detail({id:'sm1',contributor:{type:'user',id:12,name:'detail'},description:'',tags:[]});
  assert.equal(h.movie.contributor.name,'detail');assert.equal(h.movie._nrnContributorSource,'detail');assert.equal(h.movie.ownerResolution.status,'known');
+});
+
+test('owner provenance: an ID-only supplement keeps the retained name acquisition source and time',async()=>{
+ const h=await setup(),old=Date.now()-5000,recent=old+3000;
+ h.supplement('sm1',user(12,'retained'),'nicoad',old);
+ h.supplement('sm1',user(12),'snapshot',recent);
+ const source=field=>plain(h.MetadataReadiness.sourceOf(h.movie,field));
+ assert.equal(h.movie.contributor.name,'retained');assert.equal(h.movie._nrnOwnerNameSource,'nicoad');
+ assert.deepEqual(source('ownerId'),{source:'snapshot',observedAt:recent});
+ assert.deepEqual(source('ownerName'),{source:'nicoad',observedAt:old});
+ assert.equal(source('ownerVisibility'),null,'unknown visibility never gains provenance');
+ h.search('sm1',user(12));
+ assert.equal(h.movie.contributor.name,'retained');
+ assert.deepEqual(source('ownerName'),{source:'nicoad',observedAt:old},'the retained supplement name can also fill a primary owner');
+});
+
+test('owner provenance: a partial detail refresh does not refresh retained cached name or visibility',async()=>{
+ const h=await setup(),old=Date.now()-5000,recent=old+3000;
+ h.detail({id:'sm1',contributor:user(12,'cached name','hidden'),source:'cache',fetchedAt:old,
+  ownerFetchedAt:{identity:old,name:old,visibility:old}});
+ h.detail({id:'sm1',contributor:user(12),fetchedAt:recent});
+ const source=field=>plain(h.MetadataReadiness.sourceOf(h.movie,field));
+ assert.equal(h.movie.contributor.name,'cached name');assert.equal(h.movie.owner.visibility,'hidden');
+ assert.deepEqual(source('ownerId'),{source:'detail',observedAt:recent});
+ assert.deepEqual(source('ownerName'),{source:'cache',observedAt:old});
+ assert.deepEqual(source('ownerVisibility'),{source:'cache',observedAt:old});
+ h.detail({id:'sm1',contributor:user(13),fetchedAt:recent});
+ assert.equal(h.movie.metadata.ownerName,'unknown');assert.equal(source('ownerName'),null);
+ assert.equal(h.movie.metadata.ownerVisibility,'unknown');assert.equal(source('ownerVisibility'),null);
+});
+
+test('owner provenance: filling search visibility does not renew an earlier retained name',async()=>{
+ let now=1000;const h=await setup('sm1',{Date:class extends Date {static now(){return now;}}});
+ h.search('sm1',user(12,'page name'));now=2000;
+ h.search('sm1',user(12,null,'hidden'));
+ const source=field=>plain(h.MetadataReadiness.sourceOf(h.movie,field));
+ assert.equal(h.movie.contributor.name,'page name');assert.equal(h.movie.owner.visibility,'hidden');
+ assert.deepEqual(source('ownerId'),{source:'search',observedAt:2000});
+ assert.deepEqual(source('ownerName'),{source:'search',observedAt:1000});
+ assert.deepEqual(source('ownerVisibility'),{source:'search',observedAt:2000});
+ now=3000;h.search('sm1',user(12,'page name','hidden'));
+ assert.deepEqual(source('ownerName'),{source:'search',observedAt:1000},'re-reading the same page evidence does not extend its age');
 });

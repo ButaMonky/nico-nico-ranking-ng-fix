@@ -112,9 +112,11 @@
             movie.on('metadataDemandChanged',schedule).on('metadataChanged',schedule)
           }
           var cached = recentDetails.get(id)
-          if (cached && Date.now() - cached.at > 120000) { recentDetails.delete(id); cached = null }
+          if (cached && (cached.at > Date.now() || Date.now() - cached.at > 120000)) { recentDetails.delete(id); cached = null }
           if (cached && !movies.get(id).thumbInfoDone) {
-            applyDetails(cached.info)
+            // This cache holds the raw successful response, not merged owners.
+            const at = cached.info.fetchedAt
+            applyDetails({...cached.info,source:'cache',ownerFetchedAt:{identity:at,name:at,visibility:at}})
             if (movie.thumbInfoDone) diagnostics?.cache(id,'recent')
           }
         }

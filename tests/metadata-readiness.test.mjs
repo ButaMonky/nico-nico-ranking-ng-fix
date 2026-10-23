@@ -142,7 +142,7 @@ test('persistent cache rejects mismatched IDs and incomplete field records',asyn
  }
 });
 test('persistent cache preserves missing owner name and confirmed empty tags',async()=>{
- const h=await setup();await restoreCache(h,{id:'sm1',metadata:{tags:'known',lockedTags:'known',description:'known',ownerName:'unknown'},
+ const h=await setup();await restoreCache(h,{id:'sm1',cachedAt:Date.now()-1000,metadata:{tags:'known',lockedTags:'known',description:'known',ownerName:'unknown'},
   contributor:{type:'user',id:12,name:''},tags:[],description:''});
  assert.equal(h.movie.metadata.ownerId,'known');assert.equal(h.movie.metadata.ownerName,'unknown');
  assert.equal(h.AdvancedNgRules.evaluateNode(h.movie,condition('contributorName','notExists')),false);

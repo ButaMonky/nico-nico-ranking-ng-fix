@@ -18,7 +18,8 @@ async function fixture(mode={}) {
  await page.setContent('<style>.card{display:inline-block;width:320px;height:220px}.nrn-thumb-anchor-wrap{width:320px;height:180px;position:relative}a{display:block;width:100%;height:100%}.spacer{height:2500px}</style>'+['native','a','b'].map((id,i)=>`<div id="${id}" class="card" ${i?'data-nrn-autofill="true"':''} data-decoration-video-id="sm123"><div class="nrn-thumb-anchor-wrap"><a href="/watch/sm123">synthetic link</a></div></div>`).join('')+'<div class="spacer"></div>');
  for(const source of sources)await page.addScriptTag({content:source});
  await page.evaluate(mode=>{
-  window.requests=[];window.pending=[];window.destroyed=0;window.mounted=0;window.plays=0;window.pauses=0;window.playbackSeconds=0;window.mode=mode;
+  const style=document.createElement('style');style.textContent=HoverPreview.css;document.head.append(style);
+  window.requests=[];window.pending=[];window.destroyed=0;window.mounted=0;window.plays=0;window.pauses=0;window.playbackSeconds=mode.initialPlaybackSeconds||0;window.mode=mode;
   const realTimeout=window.setTimeout;
   if(mode.shortDeadline)window.setTimeout=(callback,delay,...args)=>realTimeout(callback,delay===12000?40:delay,...args);
   HTMLMediaElement.prototype.play=function(){plays++;for(const [key,value] of Object.entries({readyState:2,videoWidth:320,videoHeight:180}))Object.defineProperty(this,key,{get:()=>value});return Promise.resolve()};
@@ -49,6 +50,13 @@ try {
   const page=await fixture({syncMediaError:true});await page.locator('#a').hover();
   await page.waitForFunction(()=>preview.snapshot().error===1);
   assert.deepEqual(await page.evaluate(()=>({destroyed,plays,active:preview.snapshot().active})),{destroyed:1,plays:0,active:false});await close(page);
+ }
+ // The first playable frame may already exceed the preview's duration limit.
+ {
+  const page=await fixture({initialPlaybackSeconds:30});await page.locator('#a').hover();
+  await page.waitForFunction(()=>preview.snapshot().stopped===1);
+  assert.equal(await page.evaluate(()=>requests.filter(r=>r.path==='/v1/threads').length),0,'a session ended on its first frame cannot start a detached comment request');
+  assert.equal(await page.locator('video,canvas,.nrn-preview').count(),0);await close(page);
  }
  // Pending removal must abort even when a non-cooperative fetch later resolves.
  {
@@ -89,9 +97,11 @@ try {
  // Same video ID never aliases card-instance lifetime or reuses a stopped session.
  {
   const page=await fixture();await play(page);await page.locator('#b').hover();await page.waitForFunction(()=>mounted===2&&plays===2);
+  await page.waitForFunction(()=>!document.querySelector('#a .nrn-preview'));
   assert.equal(await page.locator('#a .nrn-preview').count(),0);assert.equal(await page.locator('#b video').count(),1);
   assert.equal(await page.evaluate(()=>requests[0].signal.aborted),true);assert.equal(await page.evaluate(()=>destroyed),1);
   await page.locator('#a').hover();await page.waitForFunction(()=>mounted===3&&plays===3);
+  await page.waitForFunction(()=>!document.querySelector('#b .nrn-preview'));
   assert.equal(await page.locator('#a video').count(),1);assert.equal(await page.locator('#b .nrn-preview').count(),0);
   assert.equal(await page.evaluate(()=>destroyed),2);await close(page);
  }

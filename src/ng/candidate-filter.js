@@ -29,19 +29,21 @@
     }
     function create(config, capacity = 2048) {
       const limit = Number.isSafeInteger(capacity) && capacity > 0 ? Math.min(capacity,10000) : 2048
-      const parked = new Map(), ordinals = new WeakMap()
+      const parked = new Map(), ordinals = new WeakMap(), additionalReasons = new WeakMap()
       let sequence = 0, rejectedTotal = 0, releasedTotal = 0, capacityFallback = 0
       function order(item) {
         if (!ordinals.has(item)) ordinals.set(item,++sequence)
         return ordinals.get(item)
       }
       const sort = items => [...items].sort((a,b)=>order(a)-order(b))
-      function partition(items) {
+      const currentReason = item => reason(item,config) || additionalReasons.get(item)?.(item)
+      function partition(items, additionalReason) {
         const passed = []
         let rejected = 0
         for (const item of items) {
           order(item)
-          const match = reason(item,config)
+          if (typeof additionalReason === 'function') additionalReasons.set(item,additionalReason)
+          const match = currentReason(item)
           if (match && (parked.has(item.id) || parked.size < limit)) {
             if (!parked.has(item.id)) parked.set(item.id,item)
             rejected++; rejectedTotal++
@@ -54,13 +56,13 @@
       }
       function release() {
         const result = []
-        for (const [id,item] of parked) if (!reason(item,config)) {
+        for (const [id,item] of parked) if (!currentReason(item)) {
           parked.delete(id); result.push(item); releasedTotal++
         }
         return sort(result)
       }
       return {order,sort,partition,release,
-        isRejected:id=>parked.has(id) && Boolean(reason(parked.get(id),config)),
+        isRejected:id=>parked.has(id) && Boolean(currentReason(parked.get(id))),
         clear:()=>parked.clear(),
         snapshot:()=>({retained:parked.size,rejectedTotal,releasedTotal,capacityFallback,limit})}
     }

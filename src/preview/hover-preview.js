@@ -139,8 +139,8 @@
       }
       function departures(root) {
         for(const s of sessions) {
-          clearTimeout(s.leaveTimer);s.leaveTimer=null
-          if(s.root!==root&&!s.closing)s.leaveTimer=setTimeout(()=>close(s),200)
+          if(s.root===root){clearTimeout(s.leaveTimer);s.leaveTimer=null}
+          else if(!s.closing&&!s.leaveTimer)s.leaveTimer=setTimeout(()=>{s.leaveTimer=null;close(s)},200)
         }
       }
       function reopen(s) {
@@ -238,7 +238,7 @@
           s.layer.dataset.phase='playing';counts.playing++;s.spinner.remove();s.button.hidden=false;updateButton(s)
           if(prefs.commentVisible){s.canvas=doc.createElement('canvas');s.canvas.setAttribute('aria-hidden','true');s.canvas.style.opacity=String(prefs.commentOpacity);s.surface.insertBefore(s.canvas,s.status)}
           draw(s)
-          if(!prefs.commentVisible)return
+          if(!live(s)||!prefs.commentVisible)return
           s.commentAbort=new AbortController();s.commentDeadline=setTimeout(()=>s.commentAbort.abort(),8000)
           fetchComments(s.data,{signal:s.commentAbort.signal,report,scoreThreshold:prefs.scoreThreshold,userNgEnabled:prefs.userNgEnabled}).then(comments=>{
             if(!live(s))return
@@ -276,6 +276,7 @@
       function over(event) {
         if(!setting?.value||disposed)return
         const target=scope(event.target),root=target.root
+        if(root&&root===scope(event.relatedTarget).root)return
         departures(root)
         clearTimeout(timer);timer=null
         if(root&&root===blockedRoot){hovered=null;return}

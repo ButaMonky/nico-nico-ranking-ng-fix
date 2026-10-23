@@ -24,8 +24,10 @@
     }
     // input: {videoId, detail, search, nameSupplement, supplement:{owner, source, at}, detailCompleted}
     // nameSupplement: a nicoad name already checked by OwnerEvidence.nicoadName.
-    // Returns {owner, status, identity, name, visibility, conflict}; each source
+    // Returns {owner, status, identity, name, visibility, conflict, origins}; each source
     // field is a tier/source name or null. status: known | supplemented | missing | unresolved.
+    // origins identifies the input that supplied each field independently of
+    // its reported source, so retained evidence keeps its own acquisition time.
     function select(input) {
       const same = OwnerEvidence.same
       const {detail = null, search = null} = input || {}
@@ -33,9 +35,10 @@
       let identity = detail ? 'detail' : search ? 'search' : null
       let name = owner?.name != null ? identity : null
       let visibility = owner ? identity : null
+      const origins = {identity,name,visibility}
       if (owner && same(owner,search)) {
-        if (owner.name === null && search.name !== null) name = 'search'
-        if (owner.visibility == null && search.visibility != null) visibility = 'search'
+        if (owner.name === null && search.name !== null) name = origins.name = 'search'
+        if (owner.visibility == null && search.visibility != null) visibility = origins.visibility = 'search'
         owner = {...owner,name:owner.name ?? search.name,visibility:owner.visibility ?? search.visibility}
         if (!owner.iconUrl && search.iconUrl) owner.iconUrl = search.iconUrl
       }
@@ -43,6 +46,7 @@
       if (owner?.name === null && nameSupplement && same(owner,nameSupplement)) {
         owner = {...owner,name:nameSupplement.name}
         name = 'nicoad'
+        origins.name = 'nameSupplement'
       }
       let conflict = false
       const extra = input?.supplement
@@ -50,16 +54,22 @@
         if (!owner) {
           owner = extra.owner
           identity = extra.source
-          name = owner.name != null ? extra.source : null
-          visibility = owner.visibility != null ? extra.source : null
+          name = owner.name != null ? extra.evidence?.name?.source || extra.source : null
+          visibility = owner.visibility != null ? extra.evidence?.visibility?.source || extra.source : null
+          origins.identity = 'supplement'
+          origins.name = name ? 'supplement' : null
+          origins.visibility = visibility ? 'supplement' : null
         } else if (same(owner,extra.owner)) {
-          if (owner.name === null && extra.owner.name != null) { owner = {...owner,name:extra.owner.name};name = extra.source }
+          if (owner.name === null && extra.owner.name != null) {
+            owner = {...owner,name:extra.owner.name};name = extra.evidence?.name?.source || extra.source
+            origins.name = 'supplement'
+          }
           if (!owner.iconUrl && extra.owner.iconUrl) owner = {...owner,iconUrl:extra.owner.iconUrl}
         } else conflict = true
       }
       const status = identity === 'detail' || identity === 'search' ? 'known'
         : identity ? 'supplemented' : input?.detailCompleted ? 'missing' : 'unresolved'
-      return {owner:owner || null, status, identity, name, visibility, conflict}
+      return {owner:owner || null, status, identity, name, visibility, conflict, origins}
     }
     return {priority, supplementSources, acceptsSupplement, select}
   })()

@@ -2,8 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import vm from 'node:vm';
 import {readFile} from 'node:fs/promises';
-import {output} from '../scripts/build.mjs';
-const source=await readFile(output,'utf8');
+import {sourceParts} from '../scripts/build.mjs';
+const source=(await Promise.all(sourceParts.map(part=>readFile(new URL('../'+part,import.meta.url),'utf8')))).join('');
 const boundary=source.indexOf('  var MovieViewMode = (function(_super) {');
 const plain=value=>JSON.parse(JSON.stringify(value));
 const tick=(ms=80)=>new Promise(r=>setTimeout(r,ms));
@@ -54,6 +54,17 @@ test('snapshot owners: failures, invalid bodies and HTTP errors keep every owner
   const h=await setup(['sm1']);h.service.enqueue(h.list[0]);await tick();act(h.requests[0]);
   assert.equal(h.list[0].metadata.ownerId,'unknown');assert.equal(h.list[0]._nrnOwnerSnapshotStatus,'failed');
   assert.equal(h.list[0].ownerResolution.status,'missing');assert.equal(h.service.enqueue(h.list[0]),false,'not retried');
+ }
+});
+
+test('snapshot owners: malformed successful HTTP responses are diagnosed as invalid, not recovered',async t=>{
+ for(const responseText of ['{bad',JSON.stringify({meta:{status:500},data:[]}),JSON.stringify({meta:{status:200},data:null})]){
+  const h=await setup(['sm1']);t.after(()=>h.service.dispose());
+  h.service.enqueue(h.list[0]);h.service.flush();
+  h.requests[0].options.onload({status:200,responseText});
+  assert.equal(h.list[0]._nrnOwnerSnapshotStatus,'failed');assert.equal(h.list[0].metadata.ownerId,'unknown');
+  assert.deepEqual(plain(h.measured),[['snapshot','run','invalid']]);
+  assert.equal(h.SnapshotOwnerSource._absent.has('sm1'),false,'a malformed response is not evidence of absence');
  }
 });
 test('snapshot owners: only missing sm/nm owners are queued; dispose aborts and ignores late rows',async()=>{
