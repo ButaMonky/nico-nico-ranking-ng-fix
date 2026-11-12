@@ -7,7 +7,7 @@
 // @match        *://www.nicovideo.jp/ranking*
 // @match        *://www.nicovideo.jp/search/*
 // @match        *://www.nicovideo.jp/tag/*
-// @version      160.30
+// @version      160.31
 // @grant        unsafeWindow
 // @grant        GM_getValue
 // @grant        GM_setValue
@@ -205,7 +205,7 @@
 
   // This facade is scoped to this userscript; other scripts keep their console.
   var nrnConsoleConfig = null
-  var NRN_VERSION = '160.30'
+  var NRN_VERSION = '160.31'
   var nrnNativeConsole = globalThis.console
   var nrnConsoleCounts = {warnings:0,errors:0}
   var nrnSetConsoleConfig = function(config) { nrnConsoleConfig = config }
@@ -6568,6 +6568,9 @@ html[data-nrn-ui-theme="dark"] .nrn-contributor-ng-name-button:hover {
         var ownerUrl = identity ? (identity.type === 'channel' ? 'https://ch.nicovideo.jp/channel/ch' + identity.id : 'https://www.nicovideo.jp/user/' + identity.id) : ''
         var root = doc.createElement('div')
         root.className = 'Pressable cursor_pointer d_flex cq-t_inline-size min-w_thumbnail.min max-w_thumbnail.max w_100% nrn-autofill-pending'
+        // Preserve the official card route contract for delegated click consumers.
+        root.setAttribute('data-group', 'true')
+        root.setAttribute('data-anchor-href', new URL(watchUrl, 'https://www.nicovideo.jp').pathname)
         root.setAttribute('data-decoration-video-id', item.id)
         root.setAttribute('data-nrn-autofill', 'true')
         OwnerEvidence.register(root, item)
@@ -6602,7 +6605,7 @@ html[data-nrn-ui-theme="dark"] .nrn-contributor-ng-name-button:hover {
               '<p>' + COMMENT_ICON_SVG + '<span class="white-space_nowrap">' + comment.toLocaleString() + '</span></p>' +
             '</div>' +
             (ownerUrl ?
-              '<a href="' + ownerUrl + '" class="hover:c_action.primaryAzure d_flex gap_x0_5 ai_center text-layer_mediumEm w_fit-content fs_base [@container_(max-width:_320px)]:fs_s">' +
+              '<a data-group-ignore="true" href="' + ownerUrl + '" class="hover:c_action.primaryAzure d_flex gap_x0_5 ai_center text-layer_mediumEm w_fit-content fs_base [@container_(max-width:_320px)]:fs_s">' +
                 '<img alt="" class="bdr_full ov_hidden contain_content_size w_x3 min-w_x3 h_x3" loading="lazy" decoding="async" src="' + ownerIcon + '">' +
                 '<p class="fw_bold lc_1"></p>' +
               '</a>' : '<span class="fs_base text-layer_mediumEm">' + ownerName + '</span>') +
