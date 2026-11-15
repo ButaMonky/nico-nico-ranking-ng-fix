@@ -608,8 +608,12 @@
       _createInjectedTile(item, options) {
         options = options || {}
         var doc = this.doc
-        var thumbUrl = (item.thumbnail && (item.thumbnail.listingUrl || item.thumbnail.middleUrl || item.thumbnail.url)) || ''
-        var watchUrl = 'https://www.nicovideo.jp/' + (/^ss\d/.test(item.id) ? 'shorts/' : 'watch/') + item.id
+        // BRUSH-073: shorts use the native shorts card (portrait 2:3 frame,
+        // the r405x720 "shortUrl" image, no duration badge), copied from the
+        // captured /tag_shorts/ markup.
+        var isShort = /^ss\d/.test(item.id) || item.contentType === 'short'
+        var thumbUrl = (item.thumbnail && ((isShort && item.thumbnail.shortUrl) || item.thumbnail.listingUrl || item.thumbnail.middleUrl || item.thumbnail.url)) || ''
+        var watchUrl = 'https://www.nicovideo.jp/' + (isShort ? 'shorts/' : 'watch/') + item.id
         var view = (item.count && item.count.view) || 0
         var comment = (item.count && item.count.comment) || 0
         var owner = item.owner || {}
@@ -618,7 +622,9 @@
         var identity = OwnerEvidence.normalize(owner)
         var ownerUrl = identity ? (identity.type === 'channel' ? 'https://ch.nicovideo.jp/channel/ch' + identity.id : 'https://www.nicovideo.jp/user/' + identity.id) : ''
         var root = doc.createElement('div')
-        root.className = 'Pressable cursor_pointer d_flex cq-t_inline-size min-w_thumbnail.min max-w_thumbnail.max w_100% nrn-autofill-pending'
+        root.className = isShort
+          ? 'Pressable cursor_pointer d_flex cq-t_inline-size min-w_thumbnail_2:3.s max-w_thumbnail_2:3.2xl w_100% nrn-autofill-pending'
+          : 'Pressable cursor_pointer d_flex cq-t_inline-size min-w_thumbnail.min max-w_thumbnail.max w_100% nrn-autofill-pending'
         // Preserve the official card route contract for delegated click consumers.
         root.setAttribute('data-group', 'true')
         root.setAttribute('data-anchor-href', new URL(watchUrl, 'https://www.nicovideo.jp').pathname)
@@ -630,14 +636,37 @@
         root.setAttribute('data-anchor-area', 'main')
         root.setAttribute('data-anchor-page',
           location.pathname.startsWith('/tag/') ? 'tag' :
-          location.pathname.startsWith('/search/') ? 'search' : 'main')
+          location.pathname.startsWith('/search/') ? 'search' :
+          location.pathname.startsWith('/tag_shorts/') ? 'tag_shorts' :
+          location.pathname.startsWith('/search_shorts/') ? 'search_shorts' : 'main')
         if (item.__nrnSourcePage != null) {
           root.setAttribute('data-nrn-source-page', String(item.__nrnSourcePage))
         }
         if (item.__nrnSourceIndex != null) {
           root.setAttribute('data-nrn-source-index', String(item.__nrnSourceIndex))
         }
-        root.innerHTML =
+        root.innerHTML = isShort ?
+          '<div class="--short-video-meta-height_calc({lineHeights.1}_*_2_*_{fontSizes.s}_+_{sizes.base}_+_{sizes.x0_5}) d_flex flex-d_column w_100% min-h_[calc(_100cqi_*_3_/_2_+_{lineHeights.base}_*_2_*_{fontSizes.l}_+_{sizes.base}_+_{sizes.base}_+_var(--short-video-meta-height)_+_{sizes.x3}_)] [@container_(max-width:_{sizes.thumbnail_2:3.xl})]:min-h_[calc(_100cqi_*_3_/_2_+_{lineHeights.base}_*_2_*_{fontSizes.base}_+_{sizes.base}_+_{sizes.base}_+_var(--short-video-meta-height)_+_{sizes.x3}_)]">' +
+            '<div class="pos_relative nrn-thumb-anchor-wrap">' +
+              '<a href="' + watchUrl + '" class="hover:c_action.primaryAzure">' +
+                '<div class="pos_relative asp_2:3 bg-c_layer.surfaceHighEmBlack bdr_m ov_hidden content-visibility_auto contain_content w_100% min-w_100% d_flex flex-d_column jc_center [&_>_img]:w_100%" data-group="true">' +
+                  '<img alt="" class="mx_auto bdr_s" loading="lazy" decoding="async" src="' + thumbUrl + '">' +
+                '</div>' +
+              '</a>' +
+            '</div>' +
+            '<a href="' + watchUrl + '" class="hover:c_action.primaryAzure fs_l mt_base mb_base fw_bold lc_2 visited:text-layer_visited groupHover:text-layer_accentAzure [@container_(max-width:_{sizes.thumbnail_2:3.xl})]:fs_base h_[calc({lineHeights.base}_*_2em)] nrn-title-anchor"></a>' +
+            '<div class="fs_s flex-wrap_wrap d_flex gap_base mb_x0_5 text-layer_lowEm [&_>_*]:d_flex [&_>_*]:ai_center [&_>_*]:gap_x0_5 [&_>_*]:lh_1 [&_>_*]:ff_metaNumber [&_>_*]:fs_s [&_>_*]:white-space_nowrap">' +
+              '<time class="nrn-registered-at">' + formatRelativeOrDate(item.registeredAt) + '</time>' +
+              '<p>' + VIEW_ICON_SVG + '<span class="white-space_nowrap">' + view.toLocaleString() + '</span></p>' +
+              '<p>' + COMMENT_ICON_SVG + '<span class="white-space_nowrap">' + comment.toLocaleString() + '</span></p>' +
+            '</div>' +
+            (ownerUrl ?
+              '<a data-group-ignore="true" href="' + ownerUrl + '" class="hover:c_action.primaryAzure d_flex gap_x0_5 ai_center text-layer_mediumEm w_fit-content">' +
+                '<img alt="" class="bdr_full ov_hidden contain_content_size w_x3 min-w_x3 h_x3" loading="lazy" decoding="async" src="' + ownerIcon + '">' +
+                '<p class="fs_s fw_bold lc_1"></p>' +
+              '</a>' : '<span class="fs_s text-layer_mediumEm nrn-owner-text"></span>') +
+          '</div>'
+          :
           '<div class="d_flex flex-d_column w_100% min-h_[calc(_100cqi_*_9_/_16_+_{lineHeights.base}_*_2_*_{fontSizes.l}_+_{sizes.base}_+_{sizes.x0_5}_+_{lineHeights.base}_*_{fontSizes.s}_+_{sizes.base}_+_{sizes.x3}_)]">' +
             '<div class="pos_relative nrn-thumb-anchor-wrap">' +
               '<a href="' + watchUrl + '" class="hover:c_action.primaryAzure">' +
@@ -659,7 +688,7 @@
               '<a data-group-ignore="true" href="' + ownerUrl + '" class="hover:c_action.primaryAzure d_flex gap_x0_5 ai_center text-layer_mediumEm w_fit-content fs_base [@container_(max-width:_320px)]:fs_s">' +
                 '<img alt="" class="bdr_full ov_hidden contain_content_size w_x3 min-w_x3 h_x3" loading="lazy" decoding="async" src="' + ownerIcon + '">' +
                 '<p class="fw_bold lc_1"></p>' +
-              '</a>' : '<span class="fs_base text-layer_mediumEm">' + ownerName + '</span>') +
+              '</a>' : '<span class="fs_base text-layer_mediumEm nrn-owner-text"></span>') +
           '</div>'
         // XSS対策のためテキストはDOM APIで設定する（タイトル・投稿者名にHTMLを解釈させない）
         root.querySelector('img.mx_auto').alt = item.title || ''
@@ -679,6 +708,9 @@
         if (ownerUrl) {
           root.querySelector('img.bdr_full').alt = ownerName
           root.querySelector('p.fw_bold.lc_1').textContent = ownerName
+        } else {
+          // Text via DOM API: an owner name must never be parsed as HTML.
+          root.querySelector('.nrn-owner-text').textContent = ownerName
         }
         root.firstElementChild.classList.add("nrn-card-body")
         var description = doc.createElement("div")
@@ -766,12 +798,14 @@
         } else {
           return;
         }
-        // BRUSH-067: only "NG動画を表示" also goes into the sticky web header
-        // (the one holding the search form), in its empty right-hand slot.
+        // BRUSH-067/073: only "NG動画を表示" also goes into the sticky web
+        // header, right after the search box (the far right was cut off).
         const webHeader = this.doc.querySelector('header:has(form[role="search"])')
         if (webHeader && bar.headerElem && !bar.headerElem.isConnected) {
-          const slot = webHeader.querySelector(':scope > div:last-child .d_flex.gap_base') || webHeader.querySelector(':scope > div:last-child') || webHeader
-          slot.prepend(bar.headerElem)
+          const form = webHeader.querySelector('form[role="search"]')
+          const searchBlock = form && Array.from(webHeader.children).find(child => child.contains(form))
+          if (searchBlock) searchBlock.after(bar.headerElem)
+          else webHeader.append(bar.headerElem)
         }
         if (bar.elem.isConnected) {
           return;
@@ -954,7 +988,7 @@
       get css() {
         return ResultLayout.css + `/* BRUSH-067: the header copy of "NG動画を表示" (one line, compact) */
 #nrn-header-ng-toggle {
-  display: inline-flex; align-items: center; gap: 3px; margin-right: 8px; white-space: nowrap;
+  display: inline-flex; align-items: center; gap: 3px; margin: 0 8px 0 16px; flex-shrink: 0; white-space: nowrap;
   font-size: 13px; line-height: 1; cursor: pointer; user-select: none;
 }
 #nrn-header-ng-toggle input { margin: 0; }

@@ -47,7 +47,9 @@ try {
     // BRUSH-067: full bar stays in the content area; only the NG toggle is
     // duplicated into the header slot. Both show the count and stay in sync.
     const bar = await page.evaluate(async () => {
-      const header = document.querySelector('header .d_flex.gap_base > #nrn-header-ng-toggle');
+      // BRUSH-073: placed right after the search block, not in the far-right slot.
+      const toggle = document.getElementById('nrn-header-ng-toggle');
+      const header = toggle && toggle.parentElement.matches('header') && toggle.previousElementSibling?.querySelector('form[role="search"]') ? toggle : null;
       const before = {barInHeader: !!document.querySelector('header #nrn-config-bar'), headerToggle: !!header,
         counts: [document.getElementById('nrn-ng-hidden-count')?.textContent, header?.querySelector('.nrn-ng-hidden-count')?.textContent]};
       header.querySelector('input').click();

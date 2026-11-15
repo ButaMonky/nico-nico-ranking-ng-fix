@@ -31,7 +31,7 @@ try {
       };
       requestAnimationFrame(() => { window.__firstPaint3 = getComputedStyle(document.querySelector('[data-decoration-video-id="ss90000003"]') || document.body).display; });
     });
-    await page.addInitScript({content: source});
+    await page.addInitScript({content: source.replace('page._sourceUrl = location.href', 'page._sourceUrl = location.href; window.testPage = page')});
     await page.goto('http://nrn.test' + path);
     // NG-by-ID cards skip details, so wait for the details of the others.
     await page.waitForFunction(() => {
@@ -50,6 +50,18 @@ try {
     assert.ok(r.hidden.includes('ss90000002'), path + ': detail-based NG tag hides a shorts card');
     assert.ok(r.hidden.includes('ss90000003'), path + ': NG video ID hides a shorts card');
     assert.equal(r.firstPaint3, 'none', path + ': NG shorts ID hidden before first paint');
+    // BRUSH-073: a card built by AutoFill for a short has the native shorts shape.
+    const tile = await page.evaluate(() => {
+      const root = testPage._createInjectedTile({id:'ss91000001', title:'<b>t</b>', registeredAt:'2026-11-01T00:00:00+09:00', duration:19,
+        count:{view:1, comment:2}, owner:{type:'user', id:'5', name:'<i>o</i>', iconUrl:'data:,'},
+        thumbnail:{listingUrl:'data:,M', shortUrl:'data:,SHORT'}}, {deferAppend:true, deferActions:true});
+      return {portrait: !!root.querySelector('.asp_2\\:3'), landscape: !!root.querySelector('.asp_16\\:9'),
+        duration: !!root.querySelector('.pos_absolute time'), img: root.querySelector('img.mx_auto').getAttribute('src'),
+        href: root.querySelector('a').getAttribute('href'), page: root.dataset.anchorPage,
+        title: root.querySelector('.nrn-movie-title').textContent, ownerHtml: root.querySelector('p.fw_bold').innerHTML};
+    });
+    assert.deepEqual(tile, {portrait:true, landscape:false, duration:false, img:'data:,SHORT', href:'https://www.nicovideo.jp/shorts/ss91000001',
+      page: path.startsWith('/tag_shorts/') ? 'tag_shorts' : 'search_shorts', title:'<b>t</b>', ownerHtml:'&lt;i&gt;o&lt;/i&gt;'}, path + ': injected shorts card');
     assert.deepEqual(errors, [], path);
     await page.close();
   }
