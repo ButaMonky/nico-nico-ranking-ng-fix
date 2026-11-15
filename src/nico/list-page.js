@@ -765,20 +765,16 @@
         } else {
           return;
         }
+        // BRUSH-067: only "NG動画を表示" also goes into the sticky web header
+        // (the one holding the search form), in its empty right-hand slot.
+        const webHeader = this.doc.querySelector('header:has(form[role="search"])')
+        if (webHeader && bar.headerElem && !bar.headerElem.isConnected) {
+          const slot = webHeader.querySelector(':scope > div:last-child .d_flex.gap_base') || webHeader.querySelector(':scope > div:last-child') || webHeader
+          slot.prepend(bar.headerElem)
+        }
         if (bar.elem.isConnected) {
           return;
         }
-        // BRUSH-066: the sticky web header (the one holding the search form)
-        // stays on screen while scrolling, so the bar goes into its empty
-        // right-hand slot when that header exists.
-        const webHeader = this.doc.querySelector('header:has(form[role="search"])')
-        if (webHeader) {
-          const slot = webHeader.querySelector(':scope > div:last-child .d_flex.gap_base') || webHeader.querySelector(':scope > div:last-child') || webHeader
-          bar.elem.classList.add('nrn-config-bar-in-header')
-          slot.prepend(bar.elem)
-          return;
-        }
-        bar.elem.classList.remove('nrn-config-bar-in-header')
         const e = Array.from(this.doc.querySelectorAll('[aria-label="nicovideo-content"] section > div:first-of-type')).find(node => !node.closest('.nrn-parsed, [data-decoration-video-id], .nrn-movie-info-container, [data-anchor-detail="nicoad"]'));
         if (e) {
           e.after(bar.elem);
@@ -929,7 +925,8 @@
             relevant = true
           }
           // BRUSH-066: the header can re-render and drop the bar.
-          if (this.configBar && !this.configBar.elem.isConnected) parsePending = true
+          const bar = this.configBar
+          if (bar && (!bar.elem.isConnected || (bar.headerElem && !bar.headerElem.isConnected && this.doc.querySelector('header:has(form[role="search"])')))) parsePending = true
           parsePending ||= relevant
           if ((!parsePending && !ownerRoots.size) || this._mutationFrame != null) return
           this._mutationFrame = nrnRequestFrame(() => {
@@ -954,19 +951,12 @@
           attributeFilter:['class','href','data-anchor-href','data-group-ignore','data-anchor-area'], attributeOldValue:true})
       },
       get css() {
-        return ResultLayout.css + `/* BRUSH-066: settings bar inside the sticky web header (one line) */
-#nrn-config-bar.nrn-config-bar-in-header {
-  display: flex; align-items: center; gap: 4px; flex-wrap: nowrap; white-space: nowrap;
-  min-width: 0; max-width: 100%; overflow-x: auto; scrollbar-width: thin;
-  margin: 0; padding: 0 4px; font-size: 12px; line-height: 1.2;
-  background: transparent; border: 0; box-shadow: none;
+        return ResultLayout.css + `/* BRUSH-067: the header copy of "NG動画を表示" (one line, compact) */
+#nrn-header-ng-toggle {
+  display: inline-flex; align-items: center; gap: 3px; margin-right: 8px; white-space: nowrap;
+  font-size: 13px; line-height: 1; cursor: pointer; user-select: none;
 }
-#nrn-config-bar.nrn-config-bar-in-header label { display: inline-flex; align-items: center; gap: 2px; }
-#nrn-config-bar.nrn-config-bar-in-header select,
-#nrn-config-bar.nrn-config-bar-in-header button { font-size: 12px; padding: 1px 4px; }
-#nrn-config-bar.nrn-config-bar-in-header .nrn-detail-bulk-label { display: none; }
-header:has(> div:last-child #nrn-config-bar) > div:last-child { min-width: 0; }
-header:has(> div:last-child #nrn-config-bar) > div:last-child .d_flex.gap_base { min-width: 0; max-width: 100%; }
+#nrn-header-ng-toggle input { margin: 0; }
 .nrn-ng-hidden-count { margin-left: 2px; font-variant-numeric: tabular-nums; }
 #nrn-config-button,
 .nrn-visit-button:hover,

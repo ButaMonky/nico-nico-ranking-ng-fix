@@ -587,6 +587,10 @@
       var candidatePoolSeen = new Set()
       var candidateFilter = CandidateFilter.create(model.config)
       var totalCheapPrefilteredNg = 0
+      // BRUSH-067: candidates AutoFill dropped as NG before they became cards
+      // (cheap pre-check incl. NG memory, and Snapshot quick NG). Shown in the
+      // bar's NG total; NG cards that did reach the page are counted there.
+      page._autoFillNgExcluded = function() { return totalCheapPrefilteredNg + totalApiPrefilteredNg }
       var nextPageToFetch = page._currentPageNumber + 1
       var fetching = false
       var initialized = false
@@ -1060,6 +1064,7 @@
       }
 
       var updateStatus = function() {
+        page._refreshNgCount?.()
         if (page._disposed) return
         if (!badge) return
 

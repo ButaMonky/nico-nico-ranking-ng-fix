@@ -207,7 +207,8 @@
               var m = model.movies.get(r.movieId)
               if (m && m.ng) ids.add(r.movieId)
             }
-            configBar.setNgCount(ids.size, model.config.ngMovieVisible.value)
+            var excluded = typeof page._autoFillNgExcluded === 'function' ? page._autoFillNgExcluded() : 0
+            configBar.setNgCount(ids.size, model.config.ngMovieVisible.value, excluded)
           }
           var schedule = function() { if (!cancel && !page._disposed) cancel = nrnRequestFrame(update) }
           model.movieViewModes.on('movieViewModeChanged', schedule)

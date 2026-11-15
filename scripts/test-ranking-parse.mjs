@@ -44,9 +44,20 @@ try {
       badge: document.getElementById('nrn-status-badge')?.textContent || '',
     }));
     // BRUSH-066: settings bar lives in the sticky web header; NG count beside the checkbox.
-    const bar = await page.evaluate(() => ({inSlot: !!document.querySelector('header .d_flex.gap_base > #nrn-config-bar'),
-      count: document.getElementById('nrn-ng-hidden-count')?.textContent}));
-    assert.deepEqual(bar, {inSlot:true, count:'（2件非表示）'}, path + ': bar in header slot with NG count');
+    // BRUSH-067: full bar stays in the content area; only the NG toggle is
+    // duplicated into the header slot. Both show the count and stay in sync.
+    const bar = await page.evaluate(async () => {
+      const header = document.querySelector('header .d_flex.gap_base > #nrn-header-ng-toggle');
+      const before = {barInHeader: !!document.querySelector('header #nrn-config-bar'), headerToggle: !!header,
+        counts: [document.getElementById('nrn-ng-hidden-count')?.textContent, header?.querySelector('.nrn-ng-hidden-count')?.textContent]};
+      header.querySelector('input').click();
+      await new Promise(r => setTimeout(r, 50));
+      return {...before, synced: document.getElementById('nrn-ng-movie-visible-checkbox').checked && header.querySelector('input').checked,
+        shownNg: document.querySelectorAll('.nrn-is-ng:not(.nrn-hide)').length};
+    });
+    assert.deepEqual(bar, {barInHeader:false, headerToggle:true, counts:['（2件）','（2件）'], synced:true, shownNg:2}, path + ': header NG toggle');
+    await page.evaluate(() => document.querySelector('#nrn-header-ng-toggle input').click());
+    await page.waitForTimeout(50);
     assert.equal(budget.overflow, 0, path + ': target count must not hide native cards');
     assert.equal(budget.injected, 0, path); assert.equal(budget.pageFetches, 0, path);
     assert.match(budget.badge, /ランキングでは補充なし/, path);

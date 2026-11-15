@@ -5,7 +5,7 @@
 // @contributor  kengo321 (original)
 // @description  ニコニコ動画のランキング・検索結果にNG、複合NG、検索結果の自動補充を追加する非公式の改変版
 // @match        *://www.nicovideo.jp/*
-// @version      160.34
+// @version      160.35
 // @grant        unsafeWindow
 // @grant        GM_getValue
 // @grant        GM_setValue
@@ -203,7 +203,7 @@
 
   // This facade is scoped to this userscript; other scripts keep their console.
   var nrnConsoleConfig = null
-  var NRN_VERSION = '160.34'
+  var NRN_VERSION = '160.35'
   var nrnNativeConsole = globalThis.console
   var nrnConsoleCounts = {warnings:0,errors:0}
   var nrnSetConsoleConfig = function(config) { nrnConsoleConfig = config }
@@ -6144,8 +6144,18 @@ html[data-nrn-ui-theme="dark"] .nrn-contributor-ng-name-button:hover {
         result.remove()
         return result
       }
+      // BRUSH-067: a second "NG動画を表示" in the sticky web header, so it is
+      // reachable while scrolling. Same setting as the bar's checkbox.
+      var createHeaderToggle = function(doc) {
+        var e = doc.createElement('label')
+        e.id = 'nrn-header-ng-toggle'
+        e.title = 'このページでNGになっている動画の数'
+        e.innerHTML = '<input type=checkbox> NG動画を表示<span class=nrn-ng-hidden-count></span>'
+        return e
+      }
       var ConfigBar = function(doc) {
         this.elem = createConfigBar(doc)
+        this.headerElem = createHeaderToggle(doc)
       }
       ConfigBar.prototype = {
         get _viewModeSelect() {
@@ -6174,13 +6184,21 @@ html[data-nrn-ui-theme="dark"] .nrn-contributor-ng-name-button:hover {
         },
         set ngMovieVisible(visible) {
           this._ngMovieVisibleCheckbox.checked = visible
+          this.headerElem.querySelector('input').checked = visible
         },
         // BRUSH-066: number of NG videos on this page (hidden unless shown).
-        setNgCount(count, shown) {
-          var e = this.elem.querySelector('#nrn-ng-hidden-count')
-          if (!e) return
-          var text = count > 0 ? '（' + count + '件' + (shown ? '' : '非表示') + '）' : '（0件）'
-          if (e.textContent !== text) e.textContent = text
+        // excluded: AutoFill candidates dropped as NG before becoming cards.
+        setNgCount(count, shown, excluded) {
+          excluded = excluded > 0 ? excluded : 0
+          var total = count + excluded
+          var text = '（' + total + '件）'
+          var title = 'NG ' + total + '件：このページ ' + count + '件' + (count && !shown ? '（非表示）' : '') + (excluded ? '、自動継ぎ足しで除外 ' + excluded + '件' : '')
+          for (var host of [this.elem, this.headerElem]) {
+            var e = host.querySelector('.nrn-ng-hidden-count')
+            if (e && e.textContent !== text) e.textContent = text
+            var label = e?.closest('label')
+            if (label && label.title !== title) label.title = title
+          }
         },
         bindToConfig(config) {
           this.visitedMovieViewMode = config.visitedMovieViewMode.value
@@ -6189,6 +6207,9 @@ html[data-nrn-ui-theme="dark"] .nrn-contributor-ng-name-button:hover {
           config.visitedMovieViewMode.on('changed', set(this, 'visitedMovieViewMode'))
           config.visibleContributorType.on('changed', set(this, 'visibleContributorType'))
           config.ngMovieVisible.on('changed', set(this, 'ngMovieVisible'))
+          this.headerElem.querySelector('input').addEventListener('change', function(ev) {
+            config.ngMovieVisible.value = ev.target.checked
+          })
           return this
         },
       }
@@ -6229,6 +6250,7 @@ html[data-nrn-ui-theme="dark"] .nrn-contributor-ng-name-button:hover {
         this.movieRoots = []
         for (const node of this._dialogNodes || []) node.remove()
         this.doc.getElementById('nrn-config-bar')?.remove()
+        this.doc.getElementById('nrn-header-ng-toggle')?.remove()
         this.doc.getElementById('nrn-status-badge')?.remove()
       },
       createConfigBar() {
@@ -7206,20 +7228,16 @@ html[data-nrn-ui-theme="dark"] .nrn-contributor-ng-name-button:hover {
         } else {
           return;
         }
+        // BRUSH-067: only "NG動画を表示" also goes into the sticky web header
+        // (the one holding the search form), in its empty right-hand slot.
+        const webHeader = this.doc.querySelector('header:has(form[role="search"])')
+        if (webHeader && bar.headerElem && !bar.headerElem.isConnected) {
+          const slot = webHeader.querySelector(':scope > div:last-child .d_flex.gap_base') || webHeader.querySelector(':scope > div:last-child') || webHeader
+          slot.prepend(bar.headerElem)
+        }
         if (bar.elem.isConnected) {
           return;
         }
-        // BRUSH-066: the sticky web header (the one holding the search form)
-        // stays on screen while scrolling, so the bar goes into its empty
-        // right-hand slot when that header exists.
-        const webHeader = this.doc.querySelector('header:has(form[role="search"])')
-        if (webHeader) {
-          const slot = webHeader.querySelector(':scope > div:last-child .d_flex.gap_base') || webHeader.querySelector(':scope > div:last-child') || webHeader
-          bar.elem.classList.add('nrn-config-bar-in-header')
-          slot.prepend(bar.elem)
-          return;
-        }
-        bar.elem.classList.remove('nrn-config-bar-in-header')
         const e = Array.from(this.doc.querySelectorAll('[aria-label="nicovideo-content"] section > div:first-of-type')).find(node => !node.closest('.nrn-parsed, [data-decoration-video-id], .nrn-movie-info-container, [data-anchor-detail="nicoad"]'));
         if (e) {
           e.after(bar.elem);
@@ -7370,7 +7388,8 @@ html[data-nrn-ui-theme="dark"] .nrn-contributor-ng-name-button:hover {
             relevant = true
           }
           // BRUSH-066: the header can re-render and drop the bar.
-          if (this.configBar && !this.configBar.elem.isConnected) parsePending = true
+          const bar = this.configBar
+          if (bar && (!bar.elem.isConnected || (bar.headerElem && !bar.headerElem.isConnected && this.doc.querySelector('header:has(form[role="search"])')))) parsePending = true
           parsePending ||= relevant
           if ((!parsePending && !ownerRoots.size) || this._mutationFrame != null) return
           this._mutationFrame = nrnRequestFrame(() => {
@@ -7395,19 +7414,12 @@ html[data-nrn-ui-theme="dark"] .nrn-contributor-ng-name-button:hover {
           attributeFilter:['class','href','data-anchor-href','data-group-ignore','data-anchor-area'], attributeOldValue:true})
       },
       get css() {
-        return ResultLayout.css + `/* BRUSH-066: settings bar inside the sticky web header (one line) */
-#nrn-config-bar.nrn-config-bar-in-header {
-  display: flex; align-items: center; gap: 4px; flex-wrap: nowrap; white-space: nowrap;
-  min-width: 0; max-width: 100%; overflow-x: auto; scrollbar-width: thin;
-  margin: 0; padding: 0 4px; font-size: 12px; line-height: 1.2;
-  background: transparent; border: 0; box-shadow: none;
+        return ResultLayout.css + `/* BRUSH-067: the header copy of "NG動画を表示" (one line, compact) */
+#nrn-header-ng-toggle {
+  display: inline-flex; align-items: center; gap: 3px; margin-right: 8px; white-space: nowrap;
+  font-size: 13px; line-height: 1; cursor: pointer; user-select: none;
 }
-#nrn-config-bar.nrn-config-bar-in-header label { display: inline-flex; align-items: center; gap: 2px; }
-#nrn-config-bar.nrn-config-bar-in-header select,
-#nrn-config-bar.nrn-config-bar-in-header button { font-size: 12px; padding: 1px 4px; }
-#nrn-config-bar.nrn-config-bar-in-header .nrn-detail-bulk-label { display: none; }
-header:has(> div:last-child #nrn-config-bar) > div:last-child { min-width: 0; }
-header:has(> div:last-child #nrn-config-bar) > div:last-child .d_flex.gap_base { min-width: 0; max-width: 100%; }
+#nrn-header-ng-toggle input { margin: 0; }
 .nrn-ng-hidden-count { margin-left: 2px; font-variant-numeric: tabular-nums; }
 #nrn-config-button,
 .nrn-visit-button:hover,
@@ -11339,7 +11351,8 @@ var CardActionData = (function () {
               var m = model.movies.get(r.movieId)
               if (m && m.ng) ids.add(r.movieId)
             }
-            configBar.setNgCount(ids.size, model.config.ngMovieVisible.value)
+            var excluded = typeof page._autoFillNgExcluded === 'function' ? page._autoFillNgExcluded() : 0
+            configBar.setNgCount(ids.size, model.config.ngMovieVisible.value, excluded)
           }
           var schedule = function() { if (!cancel && !page._disposed) cancel = nrnRequestFrame(update) }
           model.movieViewModes.on('movieViewModeChanged', schedule)
@@ -12319,6 +12332,10 @@ var CardActionData = (function () {
       var candidatePoolSeen = new Set()
       var candidateFilter = CandidateFilter.create(model.config)
       var totalCheapPrefilteredNg = 0
+      // BRUSH-067: candidates AutoFill dropped as NG before they became cards
+      // (cheap pre-check incl. NG memory, and Snapshot quick NG). Shown in the
+      // bar's NG total; NG cards that did reach the page are counted there.
+      page._autoFillNgExcluded = function() { return totalCheapPrefilteredNg + totalApiPrefilteredNg }
       var nextPageToFetch = page._currentPageNumber + 1
       var fetching = false
       var initialized = false
@@ -12792,6 +12809,7 @@ var CardActionData = (function () {
       }
 
       var updateStatus = function() {
+        page._refreshNgCount?.()
         if (page._disposed) return
         if (!badge) return
 

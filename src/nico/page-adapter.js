@@ -1104,8 +1104,18 @@
         result.remove()
         return result
       }
+      // BRUSH-067: a second "NG動画を表示" in the sticky web header, so it is
+      // reachable while scrolling. Same setting as the bar's checkbox.
+      var createHeaderToggle = function(doc) {
+        var e = doc.createElement('label')
+        e.id = 'nrn-header-ng-toggle'
+        e.title = 'このページでNGになっている動画の数'
+        e.innerHTML = '<input type=checkbox> NG動画を表示<span class=nrn-ng-hidden-count></span>'
+        return e
+      }
       var ConfigBar = function(doc) {
         this.elem = createConfigBar(doc)
+        this.headerElem = createHeaderToggle(doc)
       }
       ConfigBar.prototype = {
         get _viewModeSelect() {
@@ -1134,13 +1144,21 @@
         },
         set ngMovieVisible(visible) {
           this._ngMovieVisibleCheckbox.checked = visible
+          this.headerElem.querySelector('input').checked = visible
         },
         // BRUSH-066: number of NG videos on this page (hidden unless shown).
-        setNgCount(count, shown) {
-          var e = this.elem.querySelector('#nrn-ng-hidden-count')
-          if (!e) return
-          var text = count > 0 ? '（' + count + '件' + (shown ? '' : '非表示') + '）' : '（0件）'
-          if (e.textContent !== text) e.textContent = text
+        // excluded: AutoFill candidates dropped as NG before becoming cards.
+        setNgCount(count, shown, excluded) {
+          excluded = excluded > 0 ? excluded : 0
+          var total = count + excluded
+          var text = '（' + total + '件）'
+          var title = 'NG ' + total + '件：このページ ' + count + '件' + (count && !shown ? '（非表示）' : '') + (excluded ? '、自動継ぎ足しで除外 ' + excluded + '件' : '')
+          for (var host of [this.elem, this.headerElem]) {
+            var e = host.querySelector('.nrn-ng-hidden-count')
+            if (e && e.textContent !== text) e.textContent = text
+            var label = e?.closest('label')
+            if (label && label.title !== title) label.title = title
+          }
         },
         bindToConfig(config) {
           this.visitedMovieViewMode = config.visitedMovieViewMode.value
@@ -1149,6 +1167,9 @@
           config.visitedMovieViewMode.on('changed', set(this, 'visitedMovieViewMode'))
           config.visibleContributorType.on('changed', set(this, 'visibleContributorType'))
           config.ngMovieVisible.on('changed', set(this, 'ngMovieVisible'))
+          this.headerElem.querySelector('input').addEventListener('change', function(ev) {
+            config.ngMovieVisible.value = ev.target.checked
+          })
           return this
         },
       }
@@ -1189,6 +1210,7 @@
         this.movieRoots = []
         for (const node of this._dialogNodes || []) node.remove()
         this.doc.getElementById('nrn-config-bar')?.remove()
+        this.doc.getElementById('nrn-header-ng-toggle')?.remove()
         this.doc.getElementById('nrn-status-badge')?.remove()
       },
       createConfigBar() {
