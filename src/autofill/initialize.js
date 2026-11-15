@@ -323,7 +323,7 @@
       model.config.autoFillEnabled.on('changed', function(enabled) {
         stopRefillIfUnneeded()
         rebalanceOverflow()
-        if (enabled) {
+        if (enabled && (typeof autoFillActive === 'function' ? autoFillActive() : model.config.autoFillEnabled.value)) {
           gaveUp = false
           stopReason = ''
           finishedAt = null
@@ -332,7 +332,7 @@
           setPhase('starting', '再開')
           maybeFetchMore()
         } else {
-          setPhase('disabled', '自動継ぎ足しOFF')
+          setPhase('disabled', (typeof disabledPhaseText === 'function' ? disabledPhaseText() : '自動継ぎ足しOFF'))
         }
       })
 

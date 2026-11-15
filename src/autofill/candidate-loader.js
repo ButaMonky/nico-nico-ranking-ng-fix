@@ -9,7 +9,7 @@
         var mayRequest = function() {
           var limit = Number(model.config.autoFillMaxExtraPages.value) || 0
           return !page._disposed && !signal?.aborted && issuedThisCall < sourceWindowLimit
-            && model.config.autoFillEnabled.value && (limit <= 0 || fetchedExtraPages < limit)
+            && (typeof autoFillActive === 'function' ? autoFillActive() : model.config.autoFillEnabled.value) && (limit <= 0 || fetchedExtraPages < limit)
         }
 
         if (useSnapshot) {

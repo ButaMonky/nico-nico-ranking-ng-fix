@@ -11480,7 +11480,7 @@ var CardActionData = (function () {
       var runLifetime = new AbortController()
       var refillController = null
       var stopRefillIfUnneeded = function() {
-        if (refillController && (page._disposed || !model.config.autoFillEnabled.value
+        if (refillController && (page._disposed || !autoFillActive()
             || (visibleTotalCount() >= targetCount() && !hasEarlierCandidate()))) refillController.abort()
       }
       var clearTimeout = function(id) { timers.delete(id); globalThis.clearTimeout(id) }
@@ -12058,6 +12058,15 @@ var CardActionData = (function () {
       var endReachedWithoutRequest = false
       var paginationDetectionHistory = []
 
+      // BRUSH-063: ranking pages are a fixed list. The display target and
+      // AutoFill do not apply there; every native card stays as the site shows it.
+      var isRankingRoute = function() { return typeof location !== 'undefined' && /^\/ranking\//.test(String(location.pathname || '')) }
+      var autoFillActive = function() {
+        return Boolean(model.config.autoFillEnabled.value) && !isRankingRoute()
+      }
+      var disabledPhaseText = function() {
+        return isRankingRoute() ? 'ランキングでは補充なし' : '自動継ぎ足しOFF'
+      }
       var targetCount = function() {
         var n = Number(model.config.autoFillTargetCount.value)
         return Number.isFinite(n) && n > 0 ? Math.floor(n) : 36
@@ -12266,11 +12275,17 @@ var CardActionData = (function () {
         }).length
       }
 
+      // BRUSH-063: the target count is only a goal for how many cards to load.
+      // Native cards are never hidden to trim the page down to it; only
+      // injected candidates beyond the remaining slots stay hidden as spares.
       var rebalanceOverflow = function() {
-        var roots = connectedOriginalRoots().concat(connectedInjectedRoots())
-        var eligible = visibleCardRoots(roots, true)
-        var enabled = model.config.autoFillEnabled.value
-        var overflow = new Set(enabled ? eligible.slice(targetCount()).map(function(r) { return r.elem }) : [])
+        var originals = connectedOriginalRoots(), injected = connectedInjectedRoots()
+        var roots = originals.concat(injected)
+        var overflow = new Set()
+        if (autoFillActive()) {
+          var slots = Math.max(0, targetCount() - visibleCardRoots(originals, true).length)
+          visibleCardRoots(injected, true).slice(slots).forEach(function(r) { overflow.add(r.elem) })
+        }
         // Never remove/re-add the same class on every metadata event. Keep all
         // cards/models for reversible target and NG-setting changes.
         roots.forEach(function(r) {
@@ -12505,7 +12520,9 @@ var CardActionData = (function () {
         if (mode === 'compact') {
           badge.textContent = [
             phaseText(),
-            initialized
+            isRankingRoute()
+              ? (initialized ? visibleTotalCount() + '件表示' : '判定中')
+              : initialized
               ? visibleTotalCount() + ' / ' + targetCount() + '件'
               : '判定中 / ' + targetCount() + '件',
             phaseDetail || '',
@@ -12526,7 +12543,9 @@ var CardActionData = (function () {
           '状態：' + phaseText(),
           phaseDetail ? '処理：' + phaseDetail : '',
           '取得方式：' + sourceLabel + (fallbackReason ? '（fallback: ' + fallbackReason + '）' : ''),
-          initialized
+          isRankingRoute()
+            ? (initialized ? '表示動画：' + visibleTotalCount() + '件（ランキングは目標件数なし）' : '表示動画：判定中')
+            : initialized
             ? '表示動画：' + visibleTotalCount() + ' / 目標 ' + targetCount() + '件'
             : '表示動画：判定中 / 目標 ' + targetCount() + '件',
           initialized ? '現在ページのNG：' + originalNgCount() + '件' : '現在ページのNG：判定中',
@@ -13721,7 +13740,7 @@ var CardActionData = (function () {
         var mayRequest = function() {
           var limit = Number(model.config.autoFillMaxExtraPages.value) || 0
           return !page._disposed && !signal?.aborted && issuedThisCall < sourceWindowLimit
-            && model.config.autoFillEnabled.value && (limit <= 0 || fetchedExtraPages < limit)
+            && (typeof autoFillActive === 'function' ? autoFillActive() : model.config.autoFillEnabled.value) && (limit <= 0 || fetchedExtraPages < limit)
         }
 
         if (useSnapshot) {
@@ -14346,8 +14365,8 @@ var CardActionData = (function () {
           return
         }
 
-        if (!model.config.autoFillEnabled.value) {
-          setPhase('disabled', '自動継ぎ足しOFF')
+        if (!(typeof autoFillActive === 'function' ? autoFillActive() : model.config.autoFillEnabled.value)) {
+          setPhase('disabled', (typeof disabledPhaseText === 'function' ? disabledPhaseText() : '自動継ぎ足しOFF'))
           return
         }
 
@@ -14427,7 +14446,7 @@ var CardActionData = (function () {
 
           // A user action or another settled card may have removed the need
           // while the source was loading. Keep raw candidates for later use.
-          if (!model.config.autoFillEnabled.value) { setPhase('disabled','自動継ぎ足しOFF'); return }
+          if (!(typeof autoFillActive === 'function' ? autoFillActive() : model.config.autoFillEnabled.value)) { setPhase('disabled',(typeof disabledPhaseText === 'function' ? disabledPhaseText() : '自動継ぎ足しOFF')); return }
           if (cycleController.signal.aborted || (visibleTotalCount() >= targetCount() && !hasEarlierCandidate())) return
 
           if (!candidatePool.length) {
@@ -14563,7 +14582,7 @@ var CardActionData = (function () {
           if (page._disposed) return
           updateStatus()
 
-          if (!gaveUp && model.config.autoFillEnabled.value) {
+          if (!gaveUp && (typeof autoFillActive === 'function' ? autoFillActive() : model.config.autoFillEnabled.value)) {
             if (visibleTotalCount() >= targetCount() && !hasEarlierCandidate()) {
               setPhase('completed', '目標件数に到達')
               if (!completionReported) {
@@ -15485,7 +15504,7 @@ var CardActionData = (function () {
       model.config.autoFillEnabled.on('changed', function(enabled) {
         stopRefillIfUnneeded()
         rebalanceOverflow()
-        if (enabled) {
+        if (enabled && (typeof autoFillActive === 'function' ? autoFillActive() : model.config.autoFillEnabled.value)) {
           gaveUp = false
           stopReason = ''
           finishedAt = null
@@ -15494,7 +15513,7 @@ var CardActionData = (function () {
           setPhase('starting', '再開')
           maybeFetchMore()
         } else {
-          setPhase('disabled', '自動継ぎ足しOFF')
+          setPhase('disabled', (typeof disabledPhaseText === 'function' ? disabledPhaseText() : '自動継ぎ足しOFF'))
         }
       })
 

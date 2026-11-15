@@ -19,7 +19,10 @@ try {
     await page.goto('http://nrn.test' + path);
     await page.setContent(fixture);
     await page.evaluate(() => {
-      window.GM_getValue = (k, d) => ({ngTags:'["ng-tag"]'})[k] ?? d;
+      // AutoFill ON with a target below the card count: ranking must ignore both.
+      window.GM_getValue = (k, d) => ({ngTags:'["ng-tag"]', autoFillEnabled:true, autoFillTargetCount:1})[k] ?? d;
+      window.pageFetches = 0;
+      window.fetch = () => { pageFetches++; return new Promise(() => {}) };
       window.GM_setValue = () => {};
       window.GM_xmlhttpRequest = o => {
         const id = o.url.split('/').pop(), tag = id.endsWith('2') ? 'ng-tag' : 'ok';
@@ -32,8 +35,18 @@ try {
       && [...document.querySelectorAll('.nrn-parsed')].every(c => c.classList.contains('nrn-thumb-info-done')), null, {timeout:5000});
     const hidden = await page.evaluate(() => [...document.querySelectorAll('.nrn-hide')].map(e => e.dataset.decorationVideoId));
     assert.deepEqual(hidden, ['sm91000002'], path);
+    await page.waitForTimeout(500);
+    const budget = await page.evaluate(() => ({
+      overflow: document.querySelectorAll('.nrn-autofill-overflow').length,
+      injected: document.querySelectorAll('[data-nrn-autofill="true"]').length,
+      pageFetches,
+      badge: document.getElementById('nrn-status-badge')?.textContent || '',
+    }));
+    assert.equal(budget.overflow, 0, path + ': target count must not hide native cards');
+    assert.equal(budget.injected, 0, path); assert.equal(budget.pageFetches, 0, path);
+    assert.match(budget.badge, /ランキングでは補充なし/, path);
     assert.deepEqual(errors, [], path);
     await page.close();
   }
-  console.log('Ranking parse PASS: genre/custom ranking cards are parsed and NG-hidden.');
+  console.log('Ranking parse PASS: genre/custom ranking cards are parsed and NG-hidden; no target trimming or AutoFill on ranking.');
 } finally { await browser.close(); }

@@ -57,8 +57,11 @@ try{
   records.push({mode,...result,errors});
   assert.deepEqual(errors,[],mode);
   assert.equal(result.wire.other,0,'no unplanned metadata transport');
-  assert.equal(result.displayedCards,36,mode+': visible cards include ads, not unique IDs');
-  assert.equal(result.state.total,36,mode+': reported count agrees with screen');
+  // BRUSH-063: the target is only a loading goal. Native cards (36 ordinary +
+  // 5 ad slots) are never hidden to trim the page down to it.
+  const expectedVisible=mode.startsWith('refill-')?36:41;
+  assert.equal(result.displayedCards,expectedVisible,mode+': visible cards include ads, not unique IDs');
+  assert.equal(result.state.total,expectedVisible,mode+': reported count agrees with screen');
   assert.equal(result.displayedAds,5,mode+': five first-position ad slots count toward target');
   if(mode.startsWith('refill-')){
    assert.equal(result.state.original,13,'8 ordinary + 5 ad slots');
@@ -68,13 +71,15 @@ try{
    console.log(mode+' PASS');await context.close();continue;
   }
   const order=await page.evaluate(()=>{const roots=[...testPage.movieRoots].sort((a,b)=>a.elem.compareDocumentPosition(b.elem)&4?-1:1);return {all:roots.map(r=>r.movieId),visible:roots.filter(r=>r.elem.getClientRects().length).map(r=>r.movieId)};});
-  assert.deepEqual(order.visible,order.all.slice(0,36),mode+': native document order is retained');
+  assert.deepEqual(order.visible,order.all,mode+': every native card stays visible in document order');
+  assert.equal(await page.evaluate(()=>document.querySelectorAll('.nrn-autofill-overflow').length),0,mode+': no native overflow');
   const requestsBefore=await page.evaluate(()=>wire.page);
   await page.evaluate(()=>testModel.config.ngMovies.add('sm1'));
-  await page.waitForFunction(()=>countProbe().total===36&&!countProbe().fetching&&testPage.movieRoots.filter(r=>r.movieId==='sm1').every(r=>!r.elem.getClientRects().length),{},{timeout:10000});
-  assert.equal(await page.evaluate(()=>wire.page),requestsBefore,'spare cards are reused without an unnecessary fetch');
+  const afterNg=mode==='duplicate-ads'?39:40; // sm1 is also one of the duplicate ad slots
+  await page.waitForFunction(n=>countProbe().total===n&&!countProbe().fetching&&testPage.movieRoots.filter(r=>r.movieId==='sm1').every(r=>!r.elem.getClientRects().length),afterNg,{timeout:10000});
+  assert.equal(await page.evaluate(()=>wire.page),requestsBefore,'still above target: no fetch');
   await page.evaluate(()=>testModel.config.ngMovies.clear());
-  await page.waitForFunction(()=>countProbe().total===36&&!countProbe().fetching,{},{timeout:10000});
+  await page.waitForFunction(()=>countProbe().total===41&&!countProbe().fetching,{},{timeout:10000});
   const writes=await page.evaluate(()=>{
    const observer=new MutationObserver(()=>{});
    observer.observe(document.getElementById('cards'),{subtree:true,attributes:true,attributeFilter:['class']});
@@ -82,16 +87,16 @@ try{
    const count=observer.takeRecords().length;observer.disconnect();return count;
   });
   assert.equal(writes,0,'a stable rebalance must not remove/re-add overflow classes');
-  await page.evaluate(()=>testModel.config.autoFillTargetCount.value=40);
-  await page.waitForFunction(()=>countProbe().total===40&&!countProbe().fetching,{},{timeout:10000});
-  assert.equal(await page.evaluate(()=>testPage.movieRoots.filter(r=>r.elem.isConnected&&r.elem.getClientRects().length).length),40);
+  await page.evaluate(()=>testModel.config.autoFillTargetCount.value=20);
+  await page.waitForTimeout(300);
+  assert.equal(await page.evaluate(()=>testPage.movieRoots.filter(r=>r.elem.isConnected&&r.elem.getClientRects().length).length),41,'a lower target never hides native cards');
   await page.evaluate(()=>testModel.config.autoFillTargetCount.value=36);
-  await page.waitForFunction(()=>countProbe().total===36&&!countProbe().fetching,{},{timeout:10000});
+  await page.waitForFunction(()=>countProbe().total===41&&!countProbe().fetching,{},{timeout:10000});
   await page.evaluate(()=>testModel.config.autoFillEnabled.value=false);
   await page.waitForFunction(()=>testPage.movieRoots.every(r=>!r.elem.classList.contains('nrn-autofill-overflow')),{},{timeout:10000});
   assert.equal(await page.evaluate(()=>testPage.movieRoots.filter(r=>r.elem.isConnected&&r.elem.getClientRects().length).length),41,'OFF restores, never deletes');
   console.log(mode+' PASS');
   await context.close();
  }
- console.log('Card budget PASS: physical slots include duplicate/late/native ads, target changes restore source order, OFF restores all; synthetic only.');
+ console.log('Card budget PASS: physical slots include duplicate/late/native ads; native cards are never trimmed to the target; refill fills to the target; synthetic only.');
 }finally{await browser.close();}

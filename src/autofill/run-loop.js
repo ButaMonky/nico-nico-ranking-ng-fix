@@ -7,8 +7,8 @@
           return
         }
 
-        if (!model.config.autoFillEnabled.value) {
-          setPhase('disabled', '自動継ぎ足しOFF')
+        if (!(typeof autoFillActive === 'function' ? autoFillActive() : model.config.autoFillEnabled.value)) {
+          setPhase('disabled', (typeof disabledPhaseText === 'function' ? disabledPhaseText() : '自動継ぎ足しOFF'))
           return
         }
 
@@ -88,7 +88,7 @@
 
           // A user action or another settled card may have removed the need
           // while the source was loading. Keep raw candidates for later use.
-          if (!model.config.autoFillEnabled.value) { setPhase('disabled','自動継ぎ足しOFF'); return }
+          if (!(typeof autoFillActive === 'function' ? autoFillActive() : model.config.autoFillEnabled.value)) { setPhase('disabled',(typeof disabledPhaseText === 'function' ? disabledPhaseText() : '自動継ぎ足しOFF')); return }
           if (cycleController.signal.aborted || (visibleTotalCount() >= targetCount() && !hasEarlierCandidate())) return
 
           if (!candidatePool.length) {
@@ -224,7 +224,7 @@
           if (page._disposed) return
           updateStatus()
 
-          if (!gaveUp && model.config.autoFillEnabled.value) {
+          if (!gaveUp && (typeof autoFillActive === 'function' ? autoFillActive() : model.config.autoFillEnabled.value)) {
             if (visibleTotalCount() >= targetCount() && !hasEarlierCandidate()) {
               setPhase('completed', '目標件数に到達')
               if (!completionReported) {
