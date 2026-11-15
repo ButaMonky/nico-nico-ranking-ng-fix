@@ -790,7 +790,10 @@
           // Native cards are visible during initial checks. Injected candidates
           // still wait for evaluation before occupying a display slot.
           if (r.elem.dataset.nrnAutofill === 'true' && model.config.useGetThumbInfo.value && !movie.metadataSettled) return false
-          if (movie.ng && !model.config.ngMovieVisible.value) return false
+          // BRUSH-069: the target counts normal (non-NG) videos only. Showing
+          // NG videos ("NG動画を表示") must not fill the target or let the
+          // target hide anything, so NG cards are never counted here.
+          if (movie.ng) return false
           if (r.elem.classList.contains('nrn-hide')) return false
           if (r.elem.classList.contains('nrn-autofill-pending')) return false
           if (!ignoreOverflow && r.elem.classList.contains('nrn-autofill-overflow')) return false
@@ -1113,8 +1116,8 @@
           isRankingRoute()
             ? (initialized ? '表示動画：' + visibleTotalCount() + '件（ランキングは目標件数なし）' : '表示動画：判定中')
             : initialized
-            ? '表示動画：' + visibleTotalCount() + ' / 目標 ' + targetCount() + '件'
-            : '表示動画：判定中 / 目標 ' + targetCount() + '件',
+            ? '正常な動画：' + visibleTotalCount() + ' / 目標 ' + targetCount() + '件'
+            : '正常な動画：判定中 / 目標 ' + targetCount() + '件',
           initialized ? '現在ページのNG：' + originalNgCount() + '件' : '現在ページのNG：判定中',
           '追加分：表示 ' + visibleInjectedCount() + '件 / NG ' + injectedNgCount() + '件',
           '候補プール：' + candidatePool.length + '件 / 詳細判定済み ' + totalDetailChecked + '件',

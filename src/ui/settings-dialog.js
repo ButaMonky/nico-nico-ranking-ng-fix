@@ -804,7 +804,7 @@
         <div class=sectionBody>
           <div class=row><label><input type=checkbox id=autoFillEnabled>表示動画数が目標に達するまで自動追加</label></div>
           <div class=grid2>
-            <div class=row><label>表示動画数の目標 <input type=number id=autoFillTargetCount min=1> 件</label></div>
+            <div class=row><label>正常な動画がこの数になるまで補充 <input type=number id=autoFillTargetCount min=1> 件</label></div>
             <div class=row><label>追加取得上限 <input type=number id=autoFillMaxExtraPages min=0> 単位</label><small>0=無制限</small></div>
           </div>
           <div class=row stack><label>候補取得方式
@@ -923,7 +923,7 @@
 
   var help = {
     autoFillEnabled: 'NGで減った分を、次のページから自動で補います。OFFでは現在のページだけをNG判定します。',
-    autoFillTargetCount: '表示したい動画数です。例：60なら、NGを除いて60件になるまで補充します。検索結果の終わりでは60件未満になることがあります。',
+    autoFillTargetCount: '自動継ぎ足しで補充する目標です。NGではない動画がこの数になるまで次のページから追加します。表示する数を決める設定ではありません：ページ本来の動画は数に関係なく全部表示し、「NG動画を表示」のときもNG動画は数えません。ランキングでは使いません。',
     autoFillMaxExtraPages: '1回の検索で追加取得してよい上限です。少なくすると通信量を抑えられます。0は制限なしなので、NGが多い検索では取得が長く続くことがあります。',
     autoFillInfoMode: '従来方式はニコニコのページ順を使います。API方式はまとめて候補を取得しますが、検索条件や並び順を再現できない場合は従来方式に戻ります。「同じ投稿者の動画数」を使う場合も従来方式です。変更は次の検索移動または再読み込みから反映します。',
     thumbInfoConcurrency: 'GetThumbInfoを同時に取得する本数です。大きすぎると通信失敗が増える場合があります。',

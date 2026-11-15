@@ -78,6 +78,15 @@ try{
   const afterNg=mode==='duplicate-ads'?39:40; // sm1 is also one of the duplicate ad slots
   await page.waitForFunction(n=>countProbe().total===n&&!countProbe().fetching&&testPage.movieRoots.filter(r=>r.movieId==='sm1').every(r=>!r.elem.getClientRects().length),afterNg,{timeout:10000});
   assert.equal(await page.evaluate(()=>wire.page),requestsBefore,'still above target: no fetch');
+  // BRUSH-069: showing NG videos neither counts them toward the target nor
+  // lets the target hide any card.
+  await page.evaluate(()=>testModel.config.ngMovieVisible.value=true);
+  await page.waitForTimeout(200);
+  const shown=await page.evaluate(()=>({total:countProbe().total,
+    ngVisible:testPage.movieRoots.filter(r=>r.movieId==='sm1').every(r=>r.elem.getClientRects().length>0),
+    overflow:document.querySelectorAll('.nrn-autofill-overflow').length}));
+  assert.deepEqual(shown,{total:afterNg,ngVisible:true,overflow:0},mode+': NG shown: count unchanged, NG visible, nothing trimmed');
+  await page.evaluate(()=>testModel.config.ngMovieVisible.value=false);
   await page.evaluate(()=>testModel.config.ngMovies.clear());
   await page.waitForFunction(()=>countProbe().total===41&&!countProbe().fetching,{},{timeout:10000});
   const writes=await page.evaluate(()=>{
