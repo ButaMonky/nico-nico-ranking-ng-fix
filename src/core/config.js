@@ -163,6 +163,8 @@
       // sessionStorageベースの詳細情報キャッシュ。SPA対策のreloadを跨いで同一タブ内で再利用。
       this.sessionDetailCacheTtlMinutes = store('sessionDetailCacheTtlMinutes', 360);
       this.sessionDetailCacheMaxEntries = store('sessionDetailCacheMaxEntries', 1500);
+      // BRUSH-060: 一度NGと確定した動画を理由つきで記憶し、次回から詳細取得前に仮非表示にする。
+      this.ngVerdictCacheEnabled = store('ngVerdictCacheEnabled', true);
     }
     Config.prototype.sync = function() {
       return Promise.all([
@@ -206,6 +208,7 @@
         this.pagerPreviewCount.sync(),
         this.sessionDetailCacheTtlMinutes.sync(),
         this.sessionDetailCacheMaxEntries.sync(),
+        this.ngVerdictCacheEnabled.sync(),
       ])
     }
     Config.prototype.toCSV = async function(targetTypes) {

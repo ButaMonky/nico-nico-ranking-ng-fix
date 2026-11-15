@@ -294,6 +294,51 @@
   })()
 
 
+  // Background tabs never run requestAnimationFrame and throttle timers, so a
+  // pipeline that waits for a frame stalls until the tab is shown again.
+  // nrnRequestFrame runs fn on the next frame while the page is visible. While
+  // it is hidden, a MessageChannel task (not throttled like timers) runs it.
+  // A visible-path timer covers a tab hidden after scheduling. First one wins.
+  // Returns a cancel function. Callers that only need "after the current
+  // task, before the next paint if visible" can use this instead of rAF.
+  var nrnRequestFrame = (function() {
+    var channel = null, queue = []
+    var postTask = function(run) {
+      if (typeof MessageChannel !== 'function') return setTimeout(run, 0)
+      if (!channel) {
+        channel = new MessageChannel()
+        channel.port1.onmessage = function() {
+          var tasks = queue; queue = []
+          for (var task of tasks) task()
+        }
+        // unref exists only in Node (tests); browsers do not have it.
+        if (typeof channel.port1.unref === 'function') channel.port1.unref()
+      }
+      queue.push(run)
+      if (queue.length === 1) channel.port2.postMessage(0)
+    }
+    return function(fn) {
+      var g = globalThis, done = false, raf = null, timer = null
+      var cancel = function() {
+        done = true
+        if (raf !== null && typeof g.cancelAnimationFrame === 'function') g.cancelAnimationFrame(raf)
+        if (timer !== null) clearTimeout(timer)
+        raf = timer = null
+      }
+      var run = function() { if (done) return; cancel(); fn() }
+      var hidden = Boolean(g.document && g.document.hidden)
+      if (hidden || typeof g.requestAnimationFrame !== 'function') postTask(run)
+      else {
+        raf = g.requestAnimationFrame(run)
+        timer = setTimeout(function() {
+          if (!done && g.document && g.document.hidden) run()
+        }, 200)
+      }
+      return cancel
+    }
+  })()
+  var nrnCancelFrame = function(cancel) { if (typeof cancel === 'function') cancel() }
+
   // BRUSH-012A: one place that parses user/channel IDs without rounding.
   // A string is validated as decimal digits first and never passes through
   // Number before that, so "9007199254740993" cannot become ...992.
@@ -675,6 +720,8 @@
       // sessionStorageベースの詳細情報キャッシュ。SPA対策のreloadを跨いで同一タブ内で再利用。
       this.sessionDetailCacheTtlMinutes = store('sessionDetailCacheTtlMinutes', 360);
       this.sessionDetailCacheMaxEntries = store('sessionDetailCacheMaxEntries', 1500);
+      // BRUSH-060: 一度NGと確定した動画を理由つきで記憶し、次回から詳細取得前に仮非表示にする。
+      this.ngVerdictCacheEnabled = store('ngVerdictCacheEnabled', true);
     }
     Config.prototype.sync = function() {
       return Promise.all([
@@ -718,6 +765,7 @@
         this.pagerPreviewCount.sync(),
         this.sessionDetailCacheTtlMinutes.sync(),
         this.sessionDetailCacheMaxEntries.sync(),
+        this.ngVerdictCacheEnabled.sync(),
       ])
     }
     Config.prototype.toCSV = async function(targetTypes) {
@@ -1929,12 +1977,316 @@
       OP_META:OP_META
     }
   })()
-  // Pre-DOM decisions may use only fields that a later detail cannot replace.
+  // BRUSH-060: NG判定結果の記憶（高速非表示）。
+  //
+  // 一度タグ・投稿者・ロックタグ数・複合NGでNGと確定した動画IDを、理由つきで
+  // 端末に保存する。次回以降は詳細取得（getthumbinfo）を待たずに、カードが
+  // DOMへ入った直後（描画前のMutationObserver）に仮非表示にし、AutoFill候補は
+  // 通信前に落とす。手動の「NG動画ID」一覧とは別に保存するため、利用者の一覧を
+  // 汚さず、NG設定の削除・変更で自動的に無効になる。
+  //
+  // 記録する理由（どれか1つ）と有効条件:
+  //   u:<id>    投稿者ID/チャンネルIDがNG一覧に残っている
+  //   n:<NAME>  NG投稿者名の語が一覧に残っている
+  //   t:<TAG>   NGタグが一覧に残っている
+  //   l:<TAG>   NGロックタグが一覧に残っている
+  //   k:<n>     ロックタグ数NGが有効で、しきい値が同じ
+  //   r:<hash>  複合NGが有効で、ルールJSONが同じ
+  // 動画IDNG・タイトルNGは最初からDOMだけで即判定できるため記録しない。
+  //
+  // 仮非表示は確定ではない。通常の判定が終わってNGでなければ記録を消して
+  // 表示に戻す（タグ変更などで結果が変わった動画を取り違えない）。
+  var NgVerdictCache = (function() {
+    const KEY = 'ngVerdictCache'
+    const ENABLED_KEY = 'ngVerdictCacheEnabled'
+    const MAX_ENTRIES = 10000
+    const TTL_MS = 30 * 24 * 60 * 60 * 1000
+    const VIDEO_ID = /^(sm|so|nm)[0-9]+$/
+    const PREHIDE_ATTR = 'data-nrn-prehide'
+    const SAFETY_RELEASE_MS = 20000
+    const CSS = '[' + PREHIDE_ATTR + '] { display: none !important; }'
+
+    const hash = function(text) {
+      let h = 2166136261
+      for (const ch of String(text)) { h ^= ch.codePointAt(0); h = Math.imul(h, 16777619) >>> 0 }
+      return h.toString(36)
+    }
+    const upperSet = values => new Set(values.filter(v => typeof v === 'string').map(v => v.toUpperCase()))
+    const idSet = values => new Set(values.map(v => String(v)))
+    const valueOf = v => v === Object(v) ? v.value : v
+
+    // Reasons are validated against the current settings. Both the early
+    // (document-start, raw GM values) and the normal (Config) paths build this.
+    const index = function(lists) {
+      return {
+        ownerIds: idSet([...lists.userIds, ...lists.channelIds]),
+        ownerNames: upperSet(lists.userNames),
+        tags: upperSet(lists.tags),
+        lockedTags: upperSet(lists.lockedTags),
+        lockCount: lists.lockCountEnabled ? String(lists.lockCountThreshold) : null,
+        rules: lists.rulesEnabled ? hash(lists.rulesJson) : null,
+      }
+    }
+    const indexFromConfig = function(config) {
+      return index({
+        userIds: config.ngUserIds.array, channelIds: config.ngChannelIds.array,
+        userNames: config.ngUserNames.array, tags: config.ngTags.array,
+        lockedTags: config.ngLockedTags.array,
+        lockCountEnabled: config.ngLockedTagCountEnabled.value,
+        lockCountThreshold: config.ngLockedTagCountThreshold.value,
+        rulesEnabled: config.advancedNgRulesEnabled.value,
+        rulesJson: config.advancedNgRulesJson.value,
+      })
+    }
+    const indexFromRaw = function(read) {
+      const list = key => { try { const v = JSON.parse(read(key, '[]')); return Array.isArray(v) ? v.map(valueOf) : [] } catch (e) { return [] } }
+      return index({
+        userIds: list('ngUserIds'), channelIds: list('ngChannelIds'),
+        userNames: list('ngUserNames'), tags: list('ngTags'), lockedTags: list('ngLockedTags'),
+        lockCountEnabled: read('ngLockedTagCountEnabled', false) === true,
+        lockCountThreshold: read('ngLockedTagCountThreshold', 5),
+        rulesEnabled: read('advancedNgRulesEnabled', false) === true,
+        rulesJson: read('advancedNgRulesJson', '[]'),
+      })
+    }
+    const valid = function(reason, idx) {
+      if (typeof reason !== 'string' || reason.length < 3 || reason[1] !== ':') return false
+      const v = reason.slice(2)
+      switch (reason[0]) {
+        case 'u': return idx.ownerIds.has(v)
+        case 'n': return idx.ownerNames.has(v)
+        case 't': return idx.tags.has(v)
+        case 'l': return idx.lockedTags.has(v)
+        case 'k': return idx.lockCount !== null && idx.lockCount === v
+        case 'r': return idx.rules !== null && idx.rules === v
+        default: return false
+      }
+    }
+
+    // The primary reason a settled movie is NG, or null when nothing cacheable
+    // applies (not NG, or NG only by video ID/title which are already instant).
+    const reasonOf = function(movie, config) {
+      if (!movie || !movie.ng) return null
+      const c = movie.contributor
+      if (c && c.ngId && c.id != null && c.id !== '') return 'u:' + String(c.id)
+      if (c && c.ngName) return 'n:' + String(c.ngName).toUpperCase()
+      for (const tag of movie.tags || []) {
+        if (tag.ngByNormal) return 't:' + String(tag.name).toUpperCase()
+        if (tag.ngByLock) return 'l:' + String(tag.name).toUpperCase()
+      }
+      if (movie.ngByLockedTagCount) return 'k:' + String(config.ngLockedTagCountThreshold.value)
+      if (movie.ngByAdvancedRule) return 'r:' + hash(config.advancedNgRulesJson.value)
+      return null
+    }
+
+    const parse = function(raw) {
+      const map = new Map()
+      let obj
+      try { obj = typeof raw === 'string' ? JSON.parse(raw) : raw } catch (e) { return map }
+      if (!obj || typeof obj !== 'object') return map
+      for (const [id, v] of Object.entries(obj)) {
+        if (VIDEO_ID.test(id) && Array.isArray(v) && typeof v[0] === 'string' && Number.isFinite(v[1])) map.set(id, [v[0], v[1]])
+      }
+      return map
+    }
+    const prune = function(map, now) {
+      for (const [id, v] of map) if (now - v[1] > TTL_MS) map.delete(id)
+      if (map.size <= MAX_ENTRIES) return map
+      const sorted = [...map].sort((a, b) => b[1][1] - a[1][1]).slice(0, MAX_ENTRIES)
+      return new Map(sorted)
+    }
+
+    // ---- state shared by the early hider and the normal pipeline ----
+    let entries = new Map()
+    let early = null            // {observer, hidden:Set}
+    const stats = {loaded:0, prehidden:0, confirmed:0, cleared:0, learned:0, released:0, prefiltered:0}
+    const removed = new Set()   // deletions to apply when merging with other tabs
+    let store = null, saveTimer = null
+    let configIndex = null      // rebuilt lazily after any NG setting change
+    const indexFor = config => configIndex || (configIndex = indexFromConfig(config))
+
+    const currentValid = function(idx) {
+      const ids = new Set()
+      for (const [id, v] of entries) if (valid(v[0], idx)) ids.add(id)
+      return ids
+    }
+    const supportedPath = () => /^\/(search|tag)\/./.test(location.pathname) || location.pathname.startsWith('/ranking/genre')
+    const mark = function(node, hidden) {
+      if (node.nodeType !== 1) return
+      const apply = el => {
+        if (el.dataset.nrnAutofill === 'true' || el.hasAttribute(PREHIDE_ATTR)) return
+        const id = el.getAttribute('data-decoration-video-id')
+        if (id && hidden.has(id)) { el.setAttribute(PREHIDE_ATTR, ''); stats.prehidden++ }
+      }
+      if (node.hasAttribute('data-decoration-video-id')) apply(node)
+      if (node.firstElementChild) node.querySelectorAll('[data-decoration-video-id]').forEach(apply)
+    }
+
+    // Called at document-start with synchronous GM_getValue. Hides cached NG
+    // cards as React/SSR inserts them, before their first paint.
+    const installEarly = function(read, doc) {
+      try {
+        if (read(ENABLED_KEY, true) === false) return false
+        if (read('useGetThumbInfo', true) === false) return false
+        entries = prune(parse(read(KEY, '{}')), Date.now())
+        stats.loaded = entries.size
+        if (!entries.size) return false
+        const hidden = currentValid(indexFromRaw(read))
+        if (!hidden.size) return false
+        const style = doc.createElement('style')
+        style.id = 'nrn-verdict-cache-style'
+        style.textContent = CSS
+        ;(doc.head || doc.documentElement).appendChild(style)
+        const observer = new MutationObserver(function(records) {
+          if (!supportedPath()) return
+          for (const r of records) for (const n of r.addedNodes) mark(n, hidden)
+        })
+        observer.observe(doc.documentElement, {childList:true, subtree:true})
+        if (doc.body) mark(doc.body, hidden)
+        early = {observer, hidden, doc}
+        return true
+      } catch (e) {
+        console.warn('[NicoNicoRankingNG verdictCache] 早期非表示を開始できません', e)
+        return false
+      }
+    }
+
+    const releaseId = function(doc, id) {
+      for (const el of doc.querySelectorAll('[' + PREHIDE_ATTR + '][data-decoration-video-id="' + id + '"]')) {
+        el.removeAttribute(PREHIDE_ATTR); stats.released++
+      }
+    }
+    const releaseAll = function(doc) {
+      for (const el of doc.querySelectorAll('[' + PREHIDE_ATTR + ']')) { el.removeAttribute(PREHIDE_ATTR); stats.released++ }
+    }
+    const stopEarly = function() {
+      if (!early) return
+      early.observer.disconnect()
+      releaseAll(early.doc)
+      early = null
+    }
+
+    const persist = async function() {
+      saveTimer = null
+      if (!store) return
+      try {
+        // Merge with what other tabs saved meanwhile: newest timestamp wins,
+        // and IDs this tab confirmed as not-NG are removed.
+        const stored = parse(await store.get(KEY, '{}'))
+        for (const [id, v] of stored) {
+          if (removed.has(id)) continue
+          const mine = entries.get(id)
+          if (!mine || mine[1] < v[1]) entries.set(id, v)
+        }
+        for (const id of removed) entries.delete(id)
+        removed.clear()
+        entries = prune(entries, Date.now())
+        await store.set(KEY, JSON.stringify(Object.fromEntries(entries)))
+      } catch (e) {
+        console.warn('[NicoNicoRankingNG verdictCache] 保存に失敗', e)
+      }
+    }
+    const schedulePersist = function() {
+      if (saveTimer === null) saveTimer = setTimeout(persist, 1500)
+    }
+
+    // Normal pipeline: config is synced. Keeps the early hidden set in step
+    // with settings changes, and learns/forgets as movies settle.
+    const attach = function(config, get, set, doc) {
+      store = {get: (k, d) => Promise.resolve(get(k, d)), set: (k, v) => Promise.resolve(set(k, v))}
+      const enabled = () => config.ngVerdictCacheEnabled.value && config.useGetThumbInfo.value
+      const refreshHidden = function() {
+        configIndex = null
+        if (!early) return
+        if (!enabled() || config.ngMovieVisible.value) { stopEarly(); return }
+        const next = currentValid(indexFor(config))
+        for (const id of early.hidden) if (!next.has(id)) releaseId(early.doc, id)
+        early.hidden = next
+      }
+      for (const key of ['ngUserIds','ngChannelIds','ngUserNames','ngTags','ngLockedTags',
+        'ngLockedTagCountEnabled','ngLockedTagCountThreshold','advancedNgRulesEnabled','advancedNgRulesJson',
+        'ngMovieVisible','ngVerdictCacheEnabled','useGetThumbInfo']) {
+        config[key]?.on?.('changed', refreshHidden)
+      }
+      refreshHidden()
+      return {enabled}
+    }
+
+    // One call per new Movie. Learns on settle, forgets when it is not NG.
+    const track = function(movie, config, doc) {
+      let timer = setTimeout(function() { timer = null; releaseId(doc, movie.id) }, SAFETY_RELEASE_MS)
+      const check = function() {
+        if (!movie.metadataSettled) return
+        if (timer !== null) { clearTimeout(timer); timer = null }
+        const wasHidden = Boolean(early && early.hidden.has(movie.id))
+        if (config.ngVerdictCacheEnabled.value) {
+          const reason = reasonOf(movie, config)
+          if (reason) {
+            const prev = entries.get(movie.id)
+            if (!prev || prev[0] !== reason || Date.now() - prev[1] > 86400000) {
+              entries.set(movie.id, [reason, Date.now()]); removed.delete(movie.id)
+              if (!prev) stats.learned++
+              schedulePersist()
+            }
+            if (wasHidden) stats.confirmed++
+          } else if (!movie.ng && entries.has(movie.id)) {
+            entries.delete(movie.id); removed.add(movie.id)
+            if (early) early.hidden.delete(movie.id)
+            stats.cleared++
+            schedulePersist()
+          }
+        }
+        // The normal view mode (nrn-hide) takes over from here.
+        releaseId(doc, movie.id)
+      }
+      movie.on('metadataChanged', check)
+      movie.on('ngChanged', check)
+      check()
+      return function dispose() {
+        if (timer !== null) clearTimeout(timer)
+        movie.off('metadataChanged', check); movie.off('ngChanged', check)
+      }
+    }
+
+    // AutoFill: a candidate whose cached reason is still valid needs no
+    // detail request. Returns a reason label or null.
+    const candidateReason = function(id, config) {
+      if (!config?.ngVerdictCacheEnabled?.value || !config.useGetThumbInfo?.value) return null
+      const v = entries.get(id)
+      if (!v || Date.now() - v[1] > TTL_MS) return null
+      if (!valid(v[0], indexFor(config))) return null
+      stats.prefiltered++
+      return 'verdictCache'
+    }
+
+    const clear = async function() {
+      for (const id of entries.keys()) removed.add(id)
+      entries.clear()
+      if (early) { early.hidden.clear(); releaseAll(early.doc) }
+      if (store) await store.set(KEY, '{}')
+      removed.clear()
+    }
+
+    return {
+      KEY, ENABLED_KEY, PREHIDE_ATTR, CSS, MAX_ENTRIES, TTL_MS,
+      installEarly, attach, track, candidateReason, clear, stopEarly,
+      reasonOf, valid, indexFromConfig, indexFromRaw, parse, prune, hash,
+      get size() { return entries.size },
+      get stats() { return Object.assign({size: entries.size, earlyActive: Boolean(early)}, stats) },
+      _reset() { entries = new Map(); early = null; store = null; configIndex = null; removed.clear(); for (const k in stats) stats[k] = 0 },
+    }
+  })()
+  // Pre-DOM decisions may use only fields that a later detail cannot replace,
+  // plus the user-enabled verdict cache (BRUSH-060), which trades that
+  // guarantee for speed and is bounded by TTL and reason validity.
   // Search owner/tag evidence is deliberately left unknown here.
   var CandidateFilter = (function() {
     function reason(item, config) {
       if (!item || typeof item.id !== 'string' || !/^(sm|so|nm)[0-9]+$/.test(item.id)) return null
       if (config?.ngMovies?.set.has(item.id)) return 'movieId'
+      // BRUSH-060: an earlier settled NG verdict whose reason is still in the
+      // current settings. Opt-out via ngVerdictCacheEnabled.
+      if (typeof NgVerdictCache !== 'undefined' && NgVerdictCache.candidateReason(item.id, config)) return 'verdictCache'
       if (typeof item.title !== 'string') return null
       const title = item.title.toUpperCase()
       for (const text of config?.ngTitles?.set || []) {
@@ -3252,6 +3604,15 @@
       initNumberInput(config, doc, 'pagerPreviewCount', 0, 6)
       initNumberInput(config, doc, 'sessionDetailCacheTtlMinutes', 1, 1440)
       initNumberInput(config, doc, 'sessionDetailCacheMaxEntries', 100, 4000)
+      initCheckbox(config, doc, 'ngVerdictCacheEnabled')
+      var verdictCount = doc.getElementById('ngVerdictCacheCount')
+      var showVerdictCount = function() {
+        if (verdictCount) verdictCount.textContent = '記憶中 ' + NgVerdictCache.size + ' 件'
+      }
+      showVerdictCount()
+      doc.getElementById('ngVerdictCacheClearButton')?.addEventListener('click', function() {
+        NgVerdictCache.clear().then(showVerdictCount)
+      })
       this._on('target', 'change', this._targetChanged.bind(this))
       this._on('addButton', 'click', this._addButtonClicked.bind(this))
       this._on('removeButton', 'click', this._removeButtonClicked.bind(this))
@@ -3904,6 +4265,8 @@
             <div class=row><label><input type=checkbox id=sessionDetailCacheEnabled>同一タブ内の動画詳細を再利用する</label></div>
             <div class=row><label>キャッシュ保持時間 <input type=number id=sessionDetailCacheTtlMinutes min=1 max=1440> 分</label></div>
             <div class=row><label>キャッシュ最大件数 <input type=number id=sessionDetailCacheMaxEntries min=100 max=4000> 件</label></div>
+            <div class=row><label><input type=checkbox id=ngVerdictCacheEnabled>NGになった動画を記憶して次回すぐ非表示</label></div>
+            <div class=row><button type=button id=ngVerdictCacheClearButton>NG記憶を消去</button> <span id=ngVerdictCacheCount></span></div>
             <div class=row><label>追加動画のニコニコ広告
               <select id=autoFillAdMode><option value=all>候補すべて取得</option><option value=visible>表示動画のみ（推奨）</option><option value=none>取得しない</option></select>
             </label></div>
@@ -3998,6 +4361,7 @@
     sessionDetailCacheEnabled: '取得済みのタグ・投稿者情報を同じタブに保存して、再読み込み後も再利用します。保存中に情報が変わると、有効期限まで古い情報で判定する場合があります。OFFでもSPA移動中は直近2分・最大512件をメモリに保持します。NG判定は常に現在の設定でやり直します。',
     sessionDetailCacheTtlMinutes: 'キャッシュを何分まで有効とみなすかです。期限切れは自動削除します。',
     sessionDetailCacheMaxEntries: 'キャッシュ件数の上限です。古いものから削除します。',
+    ngVerdictCacheEnabled: 'タグ・投稿者・ロックタグ数・複合NGでNGと確定した動画IDを理由つきで記憶し、次回は詳細取得を待たずに表示前から隠します。AutoFillも記憶済みの候補を通信せずに除外します。理由になったNG設定を削除・変更すると記憶は自動で無効になり、通常の判定でNGでなくなった動画は記憶から消えて表示に戻ります。手動の「NG動画ID」一覧には追加しません。最大10000件・30日。',
     autoFillAdMode: '追加動画の広告リボン・提供者表示の取得範囲です。広告者照合の警告・複合NGとは独立しています。無駄を抑えるには「表示動画のみ」を選んでください。',
     selfAdWarningEnabled: '広告者一覧を確認し、投稿者本人によるニコニ広告の可能性を警告します。追加通信が発生します。',
     hoverPreviewEnabled: '既定OFF。自動追加カードにマウスを約0.2秒乗せてから、1件だけ読み込みます。最大30秒、最初は無音。離脱・画面外・タブ非表示で停止します。実サイトでの再生は確認中です。コメントNGを安全に反映できない場合は映像のみ表示します。公式カードのプレビューは変更しません。',
@@ -5164,7 +5528,7 @@ html[data-nrn-ui-theme="dark"] .nrn-contributor-ng-name-button:hover {
         this._nrnBaselineRect = null
         this._nrnManualMovieInfoVisible = null
         this._nrnMovieInfoInteractionSeq = 0
-        requestAnimationFrame(function() {
+        nrnRequestFrame(function() {
           if (!this.elem || !this.elem.isConnected) return
           var r = this.elem.getBoundingClientRect()
           if (r && r.width > 0 && r.height > 0) {
@@ -5267,7 +5631,7 @@ html[data-nrn-ui-theme="dark"] .nrn-contributor-ng-name-button:hover {
             this.elem.classList.add('nrn-info-expanded')
             this.movieInfo.toggle.textContent = TOGGLE_CLOSE_TEXT
             this._startMovieInfoReserve()
-            requestAnimationFrame(function() {
+            nrnRequestFrame(function() {
               this._auditMovieInfoLayout('opened')
             }.bind(this))
           } else {
@@ -5275,7 +5639,7 @@ html[data-nrn-ui-theme="dark"] .nrn-contributor-ng-name-button:hover {
             this.movieInfo.elem.remove()
             this.elem.classList.remove('nrn-info-expanded')
             this.movieInfo.toggle.textContent = TOGGLE_OPEN_TEXT
-            requestAnimationFrame(function() {
+            nrnRequestFrame(function() {
               this._auditMovieInfoLayout('closed')
             }.bind(this))
           }
@@ -5362,8 +5726,8 @@ html[data-nrn-ui-theme="dark"] .nrn-contributor-ng-name-button:hover {
           if (this._disposed) return
           if (this._nrnTogglePinScheduled) return
           this._nrnTogglePinScheduled = true
-          requestAnimationFrame(function() {
-            requestAnimationFrame(function() {
+          nrnRequestFrame(function() {
+            nrnRequestFrame(function() {
               this._nrnTogglePinScheduled = false
               this._pinMovieInfoTogglePosition(false)
             }.bind(this))
@@ -5485,9 +5849,9 @@ html[data-nrn-ui-theme="dark"] .nrn-contributor-ng-name-button:hover {
             this._syncMovieInfoReserve()
           }.bind(this)
           this._nrnMovieInfoReserveSync = sync
-          requestAnimationFrame(function() {
+          nrnRequestFrame(function() {
             sync()
-            requestAnimationFrame(sync)
+            nrnRequestFrame(sync)
           })
           if (typeof ResizeObserver !== 'undefined') {
             this._nrnMovieInfoReserveObserver = new ResizeObserver(sync)
@@ -5716,7 +6080,7 @@ html[data-nrn-ui-theme="dark"] .nrn-contributor-ng-name-button:hover {
         this._disposed = true
         this._abortController?.abort()
         this._observer?.disconnect()
-        cancelAnimationFrame(this._mutationFrame)
+        nrnCancelFrame(this._mutationFrame)
         for (const observer of this._observers || []) observer.disconnect()
         for (const root of new Set(this._toggleToMovieRoot.values())) {
           root.unbind()
@@ -6828,7 +7192,7 @@ html[data-nrn-ui-theme="dark"] .nrn-contributor-ng-name-button:hover {
           }
           parsePending ||= relevant
           if ((!parsePending && !ownerRoots.size) || this._mutationFrame != null) return
-          this._mutationFrame = requestAnimationFrame(() => {
+          this._mutationFrame = nrnRequestFrame(() => {
             this._mutationFrame = null
             if (!currentRoute()) { ownerRoots.clear(); return }
             const rows = [...ownerRoots].filter(root => root.isConnected && root.classList.contains('nrn-parsed'))
@@ -8392,7 +8756,7 @@ html[data-nrn-ui-theme="dark"] .nrn-contributor-ng-name-button:hover {
       collectMovieCardRoots(node).forEach(function(root) { pendingMutationRoots.add(root) })
       if (!mutationFlushScheduled && pendingMutationRoots.size) {
         mutationFlushScheduled = true
-        requestAnimationFrame(flushMutationRoots)
+        nrnRequestFrame(flushMutationRoots)
       }
     }
 
@@ -9070,13 +9434,13 @@ html[data-nrn-ui-theme="dark"] .nrn-contributor-ng-name-button:hover {
           tag.classList.toggle('nrn-reason-tag', matched)
         }
       }
-      const schedule = () => { if (frame == null && !page._disposed) frame = requestAnimationFrame(render) }
+      const schedule = () => { if (frame == null && !page._disposed) frame = nrnRequestFrame(render) }
       movie.on('ngReasonsChanged', schedule); movie.on('thumbInfoDone', schedule); movie.on('contributorChanged', schedule)
       root._refreshOwnerPresentation = schedule
       root._disposeEnhancements = () => {
         compact?.remove();nativeOwner?.classList.remove('nrn-native-owner','nrn-owner-replaced'); root.elem.classList.remove('nrn-owner-detail-ready')
         delete root._refreshOwnerPresentation
-        cancelAnimationFrame(frame); movie.off('ngReasonsChanged', schedule); movie.off('thumbInfoDone', schedule); movie.off('contributorChanged', schedule)
+        nrnCancelFrame(frame); movie.off('ngReasonsChanged', schedule); movie.off('thumbInfoDone', schedule); movie.off('contributorChanged', schedule)
       }
       schedule()
     }
@@ -11013,7 +11377,9 @@ var CardActionData = (function () {
       }
       var clearTimeout = function(id) { timers.delete(id); globalThis.clearTimeout(id) }
       var clearInterval = function(id) { intervals.delete(id); globalThis.clearInterval(id) }
-      var cancelAnimationFrame = function(id) { frames.delete(id); globalThis.cancelAnimationFrame(id) }
+      // Frame handles are cancel functions from nrnRequestFrame so AutoFill
+      // keeps running while the tab is in the background.
+      var cancelAnimationFrame = function(cancel) { frames.delete(cancel); nrnCancelFrame(cancel) }
       var setTimeout = function(fn, delay) {
         var id = globalThis.setTimeout(function() { timers.delete(id); if (!page._disposed) fn() }, delay)
         timers.add(id); return id
@@ -11023,8 +11389,8 @@ var CardActionData = (function () {
         intervals.add(id); return id
       }
       var requestAnimationFrame = function(fn) {
-        var id = globalThis.requestAnimationFrame(function() { frames.delete(id); if (!page._disposed) fn() })
-        frames.add(id); return id
+        var cancel = nrnRequestFrame(function() { frames.delete(cancel); if (!page._disposed) fn() })
+        frames.add(cancel); return cancel
       }
       var listen = function(target, name, fn, capture) {
         target.addEventListener(name, fn, capture)
@@ -11034,7 +11400,7 @@ var CardActionData = (function () {
         page._disposed = true
         runLifetime.abort()
         timers.forEach(globalThis.clearTimeout); intervals.forEach(globalThis.clearInterval)
-        frames.forEach(globalThis.cancelAnimationFrame)
+        frames.forEach(nrnCancelFrame)
         for (var handle of handles) { try { handle.abort?.() } catch (e) {} }
         handles.clear(); listeners.forEach(function(remove) { remove() })
         timers.clear(); intervals.clear(); frames.clear(); listeners.length = 0
@@ -15263,6 +15629,7 @@ var CardActionData = (function () {
         addStyle(CardEnhancements.css)
         addStyle(HoverPreview.css)
         addStyle(CardActions.css)
+        var verdictCache = NgVerdictCache.attach(config, gmGetValue(), gmSetValue(), document)
         config.detailUiTheme.on('changed', function(v) {
           DetailUiTheme.apply(config, document, 'setting-changed:' + v)
         })
@@ -15283,8 +15650,10 @@ var CardActionData = (function () {
           const subscriptions = Object.values(config).filter(store => store?._eventNameToListeners)
             .map(store => [store, new Map(Array.from(store._eventNameToListeners,
               ([name, listeners]) => [name, new Set(listeners)]))])
-          var model, ctrl
+          var model, ctrl, verdictTrackers = []
           dispose = function() {
+            for (const untrack of verdictTrackers) untrack()
+            verdictTrackers.length = 0
             page._disposed = true
             page._hoverPreview?.dispose()
             page._cardActions?.dispose()
@@ -15304,6 +15673,17 @@ var CardActionData = (function () {
             model.initialSearchValues = initialSourceUrl === location.href ? initialSearchValues : null
             initialOwners = null
             initialSearchValues = null
+            // BRUSH-060: learn/forget NG verdicts as each new movie settles.
+            const createMovies = model.createMovies
+            model.createMovies = function(rows) {
+              const known = new Set(model.movies._idToMovie.keys())
+              const result = createMovies.apply(this, arguments)
+              if (verdictCache.enabled()) for (const row of rows) {
+                const id = row.movie.id, movie = model.movies.get(id)
+                if (movie && !known.has(id)) { known.add(id); verdictTrackers.push(NgVerdictCache.track(movie, config, document)) }
+              }
+              return result
+            }
             page._diagnostics = model.diagnostics
             page._ownerNames = model.ownerNames
             page._cardActions = CardActions.create(page,config)
@@ -15354,6 +15734,10 @@ var CardActionData = (function () {
     }
     var main = function() {
       setupSpaNavigationGuard()
+      // BRUSH-060: GM_getValue is synchronous, so cached NG cards can be
+      // hidden as they are inserted, before the first paint. GM.getValue
+      // (async only) managers skip this and still use the normal pipeline.
+      if (typeof GM_getValue === 'function') NgVerdictCache.installEarly(GM_getValue, document)
       // Native cards stay visible while metadata is pending; confirmed NG is
       // hidden by MovieViewMode as each result arrives.
       if (['interactive', 'complete'].includes(document.readyState)) {

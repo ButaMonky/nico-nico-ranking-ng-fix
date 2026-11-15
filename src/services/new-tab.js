@@ -105,7 +105,7 @@
       collectMovieCardRoots(node).forEach(function(root) { pendingMutationRoots.add(root) })
       if (!mutationFlushScheduled && pendingMutationRoots.size) {
         mutationFlushScheduled = true
-        requestAnimationFrame(flushMutationRoots)
+        nrnRequestFrame(flushMutationRoots)
       }
     }
 

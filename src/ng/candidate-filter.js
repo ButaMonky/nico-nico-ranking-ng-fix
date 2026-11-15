@@ -1,9 +1,14 @@
-  // Pre-DOM decisions may use only fields that a later detail cannot replace.
+  // Pre-DOM decisions may use only fields that a later detail cannot replace,
+  // plus the user-enabled verdict cache (BRUSH-060), which trades that
+  // guarantee for speed and is bounded by TTL and reason validity.
   // Search owner/tag evidence is deliberately left unknown here.
   var CandidateFilter = (function() {
     function reason(item, config) {
       if (!item || typeof item.id !== 'string' || !/^(sm|so|nm)[0-9]+$/.test(item.id)) return null
       if (config?.ngMovies?.set.has(item.id)) return 'movieId'
+      // BRUSH-060: an earlier settled NG verdict whose reason is still in the
+      // current settings. Opt-out via ngVerdictCacheEnabled.
+      if (typeof NgVerdictCache !== 'undefined' && NgVerdictCache.candidateReason(item.id, config)) return 'verdictCache'
       if (typeof item.title !== 'string') return null
       const title = item.title.toUpperCase()
       for (const text of config?.ngTitles?.set || []) {

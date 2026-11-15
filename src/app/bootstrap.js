@@ -12,6 +12,7 @@
         addStyle(CardEnhancements.css)
         addStyle(HoverPreview.css)
         addStyle(CardActions.css)
+        var verdictCache = NgVerdictCache.attach(config, gmGetValue(), gmSetValue(), document)
         config.detailUiTheme.on('changed', function(v) {
           DetailUiTheme.apply(config, document, 'setting-changed:' + v)
         })
@@ -32,8 +33,10 @@
           const subscriptions = Object.values(config).filter(store => store?._eventNameToListeners)
             .map(store => [store, new Map(Array.from(store._eventNameToListeners,
               ([name, listeners]) => [name, new Set(listeners)]))])
-          var model, ctrl
+          var model, ctrl, verdictTrackers = []
           dispose = function() {
+            for (const untrack of verdictTrackers) untrack()
+            verdictTrackers.length = 0
             page._disposed = true
             page._hoverPreview?.dispose()
             page._cardActions?.dispose()
@@ -53,6 +56,17 @@
             model.initialSearchValues = initialSourceUrl === location.href ? initialSearchValues : null
             initialOwners = null
             initialSearchValues = null
+            // BRUSH-060: learn/forget NG verdicts as each new movie settles.
+            const createMovies = model.createMovies
+            model.createMovies = function(rows) {
+              const known = new Set(model.movies._idToMovie.keys())
+              const result = createMovies.apply(this, arguments)
+              if (verdictCache.enabled()) for (const row of rows) {
+                const id = row.movie.id, movie = model.movies.get(id)
+                if (movie && !known.has(id)) { known.add(id); verdictTrackers.push(NgVerdictCache.track(movie, config, document)) }
+              }
+              return result
+            }
             page._diagnostics = model.diagnostics
             page._ownerNames = model.ownerNames
             page._cardActions = CardActions.create(page,config)
@@ -103,6 +117,10 @@
     }
     var main = function() {
       setupSpaNavigationGuard()
+      // BRUSH-060: GM_getValue is synchronous, so cached NG cards can be
+      // hidden as they are inserted, before the first paint. GM.getValue
+      // (async only) managers skip this and still use the normal pipeline.
+      if (typeof GM_getValue === 'function') NgVerdictCache.installEarly(GM_getValue, document)
       // Native cards stay visible while metadata is pending; confirmed NG is
       // hidden by MovieViewMode as each result arrives.
       if (['interactive', 'complete'].includes(document.readyState)) {

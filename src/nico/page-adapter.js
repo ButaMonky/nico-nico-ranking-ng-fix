@@ -605,7 +605,7 @@
         this._nrnBaselineRect = null
         this._nrnManualMovieInfoVisible = null
         this._nrnMovieInfoInteractionSeq = 0
-        requestAnimationFrame(function() {
+        nrnRequestFrame(function() {
           if (!this.elem || !this.elem.isConnected) return
           var r = this.elem.getBoundingClientRect()
           if (r && r.width > 0 && r.height > 0) {
@@ -708,7 +708,7 @@
             this.elem.classList.add('nrn-info-expanded')
             this.movieInfo.toggle.textContent = TOGGLE_CLOSE_TEXT
             this._startMovieInfoReserve()
-            requestAnimationFrame(function() {
+            nrnRequestFrame(function() {
               this._auditMovieInfoLayout('opened')
             }.bind(this))
           } else {
@@ -716,7 +716,7 @@
             this.movieInfo.elem.remove()
             this.elem.classList.remove('nrn-info-expanded')
             this.movieInfo.toggle.textContent = TOGGLE_OPEN_TEXT
-            requestAnimationFrame(function() {
+            nrnRequestFrame(function() {
               this._auditMovieInfoLayout('closed')
             }.bind(this))
           }
@@ -803,8 +803,8 @@
           if (this._disposed) return
           if (this._nrnTogglePinScheduled) return
           this._nrnTogglePinScheduled = true
-          requestAnimationFrame(function() {
-            requestAnimationFrame(function() {
+          nrnRequestFrame(function() {
+            nrnRequestFrame(function() {
               this._nrnTogglePinScheduled = false
               this._pinMovieInfoTogglePosition(false)
             }.bind(this))
@@ -926,9 +926,9 @@
             this._syncMovieInfoReserve()
           }.bind(this)
           this._nrnMovieInfoReserveSync = sync
-          requestAnimationFrame(function() {
+          nrnRequestFrame(function() {
             sync()
-            requestAnimationFrame(sync)
+            nrnRequestFrame(sync)
           })
           if (typeof ResizeObserver !== 'undefined') {
             this._nrnMovieInfoReserveObserver = new ResizeObserver(sync)
@@ -1157,7 +1157,7 @@
         this._disposed = true
         this._abortController?.abort()
         this._observer?.disconnect()
-        cancelAnimationFrame(this._mutationFrame)
+        nrnCancelFrame(this._mutationFrame)
         for (const observer of this._observers || []) observer.disconnect()
         for (const root of new Set(this._toggleToMovieRoot.values())) {
           root.unbind()

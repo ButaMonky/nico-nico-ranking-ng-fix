@@ -176,13 +176,13 @@
           tag.classList.toggle('nrn-reason-tag', matched)
         }
       }
-      const schedule = () => { if (frame == null && !page._disposed) frame = requestAnimationFrame(render) }
+      const schedule = () => { if (frame == null && !page._disposed) frame = nrnRequestFrame(render) }
       movie.on('ngReasonsChanged', schedule); movie.on('thumbInfoDone', schedule); movie.on('contributorChanged', schedule)
       root._refreshOwnerPresentation = schedule
       root._disposeEnhancements = () => {
         compact?.remove();nativeOwner?.classList.remove('nrn-native-owner','nrn-owner-replaced'); root.elem.classList.remove('nrn-owner-detail-ready')
         delete root._refreshOwnerPresentation
-        cancelAnimationFrame(frame); movie.off('ngReasonsChanged', schedule); movie.off('thumbInfoDone', schedule); movie.off('contributorChanged', schedule)
+        nrnCancelFrame(frame); movie.off('ngReasonsChanged', schedule); movie.off('thumbInfoDone', schedule); movie.off('contributorChanged', schedule)
       }
       schedule()
     }

@@ -31,7 +31,8 @@ for (const [index, path] of paths.entries()) {
       thumbInfoConcurrency:12,developerMode:false,statusPanelMode:'compact',detailUiTheme:'auto',
       autoFillDetailBatchMax:48,spaNavigationFix:true,autoFillPagerMode:'compactSkip',
       sessionDetailCacheEnabled:false,statusAnimationEnabled:true,developerDiagnosticMode:'light',
-      pagerPreviewCount:2,sessionDetailCacheTtlMinutes:360,sessionDetailCacheMaxEntries:1500};
+      pagerPreviewCount:2,sessionDetailCacheTtlMinutes:360,sessionDetailCacheMaxEntries:1500,
+      ...(index?{ngVerdictCacheEnabled:true}:{})};
     const reads=[], writes=[];
     const config=new Config((k,d)=>{reads.push([k,d]);return d;},(k,v)=>writes.push([k,v]));
     assert.deepEqual(Object.keys(config).sort(),[...Object.keys(defaults),'ngMovieVisible'].sort());

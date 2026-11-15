@@ -47,7 +47,9 @@
       }
       var clearTimeout = function(id) { timers.delete(id); globalThis.clearTimeout(id) }
       var clearInterval = function(id) { intervals.delete(id); globalThis.clearInterval(id) }
-      var cancelAnimationFrame = function(id) { frames.delete(id); globalThis.cancelAnimationFrame(id) }
+      // Frame handles are cancel functions from nrnRequestFrame so AutoFill
+      // keeps running while the tab is in the background.
+      var cancelAnimationFrame = function(cancel) { frames.delete(cancel); nrnCancelFrame(cancel) }
       var setTimeout = function(fn, delay) {
         var id = globalThis.setTimeout(function() { timers.delete(id); if (!page._disposed) fn() }, delay)
         timers.add(id); return id
@@ -57,8 +59,8 @@
         intervals.add(id); return id
       }
       var requestAnimationFrame = function(fn) {
-        var id = globalThis.requestAnimationFrame(function() { frames.delete(id); if (!page._disposed) fn() })
-        frames.add(id); return id
+        var cancel = nrnRequestFrame(function() { frames.delete(cancel); if (!page._disposed) fn() })
+        frames.add(cancel); return cancel
       }
       var listen = function(target, name, fn, capture) {
         target.addEventListener(name, fn, capture)
@@ -68,7 +70,7 @@
         page._disposed = true
         runLifetime.abort()
         timers.forEach(globalThis.clearTimeout); intervals.forEach(globalThis.clearInterval)
-        frames.forEach(globalThis.cancelAnimationFrame)
+        frames.forEach(nrnCancelFrame)
         for (var handle of handles) { try { handle.abort?.() } catch (e) {} }
         handles.clear(); listeners.forEach(function(remove) { remove() })
         timers.clear(); intervals.clear(); frames.clear(); listeners.length = 0

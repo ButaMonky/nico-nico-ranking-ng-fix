@@ -875,7 +875,7 @@
           }
           parsePending ||= relevant
           if ((!parsePending && !ownerRoots.size) || this._mutationFrame != null) return
-          this._mutationFrame = requestAnimationFrame(() => {
+          this._mutationFrame = nrnRequestFrame(() => {
             this._mutationFrame = null
             if (!currentRoute()) { ownerRoots.clear(); return }
             const rows = [...ownerRoots].filter(root => root.isConnected && root.classList.contains('nrn-parsed'))
