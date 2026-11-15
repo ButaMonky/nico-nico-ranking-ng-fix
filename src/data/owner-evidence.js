@@ -42,12 +42,12 @@
     function nicoadName(id,data,owner) {
       // This endpoint has no trustworthy user/channel discriminator. Require a
       // separately established user identity, even when the numeric IDs match.
-      if (!owner || owner.type !== 'user' || data?.id !== id || !/^(sm|so|nm)[0-9]+$/.test(id)) return null
+      if (!owner || owner.type !== 'user' || data?.id !== id || !/^(sm|so|nm|ss)[0-9]+$/.test(id)) return null
       if (typeof data.ownerName !== 'string' || !data.ownerName.trim()) return null
       if (data.targetUrl != null) {
         try {
           const url = new URL(data.targetUrl)
-          if (url.origin !== 'https://www.nicovideo.jp' || url.pathname !== '/watch/' + id) return null
+          if (url.origin !== 'https://www.nicovideo.jp' || (url.pathname !== '/watch/' + id && url.pathname !== '/shorts/' + id)) return null
         } catch (_) { return null }
       }
       const candidate = normalize({type:'user',id:data.ownerId,name:data.ownerName})
@@ -79,7 +79,7 @@
         if (!link.querySelector(':scope > img') || !link.querySelector(':scope > p')) continue
         // The native owner row is a sibling of this video's title, not a user link in a description.
         const titleSibling = [...link.parentElement.querySelectorAll(':scope > a[href]')].some(a => {
-          try { return new URL(a.href).pathname === '/watch/' + id } catch (_) { return false }
+          try { const path = new URL(a.href).pathname; return path === '/watch/' + id || path === '/shorts/' + id } catch (_) { return false }
         })
         if (!titleSibling) continue
         const owner = fromUrl(link.href,root.ownerDocument.baseURI)

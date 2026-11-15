@@ -5,7 +5,7 @@
   // (see _ai-sync completed BRUSH-005/007). Unknown fields are dropped;
   // nothing is fetched or rendered.
   var SearchItemAdapter = (function() {
-    const videoIdPattern = /^(sm|so|nm)[0-9]+$/
+    const videoIdPattern = /^(sm|so|nm|ss)[0-9]+$/
     // Search-sourced metadata fields, in the order callers apply them.
     const fields = ['likeCount','viewCount','commentCount','mylistCount','durationSeconds','registeredAtMs']
     // A count is known only when it is a non-negative safe integer number.

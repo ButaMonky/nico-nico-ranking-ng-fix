@@ -24,7 +24,7 @@
     const KEY = 'ngVerdictCache'
     const ENABLED_KEY = 'ngVerdictCacheEnabled'
     const MAX_ENTRIES = 200000   // 約2MB。1件あたり動画ID＋空白の約10バイト
-    const VIDEO_ID = /^(sm|so|nm)[0-9]+$/
+    const VIDEO_ID = /^(sm|so|nm|ss)[0-9]+$/
     const PREHIDE_ATTR = 'data-nrn-prehide'
     const SAFETY_RELEASE_MS = 20000
     const CSS = '[' + PREHIDE_ATTR + '] { display: none !important; }'
@@ -198,7 +198,7 @@
       for (const [key, list] of buckets) if (valid(key, idx)) for (const id of list) ids.add(id)
       return ids
     }
-    const supportedPath = () => /^\/(search|tag)\/./.test(location.pathname) || /^\/ranking(\/?$|\/(genre|custom))/.test(location.pathname)
+    const supportedPath = () => /^\/(search|tag|search_shorts|tag_shorts)\/./.test(location.pathname) || /^\/ranking(\/?$|\/(genre|custom))/.test(location.pathname)
     // BRUSH-068: besides remembered verdicts, a card's own markup already
     // carries its video ID, owner link and title when it is inserted, so
     // NG video IDs, NG user/channel IDs and NG title words hide it before the
@@ -214,7 +214,7 @@
         }
       }
       if (rules.titles.length) {
-        for (const a of el.querySelectorAll('a[href^="/watch/"]')) {
+        for (const a of el.querySelectorAll('a:is([href^="/watch/"],[href^="/shorts/"])')) {
           const thumb = a.closest('.pos_relative')
           if (thumb && el.contains(thumb)) continue
           const text = a.textContent.trim().toUpperCase()

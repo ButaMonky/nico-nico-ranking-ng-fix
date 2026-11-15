@@ -4,7 +4,7 @@
   // Search owner/tag evidence is deliberately left unknown here.
   var CandidateFilter = (function() {
     function reason(item, config) {
-      if (!item || typeof item.id !== 'string' || !/^(sm|so|nm)[0-9]+$/.test(item.id)) return null
+      if (!item || typeof item.id !== 'string' || !/^(sm|so|nm|ss)[0-9]+$/.test(item.id)) return null
       if (config?.ngMovies?.set.has(item.id)) return 'movieId'
       // BRUSH-060: an earlier settled NG verdict whose reason is still in the
       // current settings. Opt-out via ngVerdictCacheEnabled.

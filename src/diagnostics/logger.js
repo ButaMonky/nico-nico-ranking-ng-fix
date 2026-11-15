@@ -40,7 +40,7 @@
     function start(config,path) {
       active?.close()
       const started = now(), seq = ++sequence
-      const routeKind = /^\/tag\//.test(path) ? 'tag' : /^\/search\//.test(path) ? 'search' : /^\/ranking/.test(path) ? 'ranking' : 'other'
+      const routeKind = /^\/tag(_shorts)?\//.test(path) ? 'tag' : /^\/search(_shorts)?\//.test(path) ? 'search' : /^\/ranking/.test(path) ? 'ranking' : 'other'
       let movies = null, queue = null, runtime = null, closed = false, phase = 'starting'
       let frozen = null, initial = null, comparison = null, audit = null, preview = null, terminalElapsedMs = null, endedPhase = null
       const pending = new Set(), attempted = new Set(), recent = new Set(), session = new Set()

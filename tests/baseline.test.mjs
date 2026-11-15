@@ -35,7 +35,7 @@ test('build assembles approved source order and produces repeatable output', asy
     // BRUSH-062: one app-wide @match replaces the three route @match lines.
     const routeMatches = text => text.replace(/(\/\/ @match\s+\*:\/\/www\.nicovideo\.jp\/(?:ranking\*|search\/\*|tag\/\*)\n?)+/, '// @match        *://www.nicovideo.jp/*\n')
     assert.equal(unchanged(metadata(first)), unchanged(routeMatches(metadata(original))));
-    assert.match(metadata(first), /@version\s+160\.38/);
+    assert.match(metadata(first), /@version\s+160\.39/);
     await build(baseline, destination);
     assert.deepEqual(await readFile(destination), first);
   } finally {
@@ -57,7 +57,7 @@ test('stable distribution separates fork identity from the original and uses onl
     assert.notDeepEqual(identity(header), identity(original), 'installing the fork must not identify it as the original');
     assert.match(header, /^\/\/ @author\s+ButaMonky$/m);
     assert.match(header, /^\/\/ @contributor\s+kengo321 \(original\)$/m);
-    assert.match(header, /^\/\/ @version\s+160\.38$/m);
+    assert.match(header, /^\/\/ @version\s+160\.39$/m);
     assert.match(header, /^\/\/ @updateURL\s+https:\/\/raw\.githubusercontent\.com\/ButaMonky\/nico-nico-ranking-ng-fix\/refs\/heads\/master\/dist\/nico-nico-ranking-ng\.meta\.js$/m);
     assert.match(header, /^\/\/ @downloadURL\s+https:\/\/raw\.githubusercontent\.com\/ButaMonky\/nico-nico-ranking-ng-fix\/refs\/heads\/master\/dist\/nico-nico-ranking-ng\.user\.js$/m);
     assert.doesNotMatch(header, /update\.greasyfork\.org|@require/);
@@ -81,7 +81,7 @@ test('default build publishes the fixed user/meta filenames and an identical com
   const compatibility = await readFile(join(root, 'dist/nico-nico-ranking-ng-v16-list-tile-fix.user.js'));
   const meta = await readFile(metaOutput, 'utf8');
   assert.deepEqual(compatibility, current);
-  assert.match(current.toString('utf8'), /@version\s+160\.38/);
+  assert.match(current.toString('utf8'), /@version\s+160\.39/);
   const header = current.toString('utf8').match(/^\/\/ ==UserScript==[\s\S]*?^\/\/ ==\/UserScript==/m)[0];
   assert.equal(meta.trimEnd(), header.trimEnd(), 'meta.js is metadata only and exactly matches the installable script header');
   assert.doesNotMatch(meta, /d3-dsv|NRN_VERSION|\(function/);

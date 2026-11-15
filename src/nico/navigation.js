@@ -16,7 +16,7 @@
       var cards = function() {
         return Array.from(document.querySelectorAll(selector)).map(function(node) {
           return {node:node, id:node.getAttribute('data-decoration-video-id'),
-            text:node.querySelector('a[href*="/watch/"]')?.getAttribute('href') || node.textContent}
+            text:node.querySelector('a[href*="/watch/"], a[href*="/shorts/"]')?.getAttribute('href') || node.textContent}
         })
       }
       var sameCards = function(a, b) {

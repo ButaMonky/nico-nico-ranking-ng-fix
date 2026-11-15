@@ -343,8 +343,8 @@
             inlineBadge = page.doc.createElement('span')
             inlineBadge.className = 'nrn-self-ad-inline-badge'
             var titleElem = rootElem.querySelector('.nrn-movie-title')
-            if (!titleElem) titleElem = rootElem.querySelector('a[data-nrn-movie-anchor="true"][href*="/watch/"]')
-            if (!titleElem) titleElem = rootElem.querySelector('a[href^="/watch/"], a[href*="nicovideo.jp/watch/"]')
+            if (!titleElem) titleElem = rootElem.querySelector('a[data-nrn-movie-anchor="true"]:is([href*="/watch/"],[href*="/shorts/"])')
+            if (!titleElem) titleElem = rootElem.querySelector('a[href^="/watch/"], a[href*="nicovideo.jp/watch/"], a[href^="/shorts/"], a[href*="nicovideo.jp/shorts/"]')
             if (titleElem && titleElem.parentNode) titleElem.parentNode.insertBefore(inlineBadge, titleElem)
             else rootElem.insertBefore(inlineBadge, rootElem.firstChild)
           }

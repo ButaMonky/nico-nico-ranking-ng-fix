@@ -50,7 +50,7 @@
         get titleElem() {
           let e = this.elem.querySelector('.nrn-movie-title');
           if (!e) {
-            const a = this.elem.querySelector('div:not(.pos_relative) > a[data-anchor-area][href^="/watch/"]');
+            const a = this.elem.querySelector('div:not(.pos_relative) > a[data-anchor-area]:is([href^="/watch/"],[href^="/shorts/"])');
             e = wrapTitleTextNodeInElement(a);
           }
           return e;
@@ -58,8 +58,9 @@
         get _movieAnchorSelectors() {
           // 投稿者やタグへのリンクではなく、動画ページへのリンクだけを対象にする。
           return [
-            'a[href^="/watch/"]',
-            'a[href^="https://www.nicovideo.jp/watch/"]'
+            'a:is([href^="/watch/"],[href^="/shorts/"])',
+            'a[href^="https://www.nicovideo.jp/watch/"]',
+            'a[href^="https://www.nicovideo.jp/shorts/"]'
           ];
         },
         set actionPane(actionPane) {
@@ -113,10 +114,10 @@
         get titleElem() {
           let e = this.elem.querySelector('.nrn-movie-title');
           if (!e) {
-            const a = this.elem.querySelector('a[data-anchor-area][href^="/watch/"] > div > p')
+            const a = this.elem.querySelector('a[data-anchor-area]:is([href^="/watch/"],[href^="/shorts/"]) > div > p')
               || (this.elem.matches('a[data-anchor-detail="nicoad"], a[data-anchor-page^="ranking"]') ? this.elem.querySelector('p') : null)
               // BRUSH-065: ranking sponsored card whose root is its wrapper.
-              || this.elem.querySelector('a[data-anchor-page^="ranking"][href^="/watch/"] p');
+              || this.elem.querySelector('a[data-anchor-page^="ranking"]:is([href^="/watch/"],[href^="/shorts/"]) p');
             e = wrapTitleTextNodeInElement(a);
           }
           return e;
@@ -347,8 +348,8 @@
             seen.add(id)
 
             var titleAnchor =
-              root.querySelector('a[href^="/watch/"].fw_bold') ||
-              Array.from(root.querySelectorAll('a[href^="/watch/"]')).find(function(a) {
+              root.querySelector('a:is([href^="/watch/"],[href^="/shorts/"]).fw_bold') ||
+              Array.from(root.querySelectorAll('a:is([href^="/watch/"],[href^="/shorts/"])')).find(function(a) {
                 return a.textContent && a.textContent.trim()
               })
             var thumb = root.querySelector('img[src*="/nicovideo/thumbnails/"]')
@@ -608,7 +609,7 @@
         options = options || {}
         var doc = this.doc
         var thumbUrl = (item.thumbnail && (item.thumbnail.listingUrl || item.thumbnail.middleUrl || item.thumbnail.url)) || ''
-        var watchUrl = 'https://www.nicovideo.jp/watch/' + item.id
+        var watchUrl = 'https://www.nicovideo.jp/' + (/^ss\d/.test(item.id) ? 'shorts/' : 'watch/') + item.id
         var view = (item.count && item.count.view) || 0
         var comment = (item.count && item.count.comment) || 0
         var owner = item.owner || {}
@@ -791,7 +792,7 @@
         return this._parseMain(target).concat(this._parseAds(target));
       },
       _parseMain(target) {
-        const anchors = new Set(target.querySelectorAll('div[data-anchor] > div:not(.pos_relative) > a[data-anchor-area][href^="/watch/"]'))
+        const anchors = new Set(target.querySelectorAll('div[data-anchor] > div:not(.pos_relative) > a[data-anchor-area]:is([href^="/watch/"],[href^="/shorts/"])'))
         // BRUSH-061: genre ranking cards nest the title link deeper
         // (root > div.d_grid > div > div > a.fw_bold), which the search-shaped
         // selector above misses. Find each native card root's title link: the
@@ -799,7 +800,7 @@
         const roots = Array.from(target.querySelectorAll('[data-decoration-video-id][data-anchor-area="main"]'))
         if (target.matches?.('[data-decoration-video-id][data-anchor-area="main"]')) roots.unshift(target)
         for (const root of roots) {
-          const title = Array.from(root.querySelectorAll('a[data-anchor-area][href^="/watch/"]')).find(a => {
+          const title = Array.from(root.querySelectorAll('a[data-anchor-area]:is([href^="/watch/"],[href^="/shorts/"])')).find(a => {
             const thumb = a.closest('.pos_relative')
             return !(thumb && root.contains(thumb)) && a.textContent.trim()
           })
@@ -835,7 +836,7 @@
         // otherwise the card itself. Each card is read once.
         if (/^\/ranking(\/|$)/.test(location.pathname)) {
           const ads = []
-          for (const item of target.querySelectorAll('a[data-anchor-area="main"][data-anchor-page^="ranking"][href^="/watch/"]')) {
+          for (const item of target.querySelectorAll('a[data-anchor-area="main"][data-anchor-page^="ranking"]:is([href^="/watch/"],[href^="/shorts/"])')) {
             // Already read (root may be the wrapper, which our own inserted
             // elements later make look like a multi-child container).
             if (item.closest('[data-decoration-video-id], .nrn-parsed')) continue
@@ -847,7 +848,7 @@
           }
           return ads.filter(e => e.movie.id && e.movie.title && !e.rootElem.classList.contains('nrn-parsed'));
         }
-        return Array.from(target.querySelectorAll('a[data-anchor-area][href^="/watch/"]:has(> div > p)'))
+        return Array.from(target.querySelectorAll('a[data-anchor-area]:is([href^="/watch/"],[href^="/shorts/"]):has(> div > p)'))
           .map(function(item) {
             return {
               type: 'ads',
@@ -876,7 +877,7 @@
         // a full parse: native/ad result cards, pagination and our config bar.
         // Unrelated parent-document UI (menus, overlays, players) is ignored
         // without naming any particular site or extension.
-        const resultSelector = '[data-decoration-video-id], a[data-anchor-area][href^="/watch/"], [data-scope="pagination"]'
+        const resultSelector = '[data-decoration-video-id], a[data-anchor-area]:is([href^="/watch/"],[href^="/shorts/"]), [data-scope="pagination"]'
         const touchesResults = node => {
           if (node.nodeType !== 1) return false
           const bar = this.configBar?.elem
@@ -1449,7 +1450,7 @@
       height: 63px;
     }
   }
-  & div:not(.pos_relative) > a[href^="/watch/"] ~ * {
+  & div:not(.pos_relative) > a:is([href^="/watch/"],[href^="/shorts/"]) ~ * {
     display: none;
   }
 }

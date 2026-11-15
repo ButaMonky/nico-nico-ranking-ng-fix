@@ -492,11 +492,12 @@
     })()
 
     var Description = (function() {
-      var re = /(sm|so|nm|co|ar|im|lv|mylist\/|watch\/|user\/)(?:\d+)/g
+      var re = /(sm|so|nm|ss|co|ar|im|lv|mylist\/|watch\/|user\/)(?:\d+)/g
       var typeToHRef = {
         sm: 'https://www.nicovideo.jp/watch/',
         so: 'https://www.nicovideo.jp/watch/',
         nm: 'https://www.nicovideo.jp/watch/',
+        ss: 'https://www.nicovideo.jp/shorts/',
         co: 'https://com.nicovideo.jp/community/',
         ar: 'https://ch.nicovideo.jp/article/',
         im: 'https://seiga.nicovideo.jp/seiga/',

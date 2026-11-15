@@ -708,7 +708,8 @@
       FourColumnMovieRoot,
       is(location) {
         var p = location.pathname
-        return p.startsWith('/search/') || p.startsWith('/tag/')
+        // BRUSH-072: shorts search pages share the search card structure.
+        return p.startsWith('/search/') || p.startsWith('/tag/') || p.startsWith('/search_shorts/') || p.startsWith('/tag_shorts/')
       },
       _isGettingAdDone(mutationRecord) {
         const r = mutationRecord

@@ -5,7 +5,7 @@
 // @contributor  kengo321 (original)
 // @description  ニコニコ動画のランキング・検索結果にNG、複合NG、検索結果の自動補充を追加する非公式の改変版
 // @match        *://www.nicovideo.jp/*
-// @version      160.38
+// @version      160.39
 // @grant        unsafeWindow
 // @grant        GM_getValue
 // @grant        GM_setValue
@@ -203,7 +203,7 @@
 
   // This facade is scoped to this userscript; other scripts keep their console.
   var nrnConsoleConfig = null
-  var NRN_VERSION = '160.38'
+  var NRN_VERSION = '160.39'
   var nrnNativeConsole = globalThis.console
   var nrnConsoleCounts = {warnings:0,errors:0}
   var nrnSetConsoleConfig = function(config) { nrnConsoleConfig = config }
@@ -232,8 +232,9 @@
   var set = function(target, propertyName) {
     return function(value) { target[propertyName] = value }
   }
+  // BRUSH-072: shorts link to /shorts/ss…; normal videos to /watch/….
   var movieIdOf = function(absoluteMovieURL) {
-    return new URL(absoluteMovieURL).pathname.slice('/watch/'.length)
+    return new URL(absoluteMovieURL).pathname.replace(/^\/(?:watch|shorts)\//, '')
   }
   const ancestor = (child, selector) => {
     for (let n = child.parentNode; n; n = n.parentNode)

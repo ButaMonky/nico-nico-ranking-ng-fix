@@ -5,7 +5,7 @@
 // @contributor  kengo321 (original)
 // @description  ニコニコ動画のランキング・検索結果にNG、複合NG、検索結果の自動補充を追加する非公式の改変版
 // @match        *://www.nicovideo.jp/*
-// @version      160.38
+// @version      160.39
 // @grant        unsafeWindow
 // @grant        GM_getValue
 // @grant        GM_setValue
@@ -203,7 +203,7 @@
 
   // This facade is scoped to this userscript; other scripts keep their console.
   var nrnConsoleConfig = null
-  var NRN_VERSION = '160.38'
+  var NRN_VERSION = '160.39'
   var nrnNativeConsole = globalThis.console
   var nrnConsoleCounts = {warnings:0,errors:0}
   var nrnSetConsoleConfig = function(config) { nrnConsoleConfig = config }
@@ -232,8 +232,9 @@
   var set = function(target, propertyName) {
     return function(value) { target[propertyName] = value }
   }
+  // BRUSH-072: shorts link to /shorts/ss…; normal videos to /watch/….
   var movieIdOf = function(absoluteMovieURL) {
-    return new URL(absoluteMovieURL).pathname.slice('/watch/'.length)
+    return new URL(absoluteMovieURL).pathname.replace(/^\/(?:watch|shorts)\//, '')
   }
   const ancestor = (child, selector) => {
     for (let n = child.parentNode; n; n = n.parentNode)
@@ -2004,7 +2005,7 @@
     const KEY = 'ngVerdictCache'
     const ENABLED_KEY = 'ngVerdictCacheEnabled'
     const MAX_ENTRIES = 200000   // 約2MB。1件あたり動画ID＋空白の約10バイト
-    const VIDEO_ID = /^(sm|so|nm)[0-9]+$/
+    const VIDEO_ID = /^(sm|so|nm|ss)[0-9]+$/
     const PREHIDE_ATTR = 'data-nrn-prehide'
     const SAFETY_RELEASE_MS = 20000
     const CSS = '[' + PREHIDE_ATTR + '] { display: none !important; }'
@@ -2178,7 +2179,7 @@
       for (const [key, list] of buckets) if (valid(key, idx)) for (const id of list) ids.add(id)
       return ids
     }
-    const supportedPath = () => /^\/(search|tag)\/./.test(location.pathname) || /^\/ranking(\/?$|\/(genre|custom))/.test(location.pathname)
+    const supportedPath = () => /^\/(search|tag|search_shorts|tag_shorts)\/./.test(location.pathname) || /^\/ranking(\/?$|\/(genre|custom))/.test(location.pathname)
     // BRUSH-068: besides remembered verdicts, a card's own markup already
     // carries its video ID, owner link and title when it is inserted, so
     // NG video IDs, NG user/channel IDs and NG title words hide it before the
@@ -2194,7 +2195,7 @@
         }
       }
       if (rules.titles.length) {
-        for (const a of el.querySelectorAll('a[href^="/watch/"]')) {
+        for (const a of el.querySelectorAll('a:is([href^="/watch/"],[href^="/shorts/"])')) {
           const thumb = a.closest('.pos_relative')
           if (thumb && el.contains(thumb)) continue
           const text = a.textContent.trim().toUpperCase()
@@ -2482,7 +2483,7 @@
   // Search owner/tag evidence is deliberately left unknown here.
   var CandidateFilter = (function() {
     function reason(item, config) {
-      if (!item || typeof item.id !== 'string' || !/^(sm|so|nm)[0-9]+$/.test(item.id)) return null
+      if (!item || typeof item.id !== 'string' || !/^(sm|so|nm|ss)[0-9]+$/.test(item.id)) return null
       if (config?.ngMovies?.set.has(item.id)) return 'movieId'
       // BRUSH-060: an earlier settled NG verdict whose reason is still in the
       // current settings. Opt-out via ngVerdictCacheEnabled.
@@ -2882,12 +2883,12 @@
     function nicoadName(id,data,owner) {
       // This endpoint has no trustworthy user/channel discriminator. Require a
       // separately established user identity, even when the numeric IDs match.
-      if (!owner || owner.type !== 'user' || data?.id !== id || !/^(sm|so|nm)[0-9]+$/.test(id)) return null
+      if (!owner || owner.type !== 'user' || data?.id !== id || !/^(sm|so|nm|ss)[0-9]+$/.test(id)) return null
       if (typeof data.ownerName !== 'string' || !data.ownerName.trim()) return null
       if (data.targetUrl != null) {
         try {
           const url = new URL(data.targetUrl)
-          if (url.origin !== 'https://www.nicovideo.jp' || url.pathname !== '/watch/' + id) return null
+          if (url.origin !== 'https://www.nicovideo.jp' || (url.pathname !== '/watch/' + id && url.pathname !== '/shorts/' + id)) return null
         } catch (_) { return null }
       }
       const candidate = normalize({type:'user',id:data.ownerId,name:data.ownerName})
@@ -2919,7 +2920,7 @@
         if (!link.querySelector(':scope > img') || !link.querySelector(':scope > p')) continue
         // The native owner row is a sibling of this video's title, not a user link in a description.
         const titleSibling = [...link.parentElement.querySelectorAll(':scope > a[href]')].some(a => {
-          try { return new URL(a.href).pathname === '/watch/' + id } catch (_) { return false }
+          try { const path = new URL(a.href).pathname; return path === '/watch/' + id || path === '/shorts/' + id } catch (_) { return false }
         })
         if (!titleSibling) continue
         const owner = fromUrl(link.href,root.ownerDocument.baseURI)
@@ -2943,7 +2944,7 @@
   // (see _ai-sync completed BRUSH-005/007). Unknown fields are dropped;
   // nothing is fetched or rendered.
   var SearchItemAdapter = (function() {
-    const videoIdPattern = /^(sm|so|nm)[0-9]+$/
+    const videoIdPattern = /^(sm|so|nm|ss)[0-9]+$/
     // Search-sourced metadata fields, in the order callers apply them.
     const fields = ['likeCount','viewCount','commentCount','mylistCount','durationSeconds','registeredAtMs']
     // A count is known only when it is a non-negative safe integer number.
@@ -5638,11 +5639,12 @@ html[data-nrn-ui-theme="dark"] .nrn-contributor-ng-name-button:hover {
     })()
 
     var Description = (function() {
-      var re = /(sm|so|nm|co|ar|im|lv|mylist\/|watch\/|user\/)(?:\d+)/g
+      var re = /(sm|so|nm|ss|co|ar|im|lv|mylist\/|watch\/|user\/)(?:\d+)/g
       var typeToHRef = {
         sm: 'https://www.nicovideo.jp/watch/',
         so: 'https://www.nicovideo.jp/watch/',
         nm: 'https://www.nicovideo.jp/watch/',
+        ss: 'https://www.nicovideo.jp/shorts/',
         co: 'https://com.nicovideo.jp/community/',
         ar: 'https://ch.nicovideo.jp/article/',
         im: 'https://seiga.nicovideo.jp/seiga/',
@@ -6619,7 +6621,7 @@ html[data-nrn-ui-theme="dark"] .nrn-contributor-ng-name-button:hover {
         get titleElem() {
           let e = this.elem.querySelector('.nrn-movie-title');
           if (!e) {
-            const a = this.elem.querySelector('div:not(.pos_relative) > a[data-anchor-area][href^="/watch/"]');
+            const a = this.elem.querySelector('div:not(.pos_relative) > a[data-anchor-area]:is([href^="/watch/"],[href^="/shorts/"])');
             e = wrapTitleTextNodeInElement(a);
           }
           return e;
@@ -6627,8 +6629,9 @@ html[data-nrn-ui-theme="dark"] .nrn-contributor-ng-name-button:hover {
         get _movieAnchorSelectors() {
           // 投稿者やタグへのリンクではなく、動画ページへのリンクだけを対象にする。
           return [
-            'a[href^="/watch/"]',
-            'a[href^="https://www.nicovideo.jp/watch/"]'
+            'a:is([href^="/watch/"],[href^="/shorts/"])',
+            'a[href^="https://www.nicovideo.jp/watch/"]',
+            'a[href^="https://www.nicovideo.jp/shorts/"]'
           ];
         },
         set actionPane(actionPane) {
@@ -6682,10 +6685,10 @@ html[data-nrn-ui-theme="dark"] .nrn-contributor-ng-name-button:hover {
         get titleElem() {
           let e = this.elem.querySelector('.nrn-movie-title');
           if (!e) {
-            const a = this.elem.querySelector('a[data-anchor-area][href^="/watch/"] > div > p')
+            const a = this.elem.querySelector('a[data-anchor-area]:is([href^="/watch/"],[href^="/shorts/"]) > div > p')
               || (this.elem.matches('a[data-anchor-detail="nicoad"], a[data-anchor-page^="ranking"]') ? this.elem.querySelector('p') : null)
               // BRUSH-065: ranking sponsored card whose root is its wrapper.
-              || this.elem.querySelector('a[data-anchor-page^="ranking"][href^="/watch/"] p');
+              || this.elem.querySelector('a[data-anchor-page^="ranking"]:is([href^="/watch/"],[href^="/shorts/"]) p');
             e = wrapTitleTextNodeInElement(a);
           }
           return e;
@@ -6916,8 +6919,8 @@ html[data-nrn-ui-theme="dark"] .nrn-contributor-ng-name-button:hover {
             seen.add(id)
 
             var titleAnchor =
-              root.querySelector('a[href^="/watch/"].fw_bold') ||
-              Array.from(root.querySelectorAll('a[href^="/watch/"]')).find(function(a) {
+              root.querySelector('a:is([href^="/watch/"],[href^="/shorts/"]).fw_bold') ||
+              Array.from(root.querySelectorAll('a:is([href^="/watch/"],[href^="/shorts/"])')).find(function(a) {
                 return a.textContent && a.textContent.trim()
               })
             var thumb = root.querySelector('img[src*="/nicovideo/thumbnails/"]')
@@ -7177,7 +7180,7 @@ html[data-nrn-ui-theme="dark"] .nrn-contributor-ng-name-button:hover {
         options = options || {}
         var doc = this.doc
         var thumbUrl = (item.thumbnail && (item.thumbnail.listingUrl || item.thumbnail.middleUrl || item.thumbnail.url)) || ''
-        var watchUrl = 'https://www.nicovideo.jp/watch/' + item.id
+        var watchUrl = 'https://www.nicovideo.jp/' + (/^ss\d/.test(item.id) ? 'shorts/' : 'watch/') + item.id
         var view = (item.count && item.count.view) || 0
         var comment = (item.count && item.count.comment) || 0
         var owner = item.owner || {}
@@ -7360,7 +7363,7 @@ html[data-nrn-ui-theme="dark"] .nrn-contributor-ng-name-button:hover {
         return this._parseMain(target).concat(this._parseAds(target));
       },
       _parseMain(target) {
-        const anchors = new Set(target.querySelectorAll('div[data-anchor] > div:not(.pos_relative) > a[data-anchor-area][href^="/watch/"]'))
+        const anchors = new Set(target.querySelectorAll('div[data-anchor] > div:not(.pos_relative) > a[data-anchor-area]:is([href^="/watch/"],[href^="/shorts/"])'))
         // BRUSH-061: genre ranking cards nest the title link deeper
         // (root > div.d_grid > div > div > a.fw_bold), which the search-shaped
         // selector above misses. Find each native card root's title link: the
@@ -7368,7 +7371,7 @@ html[data-nrn-ui-theme="dark"] .nrn-contributor-ng-name-button:hover {
         const roots = Array.from(target.querySelectorAll('[data-decoration-video-id][data-anchor-area="main"]'))
         if (target.matches?.('[data-decoration-video-id][data-anchor-area="main"]')) roots.unshift(target)
         for (const root of roots) {
-          const title = Array.from(root.querySelectorAll('a[data-anchor-area][href^="/watch/"]')).find(a => {
+          const title = Array.from(root.querySelectorAll('a[data-anchor-area]:is([href^="/watch/"],[href^="/shorts/"])')).find(a => {
             const thumb = a.closest('.pos_relative')
             return !(thumb && root.contains(thumb)) && a.textContent.trim()
           })
@@ -7404,7 +7407,7 @@ html[data-nrn-ui-theme="dark"] .nrn-contributor-ng-name-button:hover {
         // otherwise the card itself. Each card is read once.
         if (/^\/ranking(\/|$)/.test(location.pathname)) {
           const ads = []
-          for (const item of target.querySelectorAll('a[data-anchor-area="main"][data-anchor-page^="ranking"][href^="/watch/"]')) {
+          for (const item of target.querySelectorAll('a[data-anchor-area="main"][data-anchor-page^="ranking"]:is([href^="/watch/"],[href^="/shorts/"])')) {
             // Already read (root may be the wrapper, which our own inserted
             // elements later make look like a multi-child container).
             if (item.closest('[data-decoration-video-id], .nrn-parsed')) continue
@@ -7416,7 +7419,7 @@ html[data-nrn-ui-theme="dark"] .nrn-contributor-ng-name-button:hover {
           }
           return ads.filter(e => e.movie.id && e.movie.title && !e.rootElem.classList.contains('nrn-parsed'));
         }
-        return Array.from(target.querySelectorAll('a[data-anchor-area][href^="/watch/"]:has(> div > p)'))
+        return Array.from(target.querySelectorAll('a[data-anchor-area]:is([href^="/watch/"],[href^="/shorts/"]):has(> div > p)'))
           .map(function(item) {
             return {
               type: 'ads',
@@ -7445,7 +7448,7 @@ html[data-nrn-ui-theme="dark"] .nrn-contributor-ng-name-button:hover {
         // a full parse: native/ad result cards, pagination and our config bar.
         // Unrelated parent-document UI (menus, overlays, players) is ignored
         // without naming any particular site or extension.
-        const resultSelector = '[data-decoration-video-id], a[data-anchor-area][href^="/watch/"], [data-scope="pagination"]'
+        const resultSelector = '[data-decoration-video-id], a[data-anchor-area]:is([href^="/watch/"],[href^="/shorts/"]), [data-scope="pagination"]'
         const touchesResults = node => {
           if (node.nodeType !== 1) return false
           const bar = this.configBar?.elem
@@ -8018,7 +8021,7 @@ html[data-nrn-ui-theme="dark"] .nrn-contributor-ng-name-button:hover {
       height: 63px;
     }
   }
-  & div:not(.pos_relative) > a[href^="/watch/"] ~ * {
+  & div:not(.pos_relative) > a:is([href^="/watch/"],[href^="/shorts/"]) ~ * {
     display: none;
   }
 }
@@ -8745,7 +8748,8 @@ html[data-nrn-ui-theme="dark"] .nrn-contributor-ng-name-button:hover {
       FourColumnMovieRoot,
       is(location) {
         var p = location.pathname
-        return p.startsWith('/search/') || p.startsWith('/tag/')
+        // BRUSH-072: shorts search pages share the search card structure.
+        return p.startsWith('/search/') || p.startsWith('/tag/') || p.startsWith('/search_shorts/') || p.startsWith('/tag_shorts/')
       },
       _isGettingAdDone(mutationRecord) {
         const r = mutationRecord
@@ -8814,7 +8818,7 @@ html[data-nrn-ui-theme="dark"] .nrn-contributor-ng-name-button:hover {
     function start(config,path) {
       active?.close()
       const started = now(), seq = ++sequence
-      const routeKind = /^\/tag\//.test(path) ? 'tag' : /^\/search\//.test(path) ? 'search' : /^\/ranking/.test(path) ? 'ranking' : 'other'
+      const routeKind = /^\/tag(_shorts)?\//.test(path) ? 'tag' : /^\/search(_shorts)?\//.test(path) ? 'search' : /^\/ranking/.test(path) ? 'ranking' : 'other'
       let movies = null, queue = null, runtime = null, closed = false, phase = 'starting'
       let frozen = null, initial = null, comparison = null, audit = null, preview = null, terminalElapsedMs = null, endedPhase = null
       const pending = new Set(), attempted = new Set(), recent = new Set(), session = new Set()
@@ -9037,7 +9041,7 @@ html[data-nrn-ui-theme="dark"] .nrn-contributor-ng-name-button:hover {
     const collect = function(doc, page, extra = {}) {
       const content = doc.querySelector('[aria-label="nicovideo-content"]')
       const scope = content || doc.body
-      const watchLinks = scope ? scope.querySelectorAll('a[href^="/watch/"]').length : 0
+      const watchLinks = scope ? scope.querySelectorAll('a:is([href^="/watch/"],[href^="/shorts/"])').length : 0
       const nativeRootElems = Array.from(doc.querySelectorAll('[data-decoration-video-id][data-anchor-area="main"]:not([data-nrn-autofill="true"])'))
         .filter(e => !e.closest('[data-scope="presence"],[data-scope="tooltip"],[data-scope="menu"]'))
       const parsedRoots = (page?.movieRoots || []).filter(r => r.elem && r.elem.isConnected)
@@ -9045,14 +9049,14 @@ html[data-nrn-ui-theme="dark"] .nrn-contributor-ng-name-button:hover {
       const isParsed = el => { for (const p of parsedElems) if (p === el || p.contains(el) || el.contains(p)) return true; return false }
       const parsedNative = nativeRootElems.filter(isParsed).length
       let unreadLinks = 0
-      if (scope) for (const a of scope.querySelectorAll('a[href^="/watch/"]')) {
+      if (scope) for (const a of scope.querySelectorAll('a:is([href^="/watch/"],[href^="/shorts/"])')) {
         if (a.closest('[data-decoration-video-id]') || a.closest('.nrn-parsed') || a.closest('[id^="nrn-"]')) continue
         unreadLinks++
       }
       const snap = typeof Diagnostics === 'object' ? Diagnostics.snapshot() : null
       const run = snap?.current?.network?.run || {}
       return {
-        routeKind: /^\/tag\//.test(location.pathname) ? 'tag' : /^\/search\//.test(location.pathname) ? 'search' : /^\/ranking/.test(location.pathname) ? 'ranking' : 'other',
+        routeKind: /^\/tag(_shorts)?\//.test(location.pathname) ? 'tag' : /^\/search(_shorts)?\//.test(location.pathname) ? 'search' : /^\/ranking/.test(location.pathname) ? 'ranking' : 'other',
         contentRoot: Boolean(content), watchLinks, nativeRoots: nativeRootElems.length, parsedNative,
         parsedTotal: parsedRoots.length, unreadLinks,
         initialPageData: extra.initialPageData || null,
@@ -9989,7 +9993,7 @@ a.nrn-parsed[data-anchor-detail="nicoad"] > .nrn-movie-info-toggle { background:
       // No new network request needed for this video (shared or known absent).
       const free = id => responses.has(id) || absent.has(id)
       function getData(id,kind = 'adsDecoration') {
-        if (disposed || !/^(sm|so|nm)[0-9]+$/.test(id)) return Promise.resolve(null)
+        if (disposed || !/^(sm|so|nm|ss)[0-9]+$/.test(id)) return Promise.resolve(null)
         if (responses.has(id)) return responses.get(id)
         if (absent.has(id)) {
           // Same outcome as the 404 it remembers, without a request.
@@ -12194,8 +12198,8 @@ var CardActionData = (function () {
             inlineBadge = page.doc.createElement('span')
             inlineBadge.className = 'nrn-self-ad-inline-badge'
             var titleElem = rootElem.querySelector('.nrn-movie-title')
-            if (!titleElem) titleElem = rootElem.querySelector('a[data-nrn-movie-anchor="true"][href*="/watch/"]')
-            if (!titleElem) titleElem = rootElem.querySelector('a[href^="/watch/"], a[href*="nicovideo.jp/watch/"]')
+            if (!titleElem) titleElem = rootElem.querySelector('a[data-nrn-movie-anchor="true"]:is([href*="/watch/"],[href*="/shorts/"])')
+            if (!titleElem) titleElem = rootElem.querySelector('a[href^="/watch/"], a[href*="nicovideo.jp/watch/"], a[href^="/shorts/"], a[href*="nicovideo.jp/shorts/"]')
             if (titleElem && titleElem.parentNode) titleElem.parentNode.insertBefore(inlineBadge, titleElem)
             else rootElem.insertBefore(inlineBadge, rootElem.firstChild)
           }
@@ -16060,7 +16064,7 @@ var CardActionData = (function () {
       var cards = function() {
         return Array.from(document.querySelectorAll(selector)).map(function(node) {
           return {node:node, id:node.getAttribute('data-decoration-video-id'),
-            text:node.querySelector('a[href*="/watch/"]')?.getAttribute('href') || node.textContent}
+            text:node.querySelector('a[href*="/watch/"], a[href*="/shorts/"]')?.getAttribute('href') || node.textContent}
         })
       }
       var sameCards = function(a, b) {

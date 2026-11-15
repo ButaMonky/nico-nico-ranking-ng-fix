@@ -20,7 +20,7 @@
       // No new network request needed for this video (shared or known absent).
       const free = id => responses.has(id) || absent.has(id)
       function getData(id,kind = 'adsDecoration') {
-        if (disposed || !/^(sm|so|nm)[0-9]+$/.test(id)) return Promise.resolve(null)
+        if (disposed || !/^(sm|so|nm|ss)[0-9]+$/.test(id)) return Promise.resolve(null)
         if (responses.has(id)) return responses.get(id)
         if (absent.has(id)) {
           // Same outcome as the 404 it remembers, without a request.

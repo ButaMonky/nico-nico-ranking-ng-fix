@@ -70,7 +70,7 @@
     const collect = function(doc, page, extra = {}) {
       const content = doc.querySelector('[aria-label="nicovideo-content"]')
       const scope = content || doc.body
-      const watchLinks = scope ? scope.querySelectorAll('a[href^="/watch/"]').length : 0
+      const watchLinks = scope ? scope.querySelectorAll('a:is([href^="/watch/"],[href^="/shorts/"])').length : 0
       const nativeRootElems = Array.from(doc.querySelectorAll('[data-decoration-video-id][data-anchor-area="main"]:not([data-nrn-autofill="true"])'))
         .filter(e => !e.closest('[data-scope="presence"],[data-scope="tooltip"],[data-scope="menu"]'))
       const parsedRoots = (page?.movieRoots || []).filter(r => r.elem && r.elem.isConnected)
@@ -78,14 +78,14 @@
       const isParsed = el => { for (const p of parsedElems) if (p === el || p.contains(el) || el.contains(p)) return true; return false }
       const parsedNative = nativeRootElems.filter(isParsed).length
       let unreadLinks = 0
-      if (scope) for (const a of scope.querySelectorAll('a[href^="/watch/"]')) {
+      if (scope) for (const a of scope.querySelectorAll('a:is([href^="/watch/"],[href^="/shorts/"])')) {
         if (a.closest('[data-decoration-video-id]') || a.closest('.nrn-parsed') || a.closest('[id^="nrn-"]')) continue
         unreadLinks++
       }
       const snap = typeof Diagnostics === 'object' ? Diagnostics.snapshot() : null
       const run = snap?.current?.network?.run || {}
       return {
-        routeKind: /^\/tag\//.test(location.pathname) ? 'tag' : /^\/search\//.test(location.pathname) ? 'search' : /^\/ranking/.test(location.pathname) ? 'ranking' : 'other',
+        routeKind: /^\/tag(_shorts)?\//.test(location.pathname) ? 'tag' : /^\/search(_shorts)?\//.test(location.pathname) ? 'search' : /^\/ranking/.test(location.pathname) ? 'ranking' : 'other',
         contentRoot: Boolean(content), watchLinks, nativeRoots: nativeRootElems.length, parsedNative,
         parsedTotal: parsedRoots.length, unreadLinks,
         initialPageData: extra.initialPageData || null,
