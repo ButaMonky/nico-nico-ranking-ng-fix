@@ -123,11 +123,38 @@
       if (typeof GM_getValue === 'function') NgVerdictCache.installEarly(GM_getValue, document)
       // Native cards stay visible while metadata is pending; confirmed NG is
       // hidden by MovieViewMode as each result arrives.
-      if (['interactive', 'complete'].includes(document.readyState)) {
-        domContentLoaded();
-      } else {
-        document.addEventListener('DOMContentLoaded', domContentLoaded);
+      // BRUSH-062: search, tag, ranking and watch are one React Router app
+      // (nvpc_next), so e.g. a tag link on a watch page reaches /tag/ without a
+      // reload. The script therefore loads on every www.nicovideo.jp page but
+      // stays idle elsewhere: no settings, styles or link changes until the
+      // first supported route, then the normal startup runs once.
+      var supported = function() { return ListPage.is(location) || SearchPage.is(location) }
+      var whenReady = function(fn) {
+        if (['interactive', 'complete'].includes(document.readyState)) fn()
+        else document.addEventListener('DOMContentLoaded', fn, {once:true})
       }
+      if (supported()) { whenReady(domContentLoaded); return }
+      var activated = false, poll = null
+      var activate = function() {
+        if (activated || !supported()) return
+        activated = true
+        clearInterval(poll)
+        window.removeEventListener('popstate', activate)
+        console.log('[NicoNicoRankingNG SPA]', '対象画面へ移動したため起動します', location.pathname)
+        whenReady(domContentLoaded)
+      }
+      ;['pushState', 'replaceState'].forEach(function(name) {
+        var original = history[name]
+        history[name] = function() {
+          var result = original.apply(this, arguments)
+          // Run after the router's own synchronous work for this navigation.
+          if (!activated) Promise.resolve().then(activate)
+          return result
+        }
+      })
+      window.addEventListener('popstate', activate)
+      // Covers routers that update the URL without calling these methods.
+      poll = setInterval(activate, 500)
     }
     return {main}
   })()

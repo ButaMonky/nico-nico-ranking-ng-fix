@@ -781,7 +781,23 @@
         return this._parseMain(target).concat(this._parseAds(target));
       },
       _parseMain(target) {
-        return Array.from(target.querySelectorAll('div[data-anchor] > div:not(.pos_relative) > a[data-anchor-area][href^="/watch/"]'))
+        const anchors = new Set(target.querySelectorAll('div[data-anchor] > div:not(.pos_relative) > a[data-anchor-area][href^="/watch/"]'))
+        // BRUSH-061: genre ranking cards nest the title link deeper
+        // (root > div.d_grid > div > div > a.fw_bold), which the search-shaped
+        // selector above misses. Find each native card root's title link: the
+        // first watch link with text that is not inside the thumbnail block.
+        const roots = Array.from(target.querySelectorAll('[data-decoration-video-id][data-anchor-area="main"]'))
+        if (target.matches?.('[data-decoration-video-id][data-anchor-area="main"]')) roots.unshift(target)
+        for (const root of roots) {
+          const title = Array.from(root.querySelectorAll('a[data-anchor-area][href^="/watch/"]')).find(a => {
+            const thumb = a.closest('.pos_relative')
+            return !(thumb && root.contains(thumb)) && a.textContent.trim()
+          })
+          if (title) anchors.add(title)
+        }
+        const ordered = Array.from(anchors).sort((a, b) =>
+          a === b ? 0 : (a.compareDocumentPosition(b) & 4 ? -1 : 1))
+        return ordered
           .map(function(item) {
             return {
               type: 'main',
@@ -1397,7 +1413,8 @@
     Object.assign(ListPage, {
       MovieRoot,
       is(location) {
-        return location.pathname.startsWith('/ranking/genre');
+        // BRUSH-061: /ranking/custom (カスタムランキング) uses the same cards.
+        return location.pathname.startsWith('/ranking/genre') || location.pathname.startsWith('/ranking/custom');
       },
     })
     return ListPage

@@ -4,10 +4,8 @@
 // @author       ButaMonky
 // @contributor  kengo321 (original)
 // @description  ニコニコ動画のランキング・検索結果にNG、複合NG、検索結果の自動補充を追加する非公式の改変版
-// @match        *://www.nicovideo.jp/ranking*
-// @match        *://www.nicovideo.jp/search/*
-// @match        *://www.nicovideo.jp/tag/*
-// @version      160.31
+// @match        *://www.nicovideo.jp/*
+// @version      160.32
 // @grant        unsafeWindow
 // @grant        GM_getValue
 // @grant        GM_setValue

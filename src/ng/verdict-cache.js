@@ -1,27 +1,28 @@
   // BRUSH-060: NG判定結果の記憶（高速非表示）。
   //
-  // 一度タグ・投稿者・ロックタグ数・複合NGでNGと確定した動画IDを、理由つきで
-  // 端末に保存する。次回以降は詳細取得（getthumbinfo）を待たずに、カードが
-  // DOMへ入った直後（描画前のMutationObserver）に仮非表示にし、AutoFill候補は
-  // 通信前に落とす。手動の「NG動画ID」一覧とは別に保存するため、利用者の一覧を
-  // 汚さず、NG設定の削除・変更で自動的に無効になる。
+  // タグ・投稿者・ロックタグ数・複合NGでNGと確定した動画IDを、NGになった理由の
+  // 「NG設定ごと」にまとめて端末へ保存する。次回以降は詳細取得（getthumbinfo）を
+  // 待たずに、カードがDOMへ入った直後（描画前のMutationObserver）に仮非表示にし、
+  // AutoFill候補は通信前に落とす。手動の「NG動画ID」一覧とは別に保存する。
   //
-  // 記録する理由（どれか1つ）と有効条件:
-  //   u:<id>    投稿者ID/チャンネルIDがNG一覧に残っている
-  //   n:<NAME>  NG投稿者名の語が一覧に残っている
-  //   t:<TAG>   NGタグが一覧に残っている
-  //   l:<TAG>   NGロックタグが一覧に残っている
-  //   k:<n>     ロックタグ数NGが有効で、しきい値が同じ
-  //   r:<hash>  複合NGが有効で、ルールJSONが同じ
+  // 設定ごとのグループ（キー）:
+  //   u:<id>    NG投稿者ID/チャンネルID
+  //   n:<NAME>  NG投稿者名の語
+  //   t:<TAG>   NGタグ
+  //   l:<TAG>   NGロックタグ
+  //   k:<n>     ロックタグ数NG（有効かつ同じしきい値）
+  //   r:<hash>  複合NGの各ルール（ルールIDと条件式から作る。1件の編集はそのルールだけ）
   // 動画IDNG・タイトルNGは最初からDOMだけで即判定できるため記録しない。
   //
-  // 仮非表示は確定ではない。通常の判定が終わってNGでなければ記録を消して
-  // 表示に戻す（タグ変更などで結果が変わった動画を取り違えない）。
+  // 消える条件（日時では消さない）:
+  //   - そのNG設定を削除・変更したとき、グループごと削除（設定読み込み後に確定）
+  //   - 通常の判定でNGでなくなった動画（タグ変更など）は、その1件を削除
+  //   - 合計が上限を超えたとき、いちばん大きいグループの古い順に削除
+  // 保存形式: {"v":2,"b":{"t:FOO":"sm1 sm2 so3", ...}}（IDだけを空白区切り）。
   var NgVerdictCache = (function() {
     const KEY = 'ngVerdictCache'
     const ENABLED_KEY = 'ngVerdictCacheEnabled'
-    const MAX_ENTRIES = 10000
-    const TTL_MS = 30 * 24 * 60 * 60 * 1000
+    const MAX_ENTRIES = 200000   // 約2MB。1件あたり動画ID＋空白の約10バイト
     const VIDEO_ID = /^(sm|so|nm)[0-9]+$/
     const PREHIDE_ATTR = 'data-nrn-prehide'
     const SAFETY_RELEASE_MS = 20000
@@ -36,16 +37,29 @@
     const idSet = values => new Set(values.map(v => String(v)))
     const valueOf = v => v === Object(v) ? v.value : v
 
-    // Reasons are validated against the current settings. Both the early
-    // (document-start, raw GM values) and the normal (Config) paths build this.
+    // Enabled advanced rules -> per-rule key. Editing one rule's condition
+    // (or disabling it) changes only that rule's key.
+    const ruleKeys = function(enabled, json) {
+      const map = new Map()
+      if (!enabled || typeof AdvancedNgRules === 'undefined') return map
+      for (const rule of AdvancedNgRules.parse(json)) {
+        if (rule.enabled) map.set(rule.id, 'r:' + hash(rule.id + '\u0000' + JSON.stringify(rule.expression)))
+      }
+      return map
+    }
+
+    // Which group keys the current settings allow. Built from Config in the
+    // normal path and from raw GM values at document-start.
     const index = function(lists) {
+      const rules = ruleKeys(lists.rulesEnabled, lists.rulesJson)
       return {
         ownerIds: idSet([...lists.userIds, ...lists.channelIds]),
         ownerNames: upperSet(lists.userNames),
         tags: upperSet(lists.tags),
         lockedTags: upperSet(lists.lockedTags),
         lockCount: lists.lockCountEnabled ? String(lists.lockCountThreshold) : null,
-        rules: lists.rulesEnabled ? hash(lists.rulesJson) : null,
+        ruleIdToKey: rules,
+        ruleKeys: new Set(rules.values()),
       }
     }
     const indexFromConfig = function(config) {
@@ -70,23 +84,23 @@
         rulesJson: read('advancedNgRulesJson', '[]'),
       })
     }
-    const valid = function(reason, idx) {
-      if (typeof reason !== 'string' || reason.length < 3 || reason[1] !== ':') return false
-      const v = reason.slice(2)
-      switch (reason[0]) {
+    const valid = function(key, idx) {
+      if (typeof key !== 'string' || key.length < 3 || key[1] !== ':') return false
+      const v = key.slice(2)
+      switch (key[0]) {
         case 'u': return idx.ownerIds.has(v)
         case 'n': return idx.ownerNames.has(v)
         case 't': return idx.tags.has(v)
         case 'l': return idx.lockedTags.has(v)
         case 'k': return idx.lockCount !== null && idx.lockCount === v
-        case 'r': return idx.rules !== null && idx.rules === v
+        case 'r': return idx.ruleKeys.has(key)
         default: return false
       }
     }
 
-    // The primary reason a settled movie is NG, or null when nothing cacheable
+    // The group a settled movie belongs to, or null when nothing cacheable
     // applies (not NG, or NG only by video ID/title which are already instant).
-    const reasonOf = function(movie, config) {
+    const reasonOf = function(movie, idx) {
       if (!movie || !movie.ng) return null
       const c = movie.contributor
       if (c && c.ngId && c.id != null && c.id !== '') return 'u:' + String(c.id)
@@ -95,43 +109,92 @@
         if (tag.ngByNormal) return 't:' + String(tag.name).toUpperCase()
         if (tag.ngByLock) return 'l:' + String(tag.name).toUpperCase()
       }
-      if (movie.ngByLockedTagCount) return 'k:' + String(config.ngLockedTagCountThreshold.value)
-      if (movie.ngByAdvancedRule) return 'r:' + hash(config.advancedNgRulesJson.value)
+      if (movie.ngByLockedTagCount && idx.lockCount !== null) return 'k:' + idx.lockCount
+      if (movie.ngByAdvancedRule) {
+        for (const m of movie.advancedRuleMatches || []) {
+          const key = idx.ruleIdToKey.get(m.id)
+          if (key) return key
+        }
+      }
       return null
     }
 
+    // ---- persisted form <-> memory ----
     const parse = function(raw) {
-      const map = new Map()
+      const buckets = new Map()
       let obj
-      try { obj = typeof raw === 'string' ? JSON.parse(raw) : raw } catch (e) { return map }
-      if (!obj || typeof obj !== 'object') return map
-      for (const [id, v] of Object.entries(obj)) {
-        if (VIDEO_ID.test(id) && Array.isArray(v) && typeof v[0] === 'string' && Number.isFinite(v[1])) map.set(id, [v[0], v[1]])
+      try { obj = typeof raw === 'string' ? JSON.parse(raw) : raw } catch (e) { return buckets }
+      if (!obj || obj.v !== 2 || !obj.b || typeof obj.b !== 'object') return buckets
+      for (const [key, ids] of Object.entries(obj.b)) {
+        if (typeof key !== 'string' || key[1] !== ':' || typeof ids !== 'string') continue
+        const list = ids.split(' ').filter(id => VIDEO_ID.test(id))
+        if (list.length) buckets.set(key, list)
       }
-      return map
+      return buckets
     }
-    const prune = function(map, now) {
-      for (const [id, v] of map) if (now - v[1] > TTL_MS) map.delete(id)
-      if (map.size <= MAX_ENTRIES) return map
-      const sorted = [...map].sort((a, b) => b[1][1] - a[1][1]).slice(0, MAX_ENTRIES)
-      return new Map(sorted)
+    const serialize = function(buckets) {
+      const b = {}
+      for (const [key, ids] of buckets) if (ids.length) b[key] = ids.join(' ')
+      return JSON.stringify({v:2, b})
+    }
+    const total = buckets => { let n = 0; for (const ids of buckets.values()) n += ids.length; return n }
+    // Over the cap: drop the oldest IDs of the largest group first.
+    const enforceCap = function(buckets, max = MAX_ENTRIES) {
+      let over = total(buckets) - max
+      while (over > 0) {
+        let largestKey = null, largest = 0
+        for (const [key, ids] of buckets) if (ids.length > largest) { largest = ids.length; largestKey = key }
+        if (!largestKey) break
+        const ids = buckets.get(largestKey)
+        const cut = Math.min(over, Math.max(1, ids.length - Math.floor(max / Math.max(1, buckets.size))))
+        ids.splice(0, cut)
+        if (!ids.length) buckets.delete(largestKey)
+        over -= cut
+      }
+      return buckets
     }
 
     // ---- state shared by the early hider and the normal pipeline ----
-    let entries = new Map()
-    let early = null            // {observer, hidden:Set}
-    const stats = {loaded:0, prehidden:0, confirmed:0, cleared:0, learned:0, released:0, prefiltered:0}
-    const removed = new Set()   // deletions to apply when merging with other tabs
+    let buckets = new Map()     // key -> [id, ...] (oldest first)
+    let byId = new Map()        // id -> key
+    let early = null            // {observer, hidden:Set, doc}
+    const stats = {loaded:0, prehidden:0, confirmed:0, cleared:0, learned:0, released:0, prefiltered:0, droppedGroups:0}
+    const removedIds = new Set()     // to apply when merging with other tabs
+    const droppedGroups = new Set()
     let store = null, saveTimer = null
-    let configIndex = null      // rebuilt lazily after any NG setting change
-    const indexFor = config => configIndex || (configIndex = indexFromConfig(config))
+    let configIndex = null
 
+    const rebuildIndex = function() {
+      byId = new Map()
+      for (const [key, ids] of buckets) for (const id of ids) byId.set(id, key)
+    }
+    const removeId = function(id) {
+      const key = byId.get(id)
+      if (!key) return false
+      byId.delete(id)
+      const ids = buckets.get(key)
+      if (ids) {
+        const at = ids.indexOf(id)
+        if (at >= 0) ids.splice(at, 1)
+        if (!ids.length) buckets.delete(key)
+      }
+      return true
+    }
+    const addId = function(id, key) {
+      const prev = byId.get(id)
+      if (prev === key) return false
+      if (prev) removeId(id)
+      if (!buckets.has(key)) buckets.set(key, [])
+      buckets.get(key).push(id)
+      byId.set(id, key)
+      return true
+    }
     const currentValid = function(idx) {
       const ids = new Set()
-      for (const [id, v] of entries) if (valid(v[0], idx)) ids.add(id)
+      for (const [key, list] of buckets) if (valid(key, idx)) for (const id of list) ids.add(id)
       return ids
     }
-    const supportedPath = () => /^\/(search|tag)\/./.test(location.pathname) || location.pathname.startsWith('/ranking/genre')
+    const supportedPath = () => /^\/(search|tag)\/./.test(location.pathname) || /^\/ranking\/(genre|custom)/.test(location.pathname)
     const mark = function(node, hidden) {
       if (node.nodeType !== 1) return
       const apply = el => {
@@ -144,14 +207,25 @@
     }
 
     // Called at document-start with synchronous GM_getValue. Hides cached NG
-    // cards as React/SSR inserts them, before their first paint.
-    const installEarly = function(read, doc) {
+    // cards as React/SSR inserts them, before their first paint. Never
+    // deletes anything: settings read here are not yet authoritative.
+    const installEarly = function(rawRead, doc) {
+      // Only a synchronous getter can act before paint. A manager whose
+      // GM_getValue returns a promise is skipped (its rejection is swallowed);
+      // the normal pipeline still loads the store after settings sync.
+      let async = false
+      const read = function(key, fallback) {
+        const value = rawRead(key, fallback)
+        if (value && typeof value.then === 'function') { async = true; value.then(null, () => {}); return fallback }
+        return value
+      }
       try {
-        if (read(ENABLED_KEY, true) === false) return false
+        if (read(ENABLED_KEY, true) === false || async) return false
         if (read('useGetThumbInfo', true) === false) return false
-        entries = prune(parse(read(KEY, '{}')), Date.now())
-        stats.loaded = entries.size
-        if (!entries.size) return false
+        buckets = parse(read(KEY, ''))
+        rebuildIndex()
+        stats.loaded = byId.size
+        if (!byId.size) return false
         const hidden = currentValid(indexFromRaw(read))
         if (!hidden.size) return false
         const style = doc.createElement('style')
@@ -191,18 +265,16 @@
       saveTimer = null
       if (!store) return
       try {
-        // Merge with what other tabs saved meanwhile: newest timestamp wins,
-        // and IDs this tab confirmed as not-NG are removed.
-        const stored = parse(await store.get(KEY, '{}'))
-        for (const [id, v] of stored) {
-          if (removed.has(id)) continue
-          const mine = entries.get(id)
-          if (!mine || mine[1] < v[1]) entries.set(id, v)
+        // Merge what other tabs saved meanwhile (union per group), minus IDs
+        // this tab confirmed as not NG and groups whose setting was removed.
+        const stored = parse(await store.get(KEY, ''))
+        for (const [key, ids] of stored) {
+          if (droppedGroups.has(key)) continue
+          for (const id of ids) if (!removedIds.has(id) && !byId.has(id)) addId(id, key)
         }
-        for (const id of removed) entries.delete(id)
-        removed.clear()
-        entries = prune(entries, Date.now())
-        await store.set(KEY, JSON.stringify(Object.fromEntries(entries)))
+        removedIds.clear(); droppedGroups.clear()
+        enforceCap(buckets); rebuildIndex()
+        await store.set(KEY, serialize(buckets))
       } catch (e) {
         console.warn('[NicoNicoRankingNG verdictCache] 保存に失敗', e)
       }
@@ -211,26 +283,45 @@
       if (saveTimer === null) saveTimer = setTimeout(persist, 1500)
     }
 
-    // Normal pipeline: config is synced. Keeps the early hidden set in step
-    // with settings changes, and learns/forgets as movies settle.
+    // Delete every group whose NG setting no longer exists or changed.
+    const dropInvalidGroups = function(idx) {
+      let dropped = 0
+      for (const key of [...buckets.keys()]) {
+        if (valid(key, idx)) continue
+        for (const id of buckets.get(key)) byId.delete(id)
+        buckets.delete(key); droppedGroups.add(key); dropped++
+      }
+      if (dropped) { stats.droppedGroups += dropped; schedulePersist() }
+      return dropped
+    }
+    const indexFor = config => configIndex || (configIndex = indexFromConfig(config))
+
+    // Normal pipeline: Config is synced, so settings are authoritative here.
     const attach = function(config, get, set, doc) {
       store = {get: (k, d) => Promise.resolve(get(k, d)), set: (k, v) => Promise.resolve(set(k, v))}
       const enabled = () => config.ngVerdictCacheEnabled.value && config.useGetThumbInfo.value
-      const refreshHidden = function() {
+      const settingsChanged = function() {
         configIndex = null
+        const idx = indexFor(config)
+        dropInvalidGroups(idx)
         if (!early) return
         if (!enabled() || config.ngMovieVisible.value) { stopEarly(); return }
-        const next = currentValid(indexFor(config))
+        const next = currentValid(idx)
         for (const id of early.hidden) if (!next.has(id)) releaseId(early.doc, id)
         early.hidden = next
       }
+      // Without the early path (async-only GM, or nothing to hide), load now.
+      const ready = early ? Promise.resolve() : store.get(KEY, '').then(raw => {
+        for (const [key, ids] of parse(raw)) for (const id of ids) if (!byId.has(id)) addId(id, key)
+        stats.loaded = byId.size
+      }).catch(() => {})
       for (const key of ['ngUserIds','ngChannelIds','ngUserNames','ngTags','ngLockedTags',
         'ngLockedTagCountEnabled','ngLockedTagCountThreshold','advancedNgRulesEnabled','advancedNgRulesJson',
         'ngMovieVisible','ngVerdictCacheEnabled','useGetThumbInfo']) {
-        config[key]?.on?.('changed', refreshHidden)
+        config[key]?.on?.('changed', settingsChanged)
       }
-      refreshHidden()
-      return {enabled}
+      ready.then(settingsChanged)
+      return {enabled, ready}
     }
 
     // One call per new Movie. Learns on settle, forgets when it is not NG.
@@ -241,17 +332,17 @@
         if (timer !== null) { clearTimeout(timer); timer = null }
         const wasHidden = Boolean(early && early.hidden.has(movie.id))
         if (config.ngVerdictCacheEnabled.value) {
-          const reason = reasonOf(movie, config)
-          if (reason) {
-            const prev = entries.get(movie.id)
-            if (!prev || prev[0] !== reason || Date.now() - prev[1] > 86400000) {
-              entries.set(movie.id, [reason, Date.now()]); removed.delete(movie.id)
-              if (!prev) stats.learned++
+          const key = reasonOf(movie, indexFor(config))
+          if (key) {
+            const isNew = !byId.has(movie.id)
+            if (addId(movie.id, key)) {
+              removedIds.delete(movie.id)
+              if (isNew) stats.learned++
               schedulePersist()
             }
             if (wasHidden) stats.confirmed++
-          } else if (!movie.ng && entries.has(movie.id)) {
-            entries.delete(movie.id); removed.add(movie.id)
+          } else if (!movie.ng && removeId(movie.id)) {
+            removedIds.add(movie.id)
             if (early) early.hidden.delete(movie.id)
             stats.cleared++
             schedulePersist()
@@ -269,31 +360,33 @@
       }
     }
 
-    // AutoFill: a candidate whose cached reason is still valid needs no
-    // detail request. Returns a reason label or null.
+    // AutoFill: a candidate in a still-valid group needs no detail request.
     const candidateReason = function(id, config) {
       if (!config?.ngVerdictCacheEnabled?.value || !config.useGetThumbInfo?.value) return null
-      const v = entries.get(id)
-      if (!v || Date.now() - v[1] > TTL_MS) return null
-      if (!valid(v[0], indexFor(config))) return null
+      const key = byId.get(id)
+      if (!key || !valid(key, indexFor(config))) return null
       stats.prefiltered++
       return 'verdictCache'
     }
 
     const clear = async function() {
-      for (const id of entries.keys()) removed.add(id)
-      entries.clear()
+      for (const key of buckets.keys()) droppedGroups.add(key)
+      buckets = new Map(); byId = new Map()
       if (early) { early.hidden.clear(); releaseAll(early.doc) }
-      if (store) await store.set(KEY, '{}')
-      removed.clear()
+      if (store) await store.set(KEY, serialize(buckets))
+      droppedGroups.clear(); removedIds.clear()
+    }
+
+    const groupSummary = function() {
+      return [...buckets].map(([key, ids]) => ({key, count: ids.length})).sort((a, b) => b.count - a.count)
     }
 
     return {
-      KEY, ENABLED_KEY, PREHIDE_ATTR, CSS, MAX_ENTRIES, TTL_MS,
-      installEarly, attach, track, candidateReason, clear, stopEarly,
-      reasonOf, valid, indexFromConfig, indexFromRaw, parse, prune, hash,
-      get size() { return entries.size },
-      get stats() { return Object.assign({size: entries.size, earlyActive: Boolean(early)}, stats) },
-      _reset() { entries = new Map(); early = null; store = null; configIndex = null; removed.clear(); for (const k in stats) stats[k] = 0 },
+      KEY, ENABLED_KEY, PREHIDE_ATTR, CSS, MAX_ENTRIES,
+      installEarly, attach, track, candidateReason, clear, stopEarly, groupSummary,
+      reasonOf, valid, indexFromConfig, indexFromRaw, parse, serialize, enforceCap, hash,
+      get size() { return byId.size },
+      get stats() { return Object.assign({size: byId.size, groups: buckets.size, earlyActive: Boolean(early)}, stats) },
+      _reset() { buckets = new Map(); byId = new Map(); early = null; store = null; configIndex = null; removedIds.clear(); droppedGroups.clear(); for (const k in stats) stats[k] = 0 },
     }
   })()

@@ -177,7 +177,7 @@
       initCheckbox(config, doc, 'ngVerdictCacheEnabled')
       var verdictCount = doc.getElementById('ngVerdictCacheCount')
       var showVerdictCount = function() {
-        if (verdictCount) verdictCount.textContent = '記憶中 ' + NgVerdictCache.size + ' 件'
+        if (verdictCount) verdictCount.textContent = '記憶中 ' + NgVerdictCache.size + ' 件（' + NgVerdictCache.stats.groups + ' 設定）'
       }
       showVerdictCount()
       doc.getElementById('ngVerdictCacheClearButton')?.addEventListener('click', function() {
@@ -931,7 +931,7 @@
     sessionDetailCacheEnabled: '取得済みのタグ・投稿者情報を同じタブに保存して、再読み込み後も再利用します。保存中に情報が変わると、有効期限まで古い情報で判定する場合があります。OFFでもSPA移動中は直近2分・最大512件をメモリに保持します。NG判定は常に現在の設定でやり直します。',
     sessionDetailCacheTtlMinutes: 'キャッシュを何分まで有効とみなすかです。期限切れは自動削除します。',
     sessionDetailCacheMaxEntries: 'キャッシュ件数の上限です。古いものから削除します。',
-    ngVerdictCacheEnabled: 'タグ・投稿者・ロックタグ数・複合NGでNGと確定した動画IDを理由つきで記憶し、次回は詳細取得を待たずに表示前から隠します。AutoFillも記憶済みの候補を通信せずに除外します。理由になったNG設定を削除・変更すると記憶は自動で無効になり、通常の判定でNGでなくなった動画は記憶から消えて表示に戻ります。手動の「NG動画ID」一覧には追加しません。最大10000件・30日。',
+    ngVerdictCacheEnabled: 'タグ・投稿者・ロックタグ数・複合NGでNGと確定した動画IDを、NGの理由になった設定ごとに記憶し、次回は詳細取得を待たずに表示前から隠します。AutoFillも記憶済みの候補を通信せずに除外します。その設定を削除・変更すると、その設定の記憶だけをまとめて消します（複合NGはルール1件ごと）。通常の判定でNGでなくなった動画は記憶から消えて表示に戻ります。日時では消しません。手動の「NG動画ID」一覧には追加しません。上限20万件（約2MB）。',
     autoFillAdMode: '追加動画の広告リボン・提供者表示の取得範囲です。広告者照合の警告・複合NGとは独立しています。無駄を抑えるには「表示動画のみ」を選んでください。',
     selfAdWarningEnabled: '広告者一覧を確認し、投稿者本人によるニコニ広告の可能性を警告します。追加通信が発生します。',
     hoverPreviewEnabled: '既定OFF。自動追加カードにマウスを約0.2秒乗せてから、1件だけ読み込みます。最大30秒、最初は無音。離脱・画面外・タブ非表示で停止します。実サイトでの再生は確認中です。コメントNGを安全に反映できない場合は映像のみ表示します。公式カードのプレビューは変更しません。',
