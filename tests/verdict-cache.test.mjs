@@ -185,3 +185,32 @@ test('early hider hides by NG video ID, owner link and title from markup alone (
   await new Promise(r => setTimeout(r, 0));
   assert.deepEqual(hidden(), ['sm1','sm2','sm3','sm4','sm6']);
 });
+
+test('settings listing: every remembered ID with its reason; forget removes from memory', async () => {
+  const gm = memoryGM({ngVerdictCache:v2({'t:FOO':'sm1 sm2', 'u:9':'sm3'})});
+  const C = load(), cfg = config({tags:['FOO'], userIds:[9]});
+  await C.attach(cfg, gm.get, gm.set, fakeDoc()).ready;
+  const rows = JSON.parse(JSON.stringify(C.entries()));
+  assert.deepEqual(rows.map(r => r.id).sort(), ['sm1','sm2','sm3']);
+  assert.equal(rows.find(r => r.id === 'sm3').label, '投稿者ID「9」');
+  assert.equal(rows.find(r => r.id === 'sm1').label, 'タグ「FOO」');
+  assert.equal(C.forget(['sm1', 'nope']), 1);
+  assert.equal(C.size, 2);
+  await settle();
+  assert.deepEqual(stored(gm), {'t:FOO':'sm2', 'u:9':'sm3'});
+});
+
+test('early hider is installed with nothing known; IDs learned in this tab hide on the next page at once', {skip: !jsdom && 'jsdom not installed (set NRN_JSDOM)'}, async () => {
+  const dom = new jsdom.JSDOM('<!doctype html><html><head></head><body></body></html>', {url:'https://www.nicovideo.jp/tag/x'});
+  const {window} = dom, doc = window.document;
+  const gm = memoryGM({ngTags:'["foo"]'});
+  const C = load({MutationObserver:window.MutationObserver, location:window.location});
+  assert.equal(C.installEarly(gm.get, doc), true, 'installed even with empty memory and no markup rules');
+  const cfg = config({tags:['FOO']});
+  await C.attach(cfg, gm.get, gm.set, doc).ready;
+  C.track(movie('sm50', {ng:true, metadataSettled:true, tags:[{name:'foo', ngByNormal:true}]}), cfg, doc);
+  // Next page (SPA): the same video's card appears again.
+  doc.body.innerHTML = '<div data-decoration-video-id="sm50" data-anchor-area="main"></div>';
+  await new Promise(r => setTimeout(r, 0));
+  assert.equal(doc.querySelector('[data-decoration-video-id="sm50"]').hasAttribute('data-nrn-prehide'), true);
+});

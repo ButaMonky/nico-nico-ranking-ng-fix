@@ -230,6 +230,20 @@
         for (var val of this.config[d.storeName].arrayWithText) {
           this._e('list').add(optionOf(val, d.storeName))
         }
+        // BRUSH-071: under NG動画ID, also list every remembered NG video with
+        // its reason. Values are prefixed "mem:" so removal goes to the memory.
+        if (d.storeName === 'ngMovies' && typeof NgVerdictCache !== 'undefined') {
+          var LIMIT = 50000
+          var rows = NgVerdictCache.entries(LIMIT)
+          if (rows.length) {
+            var head = new Option('── 自動で記憶したNG動画 ' + NgVerdictCache.size + ' 件' + (NgVerdictCache.size > LIMIT ? '（新しい ' + LIMIT + ' 件を表示）' : '') + ' ──', '')
+            head.disabled = true
+            this._e('list').add(head)
+            var frag = this.doc.createDocumentFragment()
+            for (var row of rows) frag.append(new Option(row.id + '　［' + row.label + '］', 'mem:' + row.id))
+            this._e('list').append(frag)
+          }
+        }
       },
       _targetChanged() {
         this._updateList()
@@ -243,26 +257,29 @@
       },
       async _addButtonClicked() {
         var r = await promptFor(this._e('target').value, this.config)
-        if (r) this._e('list').add(new Option(r, r))
+        if (r) this._updateList()
       },
       async _removeButtonClicked() {
-        var opts = Array.from(this._e('list').selectedOptions)
+        var opts = Array.from(this._e('list').selectedOptions).filter(function(o) { return o.value })
         var d = this._diffBySelectedTarget()
-        await this.config[d.storeName]
-          .removeAsync(opts.map(function(o) { return d.convert(o.value) }))
+        var remembered = opts.filter(function(o) { return o.value.startsWith('mem:') })
+        var manual = opts.filter(function(o) { return !o.value.startsWith('mem:') })
+        if (remembered.length) NgVerdictCache.forget(remembered.map(function(o) { return o.value.slice(4) }))
+        if (manual.length) await this.config[d.storeName]
+          .removeAsync(manual.map(function(o) { return d.convert(o.value) }))
         for (var o of opts) o.remove()
       },
       _removeAllButtonClicked() {
         var d = this._diffBySelectedTarget()
         if (!window.confirm(`すべての"${d.targetText}"を削除しますか？`)) return
         this.config[d.storeName].clear()
-        for (var o of Array.from(this._e('list').options)) o.remove()
+        this._updateList()
       },
       _openButtonClicked() {
         var opts = Array.from(this._e('list').selectedOptions)
         var d = this._diffBySelectedTarget()
-        for (var v of opts.map(function(o) { return o.value })) {
-          this.openInTab(d.urlOf(v))
+        for (var v of opts.map(function(o) { return o.value }).filter(Boolean)) {
+          this.openInTab(d.urlOf(v.startsWith('mem:') ? v.slice(4) : v))
         }
       },
       _readAdvancedRules() {

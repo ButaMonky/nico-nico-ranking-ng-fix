@@ -228,7 +228,7 @@
       const apply = el => {
         if (el.dataset.nrnAutofill === 'true' || el.hasAttribute(PREHIDE_ATTR)) return
         const id = el.getAttribute('data-decoration-video-id')
-        if (id && (hidden.has(id) || domMatch(el, id, rules))) { el.setAttribute(PREHIDE_ATTR, ''); stats.prehidden++ }
+        if (id && (hidden.has(id) || domMatch(el, id, rules))) { el.setAttribute(PREHIDE_ATTR, ''); stats.prehidden++; ensureStyleFn?.() }
       }
       if (node.hasAttribute('data-decoration-video-id')) apply(node)
       else {
@@ -254,6 +254,9 @@
       }
     }
     const hasRules = r => Boolean(r && (r.movies.size || r.owners.size || r.titles.length))
+    // Set by installEarly: adds the hiding style the first time a card is
+    // hidden, so pages where nothing is hidden (e.g. watch) stay untouched.
+    let ensureStyleFn = null
 
     // Called at document-start with synchronous GM_getValue. Hides cached NG
     // cards as React/SSR inserts them, before their first paint. Never
@@ -276,7 +279,8 @@
         stats.loaded = byId.size
         const hidden = byId.size ? currentValid(indexFromRaw(read)) : new Set()
         const rules = domRulesFromRaw(read)
-        if (!hidden.size && !hasRules(rules)) return false
+        // BRUSH-070: install even when nothing is known yet, so verdicts
+        // learned later in this tab hide cards on the next page at once.
         // At document-start <html> may not exist yet: observe the document
         // itself and add the style as soon as there is somewhere to put it.
         const style = doc.createElement('style')
@@ -287,9 +291,8 @@
           const host = doc.head || doc.documentElement
           if (host) host.appendChild(style)
         }
-        ensureStyle()
+        ensureStyleFn = ensureStyle
         const observer = new MutationObserver(function(records) {
-          ensureStyle()
           if (!supportedPath()) return
           for (const r of records) for (const n of r.addedNodes) mark(n, early.hidden, early.rules)
         })
@@ -401,6 +404,7 @@
             const isNew = !byId.has(movie.id)
             if (addId(movie.id, key)) {
               removedIds.delete(movie.id)
+              if (early) early.hidden.add(movie.id)
               if (isNew) stats.learned++
               schedulePersist()
             }
@@ -454,13 +458,38 @@
       const key = indexFor(config).ruleIdToKey.get(ruleId)
       return key ? (buckets.get(key)?.length || 0) : 0
     }
+    // BRUSH-071: every remembered ID with its reason, newest first, for the
+    // settings list; and removal of chosen IDs from the memory.
+    const REASON_LABEL = {u:'投稿者ID', n:'投稿者名', t:'タグ', l:'ロックタグ', k:'ロックタグ数', r:'複合NG', i:'タイトル'}
+    const reasonLabel = function(key) {
+      const kind = REASON_LABEL[key[0]] || '?'
+      if (key[0] === 'r') return kind
+      if (key[0] === 'k') return kind + key.slice(2) + '以上'
+      return kind + '「' + key.slice(2) + '」'
+    }
+    const entries = function(limit) {
+      const rows = []
+      for (const [key, ids] of buckets) for (let i = ids.length - 1; i >= 0; i--) rows.push([ids[i], key, i])
+      // Newest within each group first; groups interleaved by recency index.
+      rows.sort((a, b) => b[2] - a[2])
+      return (limit ? rows.slice(0, limit) : rows).map(r => ({id: r[0], key: r[1], label: reasonLabel(r[1])}))
+    }
+    const forget = function(ids) {
+      let n = 0
+      for (const id of ids) if (removeId(id)) {
+        removedIds.add(id); n++
+        if (early) { early.hidden.delete(id); releaseId(early.doc, id) }
+      }
+      if (n) schedulePersist()
+      return n
+    }
     const groupSummary = function() {
       return [...buckets].map(([key, ids]) => ({key, count: ids.length})).sort((a, b) => b.count - a.count)
     }
 
     return {
       KEY, ENABLED_KEY, PREHIDE_ATTR, CSS, MAX_ENTRIES,
-      installEarly, attach, track, candidateReason, clear, stopEarly, groupSummary, countFor, countForRule,
+      installEarly, attach, track, candidateReason, clear, stopEarly, groupSummary, countFor, countForRule, entries, forget, reasonLabel,
       reasonOf, valid, indexFromConfig, indexFromRaw, parse, serialize, enforceCap, hash,
       get size() { return byId.size },
       get stats() { return Object.assign({size: byId.size, groups: buckets.size, earlyActive: Boolean(early)}, stats) },
