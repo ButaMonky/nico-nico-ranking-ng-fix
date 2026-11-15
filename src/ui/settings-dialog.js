@@ -29,10 +29,13 @@
         config[name].value = s.value
       })
     }
-    var optionOf = function(v) {
+    // BRUSH-066: each entry shows how many remembered videos it has NG'd.
+    var optionOf = function(v, storeName) {
+      var n = storeName && typeof NgVerdictCache !== 'undefined' ? NgVerdictCache.countFor(storeName, v) : null
+      var suffix = n === null ? '' : '　（' + n + '件）'
       return typeof v === 'object'
-           ? new Option(v.value + ',' + v.text, v.value)
-           : new Option(v, v)
+           ? new Option(v.value + ',' + v.text + suffix, v.value)
+           : new Option(v + suffix, v)
     }
     var diffBy = function(target) {
       var SOMETHING_INPUT_TEXT = '何か入力して下さい。'
@@ -128,8 +131,8 @@
       this.config = config
       this.doc = doc
       this.openInTab = openInTab
-      for (var v of config.ngTitles.array) {
-        this._e('list').add(new Option(v, v))
+      for (var v of config.ngTitles.arrayWithText) {
+        this._e('list').add(optionOf(v, 'ngTitles'))
       }
       this._e('removeAllButton').disabled = !config.ngTitles.array.length
       initCheckbox(config, doc, 'openNewWindow')
@@ -225,7 +228,7 @@
         for (var o of Array.from(this._e('list').options)) o.remove()
         var d = this._diffBySelectedTarget()
         for (var val of this.config[d.storeName].arrayWithText) {
-          this._e('list').add(optionOf(val))
+          this._e('list').add(optionOf(val, d.storeName))
         }
       },
       _targetChanged() {

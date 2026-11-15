@@ -5,7 +5,7 @@
 // @contributor  kengo321 (original)
 // @description  ニコニコ動画のランキング・検索結果にNG、複合NG、検索結果の自動補充を追加する非公式の改変版
 // @match        *://www.nicovideo.jp/*
-// @version      160.33
+// @version      160.34
 // @grant        unsafeWindow
 // @grant        GM_getValue
 // @grant        GM_setValue
@@ -203,7 +203,7 @@
 
   // This facade is scoped to this userscript; other scripts keep their console.
   var nrnConsoleConfig = null
-  var NRN_VERSION = '160.33'
+  var NRN_VERSION = '160.34'
   var nrnNativeConsole = globalThis.console
   var nrnConsoleCounts = {warnings:0,errors:0}
   var nrnSetConsoleConfig = function(config) { nrnConsoleConfig = config }
@@ -1992,7 +1992,8 @@
   //   l:<TAG>   NGロックタグ
   //   k:<n>     ロックタグ数NG（有効かつ同じしきい値）
   //   r:<hash>  複合NGの各ルール（ルールIDと条件式から作る。1件の編集はそのルールだけ）
-  // 動画IDNG・タイトルNGは最初からDOMだけで即判定できるため記録しない。
+  //   i:<TERM>  NGタイトルの語（即判定できるが、設定ごとの件数表示のために記録）
+  // 動画IDNGは記録しない（一覧そのものが動画ID）。
   //
   // 消える条件（日時では消さない）:
   //   - そのNG設定を削除・変更したとき、グループごと削除（設定読み込み後に確定）
@@ -2037,6 +2038,7 @@
         ownerNames: upperSet(lists.userNames),
         tags: upperSet(lists.tags),
         lockedTags: upperSet(lists.lockedTags),
+        titles: upperSet(lists.titles || []),
         lockCount: lists.lockCountEnabled ? String(lists.lockCountThreshold) : null,
         ruleIdToKey: rules,
         ruleKeys: new Set(rules.values()),
@@ -2046,7 +2048,7 @@
       return index({
         userIds: config.ngUserIds.array, channelIds: config.ngChannelIds.array,
         userNames: config.ngUserNames.array, tags: config.ngTags.array,
-        lockedTags: config.ngLockedTags.array,
+        lockedTags: config.ngLockedTags.array, titles: config.ngTitles?.array || [],
         lockCountEnabled: config.ngLockedTagCountEnabled.value,
         lockCountThreshold: config.ngLockedTagCountThreshold.value,
         rulesEnabled: config.advancedNgRulesEnabled.value,
@@ -2057,7 +2059,7 @@
       const list = key => { try { const v = JSON.parse(read(key, '[]')); return Array.isArray(v) ? v.map(valueOf) : [] } catch (e) { return [] } }
       return index({
         userIds: list('ngUserIds'), channelIds: list('ngChannelIds'),
-        userNames: list('ngUserNames'), tags: list('ngTags'), lockedTags: list('ngLockedTags'),
+        userNames: list('ngUserNames'), tags: list('ngTags'), lockedTags: list('ngLockedTags'), titles: list('ngTitles'),
         lockCountEnabled: read('ngLockedTagCountEnabled', false) === true,
         lockCountThreshold: read('ngLockedTagCountThreshold', 5),
         rulesEnabled: read('advancedNgRulesEnabled', false) === true,
@@ -2072,6 +2074,7 @@
         case 'n': return idx.ownerNames.has(v)
         case 't': return idx.tags.has(v)
         case 'l': return idx.lockedTags.has(v)
+        case 'i': return idx.titles.has(v)
         case 'k': return idx.lockCount !== null && idx.lockCount === v
         case 'r': return idx.ruleKeys.has(key)
         default: return false
@@ -2090,6 +2093,7 @@
         if (tag.ngByLock) return 'l:' + String(tag.name).toUpperCase()
       }
       if (movie.ngByLockedTagCount && idx.lockCount !== null) return 'k:' + idx.lockCount
+      if (movie.ngTitle) return 'i:' + String(movie.ngTitle).toUpperCase()
       if (movie.ngByAdvancedRule) {
         for (const m of movie.advancedRuleMatches || []) {
           const key = idx.ruleIdToKey.get(m.id)
@@ -2295,7 +2299,7 @@
         for (const [key, ids] of parse(raw)) for (const id of ids) if (!byId.has(id)) addId(id, key)
         stats.loaded = byId.size
       }).catch(() => {})
-      for (const key of ['ngUserIds','ngChannelIds','ngUserNames','ngTags','ngLockedTags',
+      for (const key of ['ngUserIds','ngChannelIds','ngUserNames','ngTags','ngLockedTags','ngTitles',
         'ngLockedTagCountEnabled','ngLockedTagCountThreshold','advancedNgRulesEnabled','advancedNgRulesJson',
         'ngMovieVisible','ngVerdictCacheEnabled','useGetThumbInfo']) {
         config[key]?.on?.('changed', settingsChanged)
@@ -2357,13 +2361,26 @@
       droppedGroups.clear(); removedIds.clear()
     }
 
+    // Number of remembered videos NG'd by one setting entry (primary reason).
+    const PREFIX = {ngTags:'t:', ngLockedTags:'l:', ngUserIds:'u:', ngChannelIds:'u:', ngUserNames:'n:', ngTitles:'i:'}
+    const countFor = function(storeName, value) {
+      const prefix = PREFIX[storeName]
+      if (!prefix || value == null) return null
+      const v = value === Object(value) ? value.value : value
+      const key = prefix + (prefix === 'u:' ? String(v) : String(v).toUpperCase())
+      return buckets.get(key)?.length || 0
+    }
+    const countForRule = function(ruleId, config) {
+      const key = indexFor(config).ruleIdToKey.get(ruleId)
+      return key ? (buckets.get(key)?.length || 0) : 0
+    }
     const groupSummary = function() {
       return [...buckets].map(([key, ids]) => ({key, count: ids.length})).sort((a, b) => b.count - a.count)
     }
 
     return {
       KEY, ENABLED_KEY, PREHIDE_ATTR, CSS, MAX_ENTRIES,
-      installEarly, attach, track, candidateReason, clear, stopEarly, groupSummary,
+      installEarly, attach, track, candidateReason, clear, stopEarly, groupSummary, countFor, countForRule,
       reasonOf, valid, indexFromConfig, indexFromRaw, parse, serialize, enforceCap, hash,
       get size() { return byId.size },
       get stats() { return Object.assign({size: byId.size, groups: buckets.size, earlyActive: Boolean(early)}, stats) },
@@ -3553,10 +3570,13 @@
         config[name].value = s.value
       })
     }
-    var optionOf = function(v) {
+    // BRUSH-066: each entry shows how many remembered videos it has NG'd.
+    var optionOf = function(v, storeName) {
+      var n = storeName && typeof NgVerdictCache !== 'undefined' ? NgVerdictCache.countFor(storeName, v) : null
+      var suffix = n === null ? '' : '　（' + n + '件）'
       return typeof v === 'object'
-           ? new Option(v.value + ',' + v.text, v.value)
-           : new Option(v, v)
+           ? new Option(v.value + ',' + v.text + suffix, v.value)
+           : new Option(v + suffix, v)
     }
     var diffBy = function(target) {
       var SOMETHING_INPUT_TEXT = '何か入力して下さい。'
@@ -3652,8 +3672,8 @@
       this.config = config
       this.doc = doc
       this.openInTab = openInTab
-      for (var v of config.ngTitles.array) {
-        this._e('list').add(new Option(v, v))
+      for (var v of config.ngTitles.arrayWithText) {
+        this._e('list').add(optionOf(v, 'ngTitles'))
       }
       this._e('removeAllButton').disabled = !config.ngTitles.array.length
       initCheckbox(config, doc, 'openNewWindow')
@@ -3749,7 +3769,7 @@
         for (var o of Array.from(this._e('list').options)) o.remove()
         var d = this._diffBySelectedTarget()
         for (var val of this.config[d.storeName].arrayWithText) {
-          this._e('list').add(optionOf(val))
+          this._e('list').add(optionOf(val, d.storeName))
         }
       },
       _targetChanged() {
@@ -6110,7 +6130,7 @@ html[data-nrn-ui-theme="dark"] .nrn-contributor-ng-name-button:hover {
       </select>
     </label>
     |
-    <label><input type=checkbox id=nrn-ng-movie-visible-checkbox> NG動画を表示</label>
+    <label title="このページでNGになっている動画の数"><input type=checkbox id=nrn-ng-movie-visible-checkbox> NG動画を表示<span id=nrn-ng-hidden-count class=nrn-ng-hidden-count></span></label>
     <span class=nrn-config-separator>|</span>
     <span class=nrn-detail-bulk-label>タグ・投稿者情報</span>
     <button type=button id=nrn-open-all-movie-info>全て開く</button>
@@ -6154,6 +6174,13 @@ html[data-nrn-ui-theme="dark"] .nrn-contributor-ng-name-button:hover {
         },
         set ngMovieVisible(visible) {
           this._ngMovieVisibleCheckbox.checked = visible
+        },
+        // BRUSH-066: number of NG videos on this page (hidden unless shown).
+        setNgCount(count, shown) {
+          var e = this.elem.querySelector('#nrn-ng-hidden-count')
+          if (!e) return
+          var text = count > 0 ? '（' + count + '件' + (shown ? '' : '非表示') + '）' : '（0件）'
+          if (e.textContent !== text) e.textContent = text
         },
         bindToConfig(config) {
           this.visitedMovieViewMode = config.visitedMovieViewMode.value
@@ -7182,6 +7209,17 @@ html[data-nrn-ui-theme="dark"] .nrn-contributor-ng-name-button:hover {
         if (bar.elem.isConnected) {
           return;
         }
+        // BRUSH-066: the sticky web header (the one holding the search form)
+        // stays on screen while scrolling, so the bar goes into its empty
+        // right-hand slot when that header exists.
+        const webHeader = this.doc.querySelector('header:has(form[role="search"])')
+        if (webHeader) {
+          const slot = webHeader.querySelector(':scope > div:last-child .d_flex.gap_base') || webHeader.querySelector(':scope > div:last-child') || webHeader
+          bar.elem.classList.add('nrn-config-bar-in-header')
+          slot.prepend(bar.elem)
+          return;
+        }
+        bar.elem.classList.remove('nrn-config-bar-in-header')
         const e = Array.from(this.doc.querySelectorAll('[aria-label="nicovideo-content"] section > div:first-of-type')).find(node => !node.closest('.nrn-parsed, [data-decoration-video-id], .nrn-movie-info-container, [data-anchor-detail="nicoad"]'));
         if (e) {
           e.after(bar.elem);
@@ -7331,6 +7369,8 @@ html[data-nrn-ui-theme="dark"] .nrn-contributor-ng-name-button:hover {
             if (record.type === 'childList' && !target.closest(resultSelector) && !nodes.some(touchesResults)) continue
             relevant = true
           }
+          // BRUSH-066: the header can re-render and drop the bar.
+          if (this.configBar && !this.configBar.elem.isConnected) parsePending = true
           parsePending ||= relevant
           if ((!parsePending && !ownerRoots.size) || this._mutationFrame != null) return
           this._mutationFrame = nrnRequestFrame(() => {
@@ -7345,6 +7385,7 @@ html[data-nrn-ui-theme="dark"] .nrn-contributor-ng-name-button:hover {
               const parsed = this.parse()
               if (parsed.length > 0) { callback(parsed, true); this.unbindUnconnectedMovieRoots() }
               this.addConfigBar()
+              this._refreshNgCount?.()
               this._refreshPagerAnnotations?.()
               this._onAutoFillRootsChanged?.()
             }
@@ -7354,7 +7395,21 @@ html[data-nrn-ui-theme="dark"] .nrn-contributor-ng-name-button:hover {
           attributeFilter:['class','href','data-anchor-href','data-group-ignore','data-anchor-area'], attributeOldValue:true})
       },
       get css() {
-        return ResultLayout.css + `#nrn-config-button,
+        return ResultLayout.css + `/* BRUSH-066: settings bar inside the sticky web header (one line) */
+#nrn-config-bar.nrn-config-bar-in-header {
+  display: flex; align-items: center; gap: 4px; flex-wrap: nowrap; white-space: nowrap;
+  min-width: 0; max-width: 100%; overflow-x: auto; scrollbar-width: thin;
+  margin: 0; padding: 0 4px; font-size: 12px; line-height: 1.2;
+  background: transparent; border: 0; box-shadow: none;
+}
+#nrn-config-bar.nrn-config-bar-in-header label { display: inline-flex; align-items: center; gap: 2px; }
+#nrn-config-bar.nrn-config-bar-in-header select,
+#nrn-config-bar.nrn-config-bar-in-header button { font-size: 12px; padding: 1px 4px; }
+#nrn-config-bar.nrn-config-bar-in-header .nrn-detail-bulk-label { display: none; }
+header:has(> div:last-child #nrn-config-bar) > div:last-child { min-width: 0; }
+header:has(> div:last-child #nrn-config-bar) > div:last-child .d_flex.gap_base { min-width: 0; max-width: 100%; }
+.nrn-ng-hidden-count { margin-left: 2px; font-variant-numeric: tabular-nums; }
+#nrn-config-button,
 .nrn-visit-button:hover,
 .nrn-movie-ng-button:hover,
 .nrn-title-ng-button:hover,
@@ -11273,6 +11328,24 @@ var CardActionData = (function () {
         },
         bindToModel(model) {
           this._bindToConfig(model.config)
+          // BRUSH-066: keep the NG count beside "NG動画を表示" current.
+          var cancel = null
+          var update = function() {
+            cancel = null
+            if (page._disposed) return
+            var ids = new Set()
+            for (var r of page.movieRoots || []) {
+              if (!r.elem || !r.elem.isConnected || !r.movieId) continue
+              var m = model.movies.get(r.movieId)
+              if (m && m.ng) ids.add(r.movieId)
+            }
+            configBar.setNgCount(ids.size, model.config.ngMovieVisible.value)
+          }
+          var schedule = function() { if (!cancel && !page._disposed) cancel = nrnRequestFrame(update) }
+          model.movieViewModes.on('movieViewModeChanged', schedule)
+          model.config.ngMovieVisible.on('changed', schedule)
+          page._refreshNgCount = schedule
+          schedule()
         },
         bindToWindow() {
         },

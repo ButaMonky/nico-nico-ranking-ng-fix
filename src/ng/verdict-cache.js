@@ -12,7 +12,8 @@
   //   l:<TAG>   NGロックタグ
   //   k:<n>     ロックタグ数NG（有効かつ同じしきい値）
   //   r:<hash>  複合NGの各ルール（ルールIDと条件式から作る。1件の編集はそのルールだけ）
-  // 動画IDNG・タイトルNGは最初からDOMだけで即判定できるため記録しない。
+  //   i:<TERM>  NGタイトルの語（即判定できるが、設定ごとの件数表示のために記録）
+  // 動画IDNGは記録しない（一覧そのものが動画ID）。
   //
   // 消える条件（日時では消さない）:
   //   - そのNG設定を削除・変更したとき、グループごと削除（設定読み込み後に確定）
@@ -57,6 +58,7 @@
         ownerNames: upperSet(lists.userNames),
         tags: upperSet(lists.tags),
         lockedTags: upperSet(lists.lockedTags),
+        titles: upperSet(lists.titles || []),
         lockCount: lists.lockCountEnabled ? String(lists.lockCountThreshold) : null,
         ruleIdToKey: rules,
         ruleKeys: new Set(rules.values()),
@@ -66,7 +68,7 @@
       return index({
         userIds: config.ngUserIds.array, channelIds: config.ngChannelIds.array,
         userNames: config.ngUserNames.array, tags: config.ngTags.array,
-        lockedTags: config.ngLockedTags.array,
+        lockedTags: config.ngLockedTags.array, titles: config.ngTitles?.array || [],
         lockCountEnabled: config.ngLockedTagCountEnabled.value,
         lockCountThreshold: config.ngLockedTagCountThreshold.value,
         rulesEnabled: config.advancedNgRulesEnabled.value,
@@ -77,7 +79,7 @@
       const list = key => { try { const v = JSON.parse(read(key, '[]')); return Array.isArray(v) ? v.map(valueOf) : [] } catch (e) { return [] } }
       return index({
         userIds: list('ngUserIds'), channelIds: list('ngChannelIds'),
-        userNames: list('ngUserNames'), tags: list('ngTags'), lockedTags: list('ngLockedTags'),
+        userNames: list('ngUserNames'), tags: list('ngTags'), lockedTags: list('ngLockedTags'), titles: list('ngTitles'),
         lockCountEnabled: read('ngLockedTagCountEnabled', false) === true,
         lockCountThreshold: read('ngLockedTagCountThreshold', 5),
         rulesEnabled: read('advancedNgRulesEnabled', false) === true,
@@ -92,6 +94,7 @@
         case 'n': return idx.ownerNames.has(v)
         case 't': return idx.tags.has(v)
         case 'l': return idx.lockedTags.has(v)
+        case 'i': return idx.titles.has(v)
         case 'k': return idx.lockCount !== null && idx.lockCount === v
         case 'r': return idx.ruleKeys.has(key)
         default: return false
@@ -110,6 +113,7 @@
         if (tag.ngByLock) return 'l:' + String(tag.name).toUpperCase()
       }
       if (movie.ngByLockedTagCount && idx.lockCount !== null) return 'k:' + idx.lockCount
+      if (movie.ngTitle) return 'i:' + String(movie.ngTitle).toUpperCase()
       if (movie.ngByAdvancedRule) {
         for (const m of movie.advancedRuleMatches || []) {
           const key = idx.ruleIdToKey.get(m.id)
@@ -315,7 +319,7 @@
         for (const [key, ids] of parse(raw)) for (const id of ids) if (!byId.has(id)) addId(id, key)
         stats.loaded = byId.size
       }).catch(() => {})
-      for (const key of ['ngUserIds','ngChannelIds','ngUserNames','ngTags','ngLockedTags',
+      for (const key of ['ngUserIds','ngChannelIds','ngUserNames','ngTags','ngLockedTags','ngTitles',
         'ngLockedTagCountEnabled','ngLockedTagCountThreshold','advancedNgRulesEnabled','advancedNgRulesJson',
         'ngMovieVisible','ngVerdictCacheEnabled','useGetThumbInfo']) {
         config[key]?.on?.('changed', settingsChanged)
@@ -377,13 +381,26 @@
       droppedGroups.clear(); removedIds.clear()
     }
 
+    // Number of remembered videos NG'd by one setting entry (primary reason).
+    const PREFIX = {ngTags:'t:', ngLockedTags:'l:', ngUserIds:'u:', ngChannelIds:'u:', ngUserNames:'n:', ngTitles:'i:'}
+    const countFor = function(storeName, value) {
+      const prefix = PREFIX[storeName]
+      if (!prefix || value == null) return null
+      const v = value === Object(value) ? value.value : value
+      const key = prefix + (prefix === 'u:' ? String(v) : String(v).toUpperCase())
+      return buckets.get(key)?.length || 0
+    }
+    const countForRule = function(ruleId, config) {
+      const key = indexFor(config).ruleIdToKey.get(ruleId)
+      return key ? (buckets.get(key)?.length || 0) : 0
+    }
     const groupSummary = function() {
       return [...buckets].map(([key, ids]) => ({key, count: ids.length})).sort((a, b) => b.count - a.count)
     }
 
     return {
       KEY, ENABLED_KEY, PREHIDE_ATTR, CSS, MAX_ENTRIES,
-      installEarly, attach, track, candidateReason, clear, stopEarly, groupSummary,
+      installEarly, attach, track, candidateReason, clear, stopEarly, groupSummary, countFor, countForRule,
       reasonOf, valid, indexFromConfig, indexFromRaw, parse, serialize, enforceCap, hash,
       get size() { return byId.size },
       get stats() { return Object.assign({size: byId.size, groups: buckets.size, earlyActive: Boolean(early)}, stats) },

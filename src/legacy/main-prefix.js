@@ -196,6 +196,24 @@
         },
         bindToModel(model) {
           this._bindToConfig(model.config)
+          // BRUSH-066: keep the NG count beside "NG動画を表示" current.
+          var cancel = null
+          var update = function() {
+            cancel = null
+            if (page._disposed) return
+            var ids = new Set()
+            for (var r of page.movieRoots || []) {
+              if (!r.elem || !r.elem.isConnected || !r.movieId) continue
+              var m = model.movies.get(r.movieId)
+              if (m && m.ng) ids.add(r.movieId)
+            }
+            configBar.setNgCount(ids.size, model.config.ngMovieVisible.value)
+          }
+          var schedule = function() { if (!cancel && !page._disposed) cancel = nrnRequestFrame(update) }
+          model.movieViewModes.on('movieViewModeChanged', schedule)
+          model.config.ngMovieVisible.on('changed', schedule)
+          page._refreshNgCount = schedule
+          schedule()
         },
         bindToWindow() {
         },

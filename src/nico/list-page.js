@@ -768,6 +768,17 @@
         if (bar.elem.isConnected) {
           return;
         }
+        // BRUSH-066: the sticky web header (the one holding the search form)
+        // stays on screen while scrolling, so the bar goes into its empty
+        // right-hand slot when that header exists.
+        const webHeader = this.doc.querySelector('header:has(form[role="search"])')
+        if (webHeader) {
+          const slot = webHeader.querySelector(':scope > div:last-child .d_flex.gap_base') || webHeader.querySelector(':scope > div:last-child') || webHeader
+          bar.elem.classList.add('nrn-config-bar-in-header')
+          slot.prepend(bar.elem)
+          return;
+        }
+        bar.elem.classList.remove('nrn-config-bar-in-header')
         const e = Array.from(this.doc.querySelectorAll('[aria-label="nicovideo-content"] section > div:first-of-type')).find(node => !node.closest('.nrn-parsed, [data-decoration-video-id], .nrn-movie-info-container, [data-anchor-detail="nicoad"]'));
         if (e) {
           e.after(bar.elem);
@@ -917,6 +928,8 @@
             if (record.type === 'childList' && !target.closest(resultSelector) && !nodes.some(touchesResults)) continue
             relevant = true
           }
+          // BRUSH-066: the header can re-render and drop the bar.
+          if (this.configBar && !this.configBar.elem.isConnected) parsePending = true
           parsePending ||= relevant
           if ((!parsePending && !ownerRoots.size) || this._mutationFrame != null) return
           this._mutationFrame = nrnRequestFrame(() => {
@@ -931,6 +944,7 @@
               const parsed = this.parse()
               if (parsed.length > 0) { callback(parsed, true); this.unbindUnconnectedMovieRoots() }
               this.addConfigBar()
+              this._refreshNgCount?.()
               this._refreshPagerAnnotations?.()
               this._onAutoFillRootsChanged?.()
             }
@@ -940,7 +954,21 @@
           attributeFilter:['class','href','data-anchor-href','data-group-ignore','data-anchor-area'], attributeOldValue:true})
       },
       get css() {
-        return ResultLayout.css + `#nrn-config-button,
+        return ResultLayout.css + `/* BRUSH-066: settings bar inside the sticky web header (one line) */
+#nrn-config-bar.nrn-config-bar-in-header {
+  display: flex; align-items: center; gap: 4px; flex-wrap: nowrap; white-space: nowrap;
+  min-width: 0; max-width: 100%; overflow-x: auto; scrollbar-width: thin;
+  margin: 0; padding: 0 4px; font-size: 12px; line-height: 1.2;
+  background: transparent; border: 0; box-shadow: none;
+}
+#nrn-config-bar.nrn-config-bar-in-header label { display: inline-flex; align-items: center; gap: 2px; }
+#nrn-config-bar.nrn-config-bar-in-header select,
+#nrn-config-bar.nrn-config-bar-in-header button { font-size: 12px; padding: 1px 4px; }
+#nrn-config-bar.nrn-config-bar-in-header .nrn-detail-bulk-label { display: none; }
+header:has(> div:last-child #nrn-config-bar) > div:last-child { min-width: 0; }
+header:has(> div:last-child #nrn-config-bar) > div:last-child .d_flex.gap_base { min-width: 0; max-width: 100%; }
+.nrn-ng-hidden-count { margin-left: 2px; font-variant-numeric: tabular-nums; }
+#nrn-config-button,
 .nrn-visit-button:hover,
 .nrn-movie-ng-button:hover,
 .nrn-title-ng-button:hover,

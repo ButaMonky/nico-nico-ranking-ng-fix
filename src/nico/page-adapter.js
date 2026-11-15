@@ -1090,7 +1090,7 @@
       </select>
     </label>
     |
-    <label><input type=checkbox id=nrn-ng-movie-visible-checkbox> NG動画を表示</label>
+    <label title="このページでNGになっている動画の数"><input type=checkbox id=nrn-ng-movie-visible-checkbox> NG動画を表示<span id=nrn-ng-hidden-count class=nrn-ng-hidden-count></span></label>
     <span class=nrn-config-separator>|</span>
     <span class=nrn-detail-bulk-label>タグ・投稿者情報</span>
     <button type=button id=nrn-open-all-movie-info>全て開く</button>
@@ -1134,6 +1134,13 @@
         },
         set ngMovieVisible(visible) {
           this._ngMovieVisibleCheckbox.checked = visible
+        },
+        // BRUSH-066: number of NG videos on this page (hidden unless shown).
+        setNgCount(count, shown) {
+          var e = this.elem.querySelector('#nrn-ng-hidden-count')
+          if (!e) return
+          var text = count > 0 ? '（' + count + '件' + (shown ? '' : '非表示') + '）' : '（0件）'
+          if (e.textContent !== text) e.textContent = text
         },
         bindToConfig(config) {
           this.visitedMovieViewMode = config.visitedMovieViewMode.value

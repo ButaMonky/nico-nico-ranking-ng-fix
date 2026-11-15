@@ -43,6 +43,10 @@ try {
       pageFetches,
       badge: document.getElementById('nrn-status-badge')?.textContent || '',
     }));
+    // BRUSH-066: settings bar lives in the sticky web header; NG count beside the checkbox.
+    const bar = await page.evaluate(() => ({inSlot: !!document.querySelector('header .d_flex.gap_base > #nrn-config-bar'),
+      count: document.getElementById('nrn-ng-hidden-count')?.textContent}));
+    assert.deepEqual(bar, {inSlot:true, count:'（2件非表示）'}, path + ': bar in header slot with NG count');
     assert.equal(budget.overflow, 0, path + ': target count must not hide native cards');
     assert.equal(budget.injected, 0, path); assert.equal(budget.pageFetches, 0, path);
     assert.match(budget.badge, /ランキングでは補充なし/, path);
