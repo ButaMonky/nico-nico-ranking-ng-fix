@@ -5,7 +5,7 @@
 // @contributor  kengo321 (original)
 // @description  ニコニコ動画のランキング・検索結果にNG、複合NG、検索結果の自動補充を追加する非公式の改変版
 // @match        *://www.nicovideo.jp/*
-// @version      160.32
+// @version      160.33
 // @grant        unsafeWindow
 // @grant        GM_getValue
 // @grant        GM_setValue
@@ -203,7 +203,7 @@
 
   // This facade is scoped to this userscript; other scripts keep their console.
   var nrnConsoleConfig = null
-  var NRN_VERSION = '160.32'
+  var NRN_VERSION = '160.33'
   var nrnNativeConsole = globalThis.console
   var nrnConsoleCounts = {warnings:0,errors:0}
   var nrnSetConsoleConfig = function(config) { nrnConsoleConfig = config }
@@ -6527,7 +6527,10 @@ html[data-nrn-ui-theme="dark"] .nrn-contributor-ng-name-button:hover {
         get titleElem() {
           let e = this.elem.querySelector('.nrn-movie-title');
           if (!e) {
-            const a = this.elem.querySelector('a[data-anchor-area][href^="/watch/"] > div > p') || (this.elem.matches('a[data-anchor-detail="nicoad"], a[data-anchor-page^="ranking"]') ? this.elem.querySelector('p') : null);
+            const a = this.elem.querySelector('a[data-anchor-area][href^="/watch/"] > div > p')
+              || (this.elem.matches('a[data-anchor-detail="nicoad"], a[data-anchor-page^="ranking"]') ? this.elem.querySelector('p') : null)
+              // BRUSH-065: ranking sponsored card whose root is its wrapper.
+              || this.elem.querySelector('a[data-anchor-page^="ranking"][href^="/watch/"] p');
             e = wrapTitleTextNodeInElement(a);
           }
           return e;
@@ -7209,6 +7212,11 @@ html[data-nrn-ui-theme="dark"] .nrn-contributor-ng-name-button:hover {
           })
           if (title) anchors.add(title)
         }
+        // BRUSH-065: on ranking pages a watch link outside every card is the
+        // sponsored slot, which _parseAds owns. Reading it here too made two roots.
+        if (/^\/ranking(\/|$)/.test(location.pathname)) {
+          for (const a of Array.from(anchors)) if (!a.closest('[data-decoration-video-id]')) anchors.delete(a)
+        }
         const ordered = Array.from(anchors).sort((a, b) =>
           a === b ? 0 : (a.compareDocumentPosition(b) & 4 ? -1 : 1))
         return ordered
@@ -7226,7 +7234,27 @@ html[data-nrn-ui-theme="dark"] .nrn-contributor-ng-name-button:hover {
           }).filter(e => e.movie.id && e.movie.title && !e.rootElem.classList.contains('nrn-parsed'));
       },
       _parseAds(target) {
-        const ads = Array.from(target.querySelectorAll('a[data-anchor-area][href^="/watch/"]:has(> div > p)'))
+        // BRUSH-061/065: on ranking pages every sponsored (提供) card is one
+        // <a data-anchor-page="ranking_*"> in its own wrapper. Several of them
+        // can share a row (custom ranking has one per category), so the
+        // search-page rule (grandparent as root) would merge them into one
+        // root. Root = the card's own wrapper when it holds only this card,
+        // otherwise the card itself. Each card is read once.
+        if (/^\/ranking(\/|$)/.test(location.pathname)) {
+          const ads = []
+          for (const item of target.querySelectorAll('a[data-anchor-area="main"][data-anchor-page^="ranking"][href^="/watch/"]')) {
+            // Already read (root may be the wrapper, which our own inserted
+            // elements later make look like a multi-child container).
+            if (item.closest('[data-decoration-video-id], .nrn-parsed')) continue
+            const title = Array.from(item.querySelectorAll('p')).map(p => p.textContent.trim()).find(Boolean)
+            const wrapper = item.parentElement
+            const rootElem = wrapper && wrapper.children.length === 1 && !wrapper.matches('[aria-label="nicovideo-content"], main, section')
+              ? wrapper : item
+            ads.push({type: 'ads', movie: {id: movieIdOf(item.href), title}, rootElem})
+          }
+          return ads.filter(e => e.movie.id && e.movie.title && !e.rootElem.classList.contains('nrn-parsed'));
+        }
+        return Array.from(target.querySelectorAll('a[data-anchor-area][href^="/watch/"]:has(> div > p)'))
           .map(function(item) {
             return {
               type: 'ads',
@@ -7238,19 +7266,7 @@ html[data-nrn-ui-theme="dark"] .nrn-contributor-ng-name-button:hover {
                       ? item
                       : item.parentNode.parentNode,
             }
-          })
-        // BRUSH-061: the ranking sponsored slot (ニコニ広告「提供：」) is one
-        // <a data-anchor-page="ranking_*"> card holding thumbnail and text, with
-        // the title deeper (a > div > div > p). It is outside any decoration card.
-        if (/^\/ranking(\/|$)/.test(location.pathname)) {
-          const seen = new Set(ads.map(e => e.rootElem))
-          for (const item of target.querySelectorAll('a[data-anchor-area="main"][data-anchor-page^="ranking"][href^="/watch/"]')) {
-            if (seen.has(item) || item.closest('[data-decoration-video-id]')) continue
-            const title = Array.from(item.querySelectorAll('p')).map(p => p.textContent.trim()).find(Boolean)
-            ads.push({type: 'ads', movie: {id: movieIdOf(item.href), title}, rootElem: item})
-          }
-        }
-        return ads.filter(e => e.movie.id && e.movie.title && !e.rootElem.classList.contains('nrn-parsed'));
+          }).filter(e => e.movie.id && e.movie.title && !e.rootElem.classList.contains('nrn-parsed'));
       },
       _configDialogLoaded(doc) {
         // 旧UIでは #togglable が存在したが、v9.3以降の新UIでは廃止。

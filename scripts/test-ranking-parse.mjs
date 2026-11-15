@@ -49,5 +49,33 @@ try {
     assert.deepEqual(errors, [], path);
     await page.close();
   }
-  console.log('Ranking parse PASS: genre/custom ranking cards and the sponsored slot are parsed and NG-hidden (/ranking, genre, custom); no target trimming or AutoFill on ranking.');
+  // BRUSH-065: custom ranking puts one sponsored card per category in a shared
+  // row. Each must get its own root (one ▼, one owner row), read once.
+  {
+    const custom = await readFile(new URL('../tests/fixtures/ranking-custom.html', import.meta.url), 'utf8');
+    const page = await browser.newPage();
+    const errors = [];
+    page.on('pageerror', e => errors.push(e.message));
+    await page.route('**/*', route => route.fulfill({contentType:'text/html', body:'<html><body></body></html>'}));
+    await page.goto('http://nrn.test/ranking/custom');
+    await page.setContent(custom);
+    await page.evaluate(() => {
+      window.GM_getValue = (k, d) => d; window.GM_setValue = () => {};
+      window.GM_xmlhttpRequest = o => { setTimeout(() => o.onload({status:200, responseText:'<nicovideo_thumb_response status="ok"><thumb><title>t</title><description>d</description><tags><tag>x</tag></tags><user_id>1</user_id><user_nickname>u</user_nickname></thumb></nicovideo_thumb_response>'}), 5); return {abort() {}} };
+    });
+    await page.addScriptTag({content:source});
+    await page.waitForFunction(() => document.querySelectorAll('.nrn-parsed').length >= 6, null, {timeout:5000});
+    // Let our own insertions trigger re-parses, then verify nothing was read twice.
+    await page.waitForTimeout(800);
+    const r = await page.evaluate(() => {
+      const ads = [...document.querySelectorAll('a[data-anchor-page="ranking_custom"][href^="/watch/sm92"]')];
+      return {parsed: document.querySelectorAll('.nrn-parsed').length,
+        perAd: ads.map(a => { const root = a.closest('.nrn-parsed'); return root ? [root === a.parentElement, root.querySelectorAll('.nrn-movie-info-toggle').length, root.querySelectorAll('a[href^="/watch/sm92"]').length] : null })};
+    });
+    assert.equal(r.parsed, 6, 'custom: 3 cards + 3 sponsored, none twice');
+    assert.deepEqual(r.perAd, [[true,1,1],[true,1,1],[true,1,1]], 'custom: each sponsored card has its own wrapper root and one toggle');
+    assert.deepEqual(errors, []);
+    await page.close();
+  }
+  console.log('Ranking parse PASS: genre/custom ranking cards and sponsored slots (incl. custom ranking rows) are parsed once and NG-hidden (/ranking, genre, custom); no target trimming or AutoFill on ranking.');
 } finally { await browser.close(); }
