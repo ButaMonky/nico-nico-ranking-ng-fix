@@ -309,6 +309,48 @@
           maybeFetchMore()
         }
       }
+      // BRUSH-075: candidates skipped before the DOM (remembered NG IDs, NG
+      // memory, NG titles, quick API rules) are parked, not fetched again.
+      // While "NG動画を表示" is on they are added as NG cards in their source
+      // position, so an unintended NG can still be noticed.
+      var revealCancel = null
+      var revealParkedNg = function() {
+        revealCancel = null
+        if (page._disposed || !model.config.ngMovieVisible?.value) return
+        var items = candidateFilter.rejectedItems().filter(function(item) {
+          return !revealedNgIds.has(item.id) && !isMovieAlreadyOnPage(item.id)
+        })
+        if (!items.length) return
+        var tiles = page._createInjectedTiles(items)
+        var parsed = items.map(function(item, i) {
+          var tile = tiles[i]
+          var ordinal = candidateFilter.order(item)
+          tile.dataset.nrnCandidateOrder = String(ordinal)
+          tile.dataset.nrnRevealedNg = 'true'
+          var later = connectedInjectedRoots().find(function(root) {
+            return root.elem.parentNode === tile.parentNode && injectedOrder(root) > ordinal
+          })
+          if (later) tile.parentNode.insertBefore(tile, later.elem)
+          revealedNgIds.add(item.id)
+          knownMovieIds.add(item.id)
+          return {type:'main', movie:{id:item.id, title:item.title}, rootElem:tile}
+        })
+        setup(parsed, model, page, controller)
+        restoreCachedMovieDetails(items.map(function(item) { return item.id }), 'NG動画を表示')
+        tiles.forEach(function(tile) { tile.classList.remove('nrn-autofill-pending') })
+        model.requestThumbInfo(true)
+        console.log(LOG, 'NG動画を表示: 読み込み前に除外した動画を追加:', {count:items.length, ids:items.map(function(item) { return item.id })})
+        rebalanceOverflow()
+        if (typeof page._refreshNgCount === 'function') page._refreshNgCount()
+        updateStatus()
+      }
+      var scheduleRevealParkedNg = function() {
+        if (revealCancel || page._disposed || !model.config.ngMovieVisible?.value) return
+        revealCancel = requestAnimationFrame(revealParkedNg)
+      }
+      model.config.ngMovieVisible?.on('changed', scheduleRevealParkedNg)
+      page._revealParkedNg = scheduleRevealParkedNg
+
       for (var key of ['ngMovies','ngTitles','ngTags','ngUserIds','ngChannelIds','advancedNgRulesEnabled','advancedNgRulesJson']) {
         model.config[key].on('changed',restorePrefilteredCandidates)
       }

@@ -42,6 +42,8 @@
       return {
         ...(rootElem.querySelector('thumb > video_id') ? {videoId:rootElem.querySelector('thumb > video_id').textContent} : {}),
         description: rootElem.querySelector('thumb > description').textContent,
+        // BRUSH-074: 未設定 when the uploader chose none; absent in very old answers.
+        ...(rootElem.querySelector('thumb > genre') ? {genre:rootElem.querySelector('thumb > genre').textContent.trim()} : {}),
         tags: rootElem.querySelector('thumb > tags') ? parseTags(rootElem.querySelectorAll('thumb > tags > tag')) : undefined,
         contributor: parseContributor(rootElem),
         title: rootElem.querySelector('thumb > title').textContent,

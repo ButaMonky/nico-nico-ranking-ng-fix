@@ -68,6 +68,9 @@
       }
       return {order,sort,partition,release,
         isRejected:id=>parked.has(id) && Boolean(currentReason(parked.get(id))),
+        // BRUSH-075: the parked rows that are still NG, in source order, so
+        // "NG動画を表示" can show them without fetching anything again.
+        rejectedItems:()=>sort([...parked.values()].filter(item=>currentReason(item))),
         clear:()=>parked.clear(),
         snapshot:()=>({retained:parked.size,rejectedTotal,releasedTotal,capacityFallback,limit})}
     }

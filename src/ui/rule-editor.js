@@ -10,10 +10,15 @@
       ['タイトルとタグの両方で絞る', () => group('AND', [condition('title','contains','実況'), condition('tag','contains','ゲーム')])],
       ['複数の言葉のどれかで絞る', () => group('OR', [condition('title','contains','総集編'), condition('title','contains','切り抜き')])],
       ['好きなタグを除外して絞る', () => group('AND', [condition('title','contains','実況'), condition('tag','notContains','お気に入り')])],
-      ['同じ投稿者の連続投稿を絞る', () => group('AND', [condition('pageContributorCount','gte',5), condition('title','contains','実況')])]
+      ['同じ投稿者の連続投稿を絞る', () => group('AND', [condition('pageContributorCount','gte',5), condition('title','contains','実況')])],
+      // BRUSH-074: limit a rule to where you are.
+      ['ランキングでは使わない', () => group('AND', [condition('lockedTagCount','gte',11), condition('pageKind','neq','ranking')])],
+      ['このタグを検索しているときだけ使う', () => group('AND', [condition('title','contains',''), condition('searchText','eq','')])]
     ]
     const fieldGroups = [
-      ['内容', ['title','tag','lockedTag','description','movieId']],
+      ['内容', ['title','tag','lockedTag','description','movieId','genre']],
+      // BRUSH-074: the page you are on, not the video.
+      ['見ている画面・検索', ['pageKind','searchText']],
       ['個数', ['lockedTagCount','tagCount','pageContributorCount']],
       // BRUSH-037: search-page numbers. Unknown numbers are never treated as 0.
       ['再生・反応数', ['viewCount','likeCount','commentCount','mylistCount','durationSeconds']],
@@ -234,7 +239,12 @@
           fields.value=node.field;fields.addEventListener('change',()=>change(()=>{const f=fields.value;node.field=f;node.operator=AdvancedNgRules.FIELD_META[f].operators.includes('gte')?'gte':AdvancedNgRules.FIELD_META[f].operators[0];node.value=f==='lockedTagCount'?11:AdvancedNgRules.FIELD_META[f].type==='number'?1:''}))
           box.append(labeled('何を',fields))
           box.append(labeled('どう比べる',select('条件の比較方法',AdvancedNgRules.FIELD_META[node.field].operators.map(o=>[o,friendly(node.field,o)]),node.operator,v=>change(()=>{node.operator=v}))))
-          if(AdvancedNgRules.OP_META[node.operator].needsValue) {
+          if(AdvancedNgRules.OP_META[node.operator].needsValue && AdvancedNgRules.FIELD_META[node.field].type==='enum') {
+            // BRUSH-074: fixed choices (screen kind, genre) are picked, not typed.
+            const opts=AdvancedNgRules.FIELD_META[node.field].options
+            if(!opts.some(o=>o[0]===node.value))node.value=opts[0][0]
+            box.append(labeled('値',select('条件の値',opts,node.value,v=>change(()=>{node.value=v},false))))
+          } else if(AdvancedNgRules.OP_META[node.operator].needsValue) {
             const numeric=['number','numberOrMissing'].includes(AdvancedNgRules.FIELD_META[node.field].type)
             const value=input('条件の値',node.value??'',v=>change(()=>{node.value=v},false),numeric?'number':'text')
             value.placeholder=numeric?(node.field==='durationSeconds'?'秒数を入力':'数を入力'):'例：実況';if(numeric){value.step='1';value.min=AdvancedNgRules.FIELD_META[node.field].type==='numberOrMissing'||node.field==='pageContributorCount'?'1':'0'}
@@ -258,7 +268,12 @@
       // Warn only when leaving this settings document with unapplied edits.
       doc.defaultView.addEventListener('beforeunload',e=>{if(snapshot()!==baseline){e.preventDefault();e.returnValue=''}})
       render()
-      return {validate:()=>validate(draft), canClose:()=>snapshot()===baseline || doc.defaultView.confirm('まだ適用していない変更があります。変更を破棄して閉じますか？')}
+      // BRUSH-074: the NGルール list opens rules here and asks for a reload
+      // after it saved (only when this editor has no unapplied draft).
+      const reload=()=>{if(snapshot()!==baseline)return false;savedRaw=config.advancedNgRulesJson.value;savedEnabled=config.advancedNgRulesEnabled.value;draft=AdvancedNgRules.parse(savedRaw);draftEnabled=savedEnabled;baseline=snapshot();render();return true}
+      const focusRule=ruleId=>{reload();const i=draft.findIndex(r=>r.id===ruleId);if(i>=0){selected=i;render()}host.scrollIntoView({block:'start'})}
+      const addNew=(templateIndex=0)=>{reload();add(templateIndex);host.scrollIntoView({block:'start'})}
+      return {validate:()=>validate(draft), reload, focusRule, addNew, canClose:()=>snapshot()===baseline || doc.defaultView.confirm('まだ適用していない変更があります。変更を破棄して閉じますか？')}
     }
     const CSS = `
       .re-editor{min-width:0}.re-editor button:disabled{opacity:.45;cursor:not-allowed}.re-filter{width:100%;padding:9px;border:1px solid var(--line);border-radius:6px;background:var(--panel);color:var(--text)}.re-intro,.re-summary{padding:12px;background:var(--accent-soft);border-radius:8px;line-height:1.8;overflow-wrap:anywhere}

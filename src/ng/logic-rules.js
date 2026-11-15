@@ -4,6 +4,27 @@
     // condition = {kind:'condition', field:'lockedTagCount', operator:'gte', value:11, not:false}
     //
     // 旧v11 conditions[] は parse() 時に root AND group へ自動移行する。
+    // BRUSH-074: video genres as the search filter lists them (16, checked on
+    // the live site 2026-11-16) plus 未設定, which getthumbinfo returns for
+    // videos without a genre (e.g. sm9).
+    var GENRES = ['ゲーム','音楽・サウンド','エンターテイメント','アニメ','社会・政治・時事','ラジオ','解説・講座',
+      'ダンス','スポーツ','動物','旅行・アウトドア','料理','乗り物','技術・工作','自然','その他','未設定']
+    var PAGE_KINDS = [['ranking','ランキング'],['search','キーワード検索'],['tag','タグ検索'],['shorts','ショート動画の検索']]
+    // BRUSH-074: where the user is right now. Context fields describe the
+    // page, not the video, so their verdicts are never remembered.
+    var pageContext = function(loc) {
+      loc = loc || (typeof location !== 'undefined' ? location : null)
+      var path = String(loc && loc.pathname || '')
+      var decode = function(s) { try { return decodeURIComponent(s) } catch (e) { return s } }
+      var m = /^\/(search|tag|search_shorts|tag_shorts)\/([^/?#]+)/.exec(path)
+      if (m) return {kind: m[1].endsWith('_shorts') ? 'shorts' : m[1], text: decode(m[2])}
+      if (/^\/ranking(\/|$)/.test(path)) {
+        var q = /[?&]tag=([^&#]*)/.exec(String(loc.search || ''))
+        var tag = q ? decode(q[1].replace(/\+/g, ' ')) : ''
+        return {kind:'ranking', text: tag === 'all' ? '' : tag}
+      }
+      return {kind:'other', text:''}
+    }
     var FIELD_META = {
       pageContributorCount: {
         label:'同じ投稿者の動画数（元の1ページ）', type:'number',
@@ -82,7 +103,23 @@
       selfAdNameMatch: {
         label:'広告：投稿者名と広告者名', type:'booleanFlag',
         operators:['isTrue','isFalse']
+      },
+      genre: {
+        label:'ジャンル', type:'enum', options:GENRES.map(function(g) { return [g, g] }),
+        operators:['eq','neq']
+      },
+      pageKind: {
+        label:'見ている画面', type:'enum', context:true, options:PAGE_KINDS,
+        operators:['eq','neq']
+      },
+      searchText: {
+        label:'検索中の言葉・タグ', type:'text', context:true,
+        operators:['contains','notContains','eq','neq']
       }
+    }
+    var usesContext = function(node) {
+      return Boolean(node && ((node.kind === 'condition' && FIELD_META[node.field] && FIELD_META[node.field].context)
+        || (Array.isArray(node.children) && node.children.some(usesContext))))
     }
 
     var OP_META = {
@@ -217,6 +254,10 @@
     }
 
     var fieldValue = function(movie, field) {
+      if (FIELD_META[field] && FIELD_META[field].context) {
+        var ctx = movie.pageContext || pageContext()
+        return field === 'pageKind' ? ctx.kind : ctx.text
+      }
       if (field === 'movieId') return movie.id || ''
       if (field === 'title') return movie.title || ''
       if (field === 'pageContributorCount') return Number.isFinite(movie.pageContributorCount)
@@ -239,6 +280,7 @@
         : (!movie.thumbInfoDone || (movie.error && movie.error.type !== 'NO_ERROR'))) return {__notReady:true}
 
       if (field === 'description') return movie.description || ''
+      if (field === 'genre') return typeof movie.genre === 'string' && movie.genre ? movie.genre : {__notReady:true}
       if (field === 'lockedTagCount') {
         return (movie.tags || []).filter(function(t) { return Boolean(t.lock) }).length
       }
@@ -268,6 +310,7 @@
     // source: page | search | detail | cache | nicoad | snapshot | null.
     // Never fed to anonymous diagnostics (values may contain IDs and names).
     var fieldOrigin = function(movie, field) {
+      if (FIELD_META[field] && FIELD_META[field].context) return {state:'known', source:'page'}
       if (field === 'movieId' || field === 'title') return {state:'known', source:'page'}
       if (field === 'pageContributorCount') return Number.isFinite(movie.pageContributorCount)
         ? {state:'known', source:'page'} : {state:'unknown', source:null}
@@ -335,6 +378,11 @@
         return false
       }
 
+      if (fieldType === 'enum') {
+        if (operator === 'eq') return normalizeText(actual) === normalizeText(expected)
+        if (operator === 'neq') return normalizeText(actual) !== normalizeText(expected)
+        return false
+      }
       if (fieldType === 'booleanFlag') {
         if (operator === 'isTrue') return actual === true
         if (operator === 'isFalse') return actual === false
@@ -514,6 +562,10 @@
       makeGroup:makeGroup,
       makeCondition:makeCondition,
       FIELD_META:FIELD_META,
-      OP_META:OP_META
+      OP_META:OP_META,
+      GENRES:GENRES,
+      PAGE_KINDS:PAGE_KINDS,
+      pageContext:pageContext,
+      usesContext:usesContext
     }
   })()

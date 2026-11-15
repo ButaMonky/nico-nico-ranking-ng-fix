@@ -7,7 +7,7 @@
     const fields = [...detailFields, ...searchFields]
     const ruleFields = {
       contributorId:'ownerId', userId:'ownerId', channelId:'ownerId', contributorName:'ownerName',
-      tag:'tags', tagCount:'tags', lockedTag:'lockedTags', lockedTagCount:'lockedTags', description:'description',
+      tag:'tags', tagCount:'tags', lockedTag:'lockedTags', lockedTagCount:'lockedTags', description:'description', genre:'tags',
       selfAdIdMatch:'ownerId', selfAdNameMatch:'ownerName'
     }
     const settings = ['ngMovies','ngTitles','ngUserIds','ngChannelIds','ngUserNames','ngTags','ngLockedTags',

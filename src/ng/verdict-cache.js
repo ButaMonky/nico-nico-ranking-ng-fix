@@ -44,7 +44,9 @@
       const map = new Map()
       if (!enabled || typeof AdvancedNgRules === 'undefined') return map
       for (const rule of AdvancedNgRules.parse(json)) {
-        if (rule.enabled) map.set(rule.id, 'r:' + hash(rule.id + '\u0000' + JSON.stringify(rule.expression)))
+        // BRUSH-074: a rule that depends on the current page or search is
+        // not a property of the video, so it is never remembered.
+        if (rule.enabled && !(AdvancedNgRules.usesContext && AdvancedNgRules.usesContext(rule.expression))) map.set(rule.id, 'r:' + hash(rule.id + '\u0000' + JSON.stringify(rule.expression)))
       }
       return map
     }

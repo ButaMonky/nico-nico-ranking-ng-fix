@@ -191,5 +191,6 @@
           }
         }
 
+        if (typeof scheduleRevealParkedNg === 'function') scheduleRevealParkedNg()
         return performance.now() - fetchStart
       }

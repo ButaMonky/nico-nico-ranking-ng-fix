@@ -16,7 +16,7 @@ const {chromium}=require(process.env.NRN_PLAYWRIGHT || 'playwright');
 const browser=await chromium.launch({headless:true,executablePath:process.env.NRN_BROWSER});
 const records=[];
 try{
- for(const mode of ['duplicate-ads','late-ads','unique-ads','refill-duplicate-ads','refill-unique-ads']){
+ for(const mode of ['duplicate-ads','late-ads','unique-ads','refill-duplicate-ads','refill-unique-ads','refill-reveal-ng']){
   const context=await browser.newContext({viewport:{width:1280,height:900}}),page=await context.newPage();
   let html='<!doctype html><html><body></body></html>';const errors=[];
   page.on('pageerror',e=>errors.push(e.message));
@@ -45,7 +45,7 @@ try{
    window.GM_xmlhttpRequest=o=>{const id=String(o.url).split('/').pop();if(!String(o.url).includes('/getthumbinfo/')||!details[id]){wire.other++;o.onerror?.({});return {abort(){}};}
     wire.detail++;const timer=setTimeout(()=>o.onload?.({status:200,responseText:details[id]}),1);return {abort(){clearTimeout(timer);o.onabort?.();}};};
    window.fetch=async value=>{const u=new URL(value,location.href);if(u.origin!==location.origin||u.pathname!=='/tag/fixture'){wire.other++;throw Error('Unexpected network');}wire.page++;return new Response(pages[Number(u.searchParams.get('page')||1)]||pages.end,{status:200});};
-  },{settings:{...data.settings,autoFillTargetCount:36,autoFillAdMode:'none'},details:Object.fromEntries(data.items.map(x=>[x.id,data.xml(x.id)])),pages:Object.fromEntries([1,2,3,4,5,6,7,8,9].map(i=>[i,data.html(i)]).concat([['end',data.html(20)]]))});
+  },{settings:{...data.settings,autoFillTargetCount:36,autoFillAdMode:'none',...(mode==='refill-reveal-ng'?{ngMovies:['sm10','sm11','sm12']}:{})},details:Object.fromEntries(data.items.map(x=>[x.id,data.xml(x.id)])),pages:Object.fromEntries([1,2,3,4,5,6,7,8,9].map(i=>[i,data.html(i)]).concat([['end',data.html(20)]]))});
   await page.goto('http://nrn.test/tag/fixture');await page.addScriptTag({content:injected});
   await page.waitForFunction(()=>window.countProbe?.().initialized&&!countProbe().fetching,{},{timeout:20000});
   if(mode==='late-ads'){
@@ -63,6 +63,27 @@ try{
   assert.equal(result.displayedCards,expectedVisible,mode+': visible cards include ads, not unique IDs');
   assert.equal(result.state.total,expectedVisible,mode+': reported count agrees with screen');
   assert.equal(result.displayedAds,5,mode+': five first-position ad slots count toward target');
+  if(mode==='refill-reveal-ng'){
+   // BRUSH-075: remembered NG IDs are skipped before loading. "NG動画を表示"
+   // adds them as NG cards, in source order, and the target is unchanged.
+   const onPage=()=>page.evaluate(()=>['sm10','sm11','sm12'].map(id=>testPage.movieRoots.filter(r=>r.movieId===id&&r.elem.isConnected&&r.elem.getClientRects().length).length));
+   assert.deepEqual(await onPage(),[0,0,0],'skipped before loading');
+   const excludedBefore=await page.evaluate(()=>testPage._autoFillNgExcluded());
+   assert.ok(excludedBefore>=3,'counted as NG');
+   const detailBefore=await page.evaluate(()=>wire.page);
+   await page.evaluate(()=>testModel.config.ngMovieVisible.value=true);
+   await page.waitForFunction(()=>['sm10','sm11','sm12'].every(id=>testPage.movieRoots.some(r=>r.movieId===id&&r.elem.isConnected&&r.elem.getClientRects().length)),{},{timeout:10000});
+   assert.deepEqual(await onPage(),[1,1,1],'each shown once');
+   assert.equal(await page.evaluate(()=>wire.page),detailBefore,'no page refetch');
+   const ord=await page.evaluate(()=>[...document.querySelectorAll('[data-decoration-video-id]')].map(e=>e.dataset.decorationVideoId).filter(id=>['sm9','sm10','sm11','sm12','sm13'].includes(id)));
+   assert.deepEqual(ord,['sm9','sm10','sm11','sm12','sm13'],'source order');
+   assert.equal(await page.evaluate(()=>countProbe().total),36,'NG cards never count toward the target');
+   assert.equal(await page.evaluate(()=>testPage._autoFillNgExcluded()),excludedBefore-3,'not counted twice');
+   await page.evaluate(()=>testModel.config.ngMovieVisible.value=false);
+   await page.waitForFunction(()=>['sm10','sm11','sm12'].every(id=>testPage.movieRoots.filter(r=>r.movieId===id).every(r=>!r.elem.getClientRects().length)),{},{timeout:10000});
+   assert.equal(await page.evaluate(()=>countProbe().total),36);
+   console.log(mode+' PASS');await context.close();continue;
+  }
   if(mode.startsWith('refill-')){
    assert.equal(result.state.original,13,'8 ordinary + 5 ad slots');
    assert.equal(result.state.injected,23,'fill 23 rather than 28');

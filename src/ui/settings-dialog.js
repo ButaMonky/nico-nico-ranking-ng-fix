@@ -209,6 +209,7 @@
       this._on('removeButton', 'click', updateButtonsDisabled)
       this._on('removeAllButton', 'click', updateButtonsDisabled)
       this._initAdvancedNgRuleBuilder()
+      this.ruleList = NgRuleList.mount(this)
     }
     ConfigDialog.prototype = createObject(_super.prototype, {
       _e(id) { return this.doc.getElementById(id) },
@@ -297,6 +298,17 @@
         return span
       },
       _friendlyOperatorLabel(field, operator) {
+        // BRUSH-074: fixed-choice and page-context fields.
+        if (field === 'pageKind' || field === 'genre') {
+          if (operator === 'eq') return 'である'
+          if (operator === 'neq') return 'ではない'
+        }
+        if (field === 'searchText') {
+          if (operator === 'contains') return '言葉を含む（部分一致）'
+          if (operator === 'notContains') return '言葉を含まない（部分一致）'
+          if (operator === 'eq') return '完全に一致'
+          if (operator === 'neq') return '完全には一致しない'
+        }
         // タグ系は配列中の「タグ名1個」との完全一致。
         // タイトル/説明文/投稿者名/動画IDは通常の文字列比較。
         if (field === 'tag') {
@@ -371,6 +383,10 @@
         return generic
       },
       _operatorHelpText(field, operator) {
+        // BRUSH-074
+        if (field === 'pageKind') return 'いま開いている画面の種類で判定します（動画の情報ではありません）。例：「ランキングではない」を組み合わせると、ランキングではこのルールを使いません。画面に左右されるルールはNG記憶に残しません。'
+        if (field === 'searchText') return 'いま検索しているキーワード、またはタグ検索のタグで判定します。ランキングではトレンドタグで絞っているときのタグです。別の界隈で巻き込まないよう、ルールを使う検索を限定できます。NG記憶には残しません。'
+        if (field === 'genre') return '投稿者が設定した動画のジャンル（検索のフィルタと同じ16種類＋未設定）で判定します。動画情報の取得後に判定します。'
         if (field === 'tag' && operator === 'contains')
           return '動画に付いているタグの中に、入力したタグ名と完全に同じタグが1個以上ある場合に一致します。部分一致ではありません。'
         if (field === 'tag' && operator === 'notContains')
@@ -758,14 +774,16 @@
       <input class=primary type=button value="閉じる" id=closeButton>
     </div>
     <div class=tabbar role=tablist>
-      <button class="tabButton active" type=button data-tab=filter>NG・フィルター</button>
+      <button class="tabButton active" type=button data-tab=rules>NGルール</button>
+      <button class=tabButton type=button data-tab=filter>詳しいNG設定</button>
       <button class=tabButton type=button data-tab=autofill>自動継ぎ足し</button>
       <button class=tabButton type=button data-tab=display>表示・操作</button>
       <button class=tabButton type=button data-tab=developer>開発者・診断</button>
       <button class=tabButton type=button data-tab=data>データ管理</button>
     </div>
     <div class=content>
-      <div data-tab-panel=filter class=active><details class=card open>
+      <div data-tab-panel=rules class=active><div id=ngRuleListHost></div></div>
+      <div data-tab-panel=filter><details class=card open>
         <summary>NGリスト</summary>
         <div class=sectionBody>
           <div class=row><label>種類 <select id=target>

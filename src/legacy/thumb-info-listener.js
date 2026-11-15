@@ -150,6 +150,7 @@
             m.description = thumbInfo.description
             MetadataReadiness.noteSource(m,'description',m._nrnDetailSource,m._nrnDetailFetchedAt)
           }
+          if (typeof thumbInfo.genre === 'string') m.genre = thumbInfo.genre || '未設定'
           if (Array.isArray(thumbInfo.tags)) {
             m.tags = getTagsBy(thumbInfo.tags)
             MetadataReadiness.noteSource(m,'tags',m._nrnDetailSource,m._nrnDetailFetchedAt)

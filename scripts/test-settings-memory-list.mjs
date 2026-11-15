@@ -30,6 +30,8 @@ try {
     await api.NgVerdictCache.attach(config, get, set, document).ready;
     window.dialog = new api.ConfigDialog(config, document.querySelector('#settings').contentDocument, () => {});
   });
+ // BRUSH-074: the old NG list and the compound editor live in the 詳しいNG設定 tab.
+ await frame.locator('.tabButton[data-tab=filter]').click();
   await frame.locator('#target').selectOption('ng-movie-id');
   const texts = await frame.locator('#list option').allTextContents();
   assert.equal(texts[0], 'sm900', 'manual NG video IDs first');

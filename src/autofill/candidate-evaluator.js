@@ -55,6 +55,15 @@
       var checkedDetailCacheIds = new Set()
       var checkedOwnerNameCache = new Map()
 
+      var genreRuleCache = {raw:null, enabled:null, value:false}
+      var genreRuleActive = function() {
+        var raw = model.config.advancedNgRulesJson.value, enabled = model.config.advancedNgRulesEnabled.value
+        if (genreRuleCache.raw !== raw || genreRuleCache.enabled !== enabled) {
+          var uses = function(n) { return Boolean(n && ((n.kind === 'condition' && n.field === 'genre') || (n.children || []).some(uses))) }
+          genreRuleCache = {raw:raw, enabled:enabled, value:Boolean(enabled) && AdvancedNgRules.parse(raw).some(function(r) { return r.enabled && uses(r.expression) })}
+        }
+        return genreRuleCache.value
+      }
       var restoreCachedMovieDetails = function(ids, reason) {
         if (!model.config.sessionDetailCacheEnabled.value) {
           return {hits:0, misses:ids.length, restored:0}
@@ -87,7 +96,10 @@
               || cached.metadata.tags !== 'known' || cached.metadata.lockedTags !== 'known'
               || cached.metadata.description !== 'known' || !Array.isArray(cached.tags)
               || !cached.tags.every(t => t && typeof t.name === 'string' && typeof t.lock === 'boolean')
-              || typeof cached.description !== 'string')) cached = null
+              || typeof cached.description !== 'string'
+              // BRUSH-074: entries saved before genre was kept are refetched,
+              // but only while an active rule actually uses the genre.
+              || (typeof cached.genre !== 'string' && genreRuleActive()))) cached = null
           if (!cached) {
             misses++
             cacheMisses++
@@ -107,6 +119,7 @@
               fetchedAt:cached.cachedAt,
               ownerFetchedAt:Object.fromEntries(['identity','name','visibility'].map(field => [field,cached.ownerFetchedAt?.[field]])),
               description: cached.description,
+              genre: cached.genre,
               tags: cached.tags,
               contributor: cached.contributor ? {...cached.contributor,
                 name:cached.metadata.ownerName === 'known' ? cached.contributor.name : null} : null,
@@ -175,6 +188,7 @@
           metadata: {...movie.metadata},
           title: movie.title || '',
           description: movie.description || '',
+          ...(typeof movie.genre === 'string' ? {genre: movie.genre} : {}),
           contributor: movie._nrnDetailContributor ? {...movie._nrnDetailContributor} : null,
           ownerFetchedAt:Object.fromEntries(['identity','name','visibility'].map(field => {
             const at = movie._nrnDetailOwnerEvidence?.[field]?.at

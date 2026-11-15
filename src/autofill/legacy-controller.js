@@ -590,7 +590,9 @@
       // BRUSH-067: candidates AutoFill dropped as NG before they became cards
       // (cheap pre-check incl. NG memory, and Snapshot quick NG). Shown in the
       // bar's NG total; NG cards that did reach the page are counted there.
-      page._autoFillNgExcluded = function() { return totalCheapPrefilteredNg + totalApiPrefilteredNg }
+      // BRUSH-075: rows shown by "NG動画を表示" are on the page and counted there.
+      var revealedNgIds = new Set()
+      page._autoFillNgExcluded = function() { return Math.max(0, totalCheapPrefilteredNg + totalApiPrefilteredNg - revealedNgIds.size) }
       var nextPageToFetch = page._currentPageNumber + 1
       var fetching = false
       var initialized = false

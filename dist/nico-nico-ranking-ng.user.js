@@ -5,7 +5,7 @@
 // @contributor  kengo321 (original)
 // @description  ニコニコ動画のランキング・検索結果にNG、複合NG、検索結果の自動補充を追加する非公式の改変版
 // @match        *://www.nicovideo.jp/*
-// @version      160.40
+// @version      160.41
 // @grant        unsafeWindow
 // @grant        GM_getValue
 // @grant        GM_setValue
@@ -203,7 +203,7 @@
 
   // This facade is scoped to this userscript; other scripts keep their console.
   var nrnConsoleConfig = null
-  var NRN_VERSION = '160.40'
+  var NRN_VERSION = '160.41'
   var nrnNativeConsole = globalThis.console
   var nrnConsoleCounts = {warnings:0,errors:0}
   var nrnSetConsoleConfig = function(config) { nrnConsoleConfig = config }
@@ -723,6 +723,8 @@
       this.ngVerdictCacheEnabled = store('ngVerdictCacheEnabled', true);
       // BRUSH-064: ニコニコの仕様変更の可能性を右下に知らせる。
       this.siteHealthNoticeEnabled = store('siteHealthNoticeEnabled', true);
+      // BRUSH-074: one-condition NG rules the user paused ([{store, value, text}]).
+      this.pausedNgEntriesJson = store('pausedNgEntriesJson', '[]');
     }
     Config.prototype.sync = function() {
       return Promise.all([
@@ -768,6 +770,7 @@
         this.sessionDetailCacheMaxEntries.sync(),
         this.ngVerdictCacheEnabled.sync(),
         this.siteHealthNoticeEnabled.sync(),
+        this.pausedNgEntriesJson.sync(),
       ])
     }
     Config.prototype.toCSV = async function(targetTypes) {
@@ -965,6 +968,8 @@
       return {
         ...(rootElem.querySelector('thumb > video_id') ? {videoId:rootElem.querySelector('thumb > video_id').textContent} : {}),
         description: rootElem.querySelector('thumb > description').textContent,
+        // BRUSH-074: 未設定 when the uploader chose none; absent in very old answers.
+        ...(rootElem.querySelector('thumb > genre') ? {genre:rootElem.querySelector('thumb > genre').textContent.trim()} : {}),
         tags: rootElem.querySelector('thumb > tags') ? parseTags(rootElem.querySelectorAll('thumb > tags > tag')) : undefined,
         contributor: parseContributor(rootElem),
         title: rootElem.querySelector('thumb > title').textContent,
@@ -1257,7 +1262,7 @@
     const fields = [...detailFields, ...searchFields]
     const ruleFields = {
       contributorId:'ownerId', userId:'ownerId', channelId:'ownerId', contributorName:'ownerName',
-      tag:'tags', tagCount:'tags', lockedTag:'lockedTags', lockedTagCount:'lockedTags', description:'description',
+      tag:'tags', tagCount:'tags', lockedTag:'lockedTags', lockedTagCount:'lockedTags', description:'description', genre:'tags',
       selfAdIdMatch:'ownerId', selfAdNameMatch:'ownerName'
     }
     const settings = ['ngMovies','ngTitles','ngUserIds','ngChannelIds','ngUserNames','ngTags','ngLockedTags',
@@ -1466,6 +1471,27 @@
     // condition = {kind:'condition', field:'lockedTagCount', operator:'gte', value:11, not:false}
     //
     // 旧v11 conditions[] は parse() 時に root AND group へ自動移行する。
+    // BRUSH-074: video genres as the search filter lists them (16, checked on
+    // the live site 2026-11-16) plus 未設定, which getthumbinfo returns for
+    // videos without a genre (e.g. sm9).
+    var GENRES = ['ゲーム','音楽・サウンド','エンターテイメント','アニメ','社会・政治・時事','ラジオ','解説・講座',
+      'ダンス','スポーツ','動物','旅行・アウトドア','料理','乗り物','技術・工作','自然','その他','未設定']
+    var PAGE_KINDS = [['ranking','ランキング'],['search','キーワード検索'],['tag','タグ検索'],['shorts','ショート動画の検索']]
+    // BRUSH-074: where the user is right now. Context fields describe the
+    // page, not the video, so their verdicts are never remembered.
+    var pageContext = function(loc) {
+      loc = loc || (typeof location !== 'undefined' ? location : null)
+      var path = String(loc && loc.pathname || '')
+      var decode = function(s) { try { return decodeURIComponent(s) } catch (e) { return s } }
+      var m = /^\/(search|tag|search_shorts|tag_shorts)\/([^/?#]+)/.exec(path)
+      if (m) return {kind: m[1].endsWith('_shorts') ? 'shorts' : m[1], text: decode(m[2])}
+      if (/^\/ranking(\/|$)/.test(path)) {
+        var q = /[?&]tag=([^&#]*)/.exec(String(loc.search || ''))
+        var tag = q ? decode(q[1].replace(/\+/g, ' ')) : ''
+        return {kind:'ranking', text: tag === 'all' ? '' : tag}
+      }
+      return {kind:'other', text:''}
+    }
     var FIELD_META = {
       pageContributorCount: {
         label:'同じ投稿者の動画数（元の1ページ）', type:'number',
@@ -1544,7 +1570,23 @@
       selfAdNameMatch: {
         label:'広告：投稿者名と広告者名', type:'booleanFlag',
         operators:['isTrue','isFalse']
+      },
+      genre: {
+        label:'ジャンル', type:'enum', options:GENRES.map(function(g) { return [g, g] }),
+        operators:['eq','neq']
+      },
+      pageKind: {
+        label:'見ている画面', type:'enum', context:true, options:PAGE_KINDS,
+        operators:['eq','neq']
+      },
+      searchText: {
+        label:'検索中の言葉・タグ', type:'text', context:true,
+        operators:['contains','notContains','eq','neq']
       }
+    }
+    var usesContext = function(node) {
+      return Boolean(node && ((node.kind === 'condition' && FIELD_META[node.field] && FIELD_META[node.field].context)
+        || (Array.isArray(node.children) && node.children.some(usesContext))))
     }
 
     var OP_META = {
@@ -1679,6 +1721,10 @@
     }
 
     var fieldValue = function(movie, field) {
+      if (FIELD_META[field] && FIELD_META[field].context) {
+        var ctx = movie.pageContext || pageContext()
+        return field === 'pageKind' ? ctx.kind : ctx.text
+      }
       if (field === 'movieId') return movie.id || ''
       if (field === 'title') return movie.title || ''
       if (field === 'pageContributorCount') return Number.isFinite(movie.pageContributorCount)
@@ -1701,6 +1747,7 @@
         : (!movie.thumbInfoDone || (movie.error && movie.error.type !== 'NO_ERROR'))) return {__notReady:true}
 
       if (field === 'description') return movie.description || ''
+      if (field === 'genre') return typeof movie.genre === 'string' && movie.genre ? movie.genre : {__notReady:true}
       if (field === 'lockedTagCount') {
         return (movie.tags || []).filter(function(t) { return Boolean(t.lock) }).length
       }
@@ -1730,6 +1777,7 @@
     // source: page | search | detail | cache | nicoad | snapshot | null.
     // Never fed to anonymous diagnostics (values may contain IDs and names).
     var fieldOrigin = function(movie, field) {
+      if (FIELD_META[field] && FIELD_META[field].context) return {state:'known', source:'page'}
       if (field === 'movieId' || field === 'title') return {state:'known', source:'page'}
       if (field === 'pageContributorCount') return Number.isFinite(movie.pageContributorCount)
         ? {state:'known', source:'page'} : {state:'unknown', source:null}
@@ -1797,6 +1845,11 @@
         return false
       }
 
+      if (fieldType === 'enum') {
+        if (operator === 'eq') return normalizeText(actual) === normalizeText(expected)
+        if (operator === 'neq') return normalizeText(actual) !== normalizeText(expected)
+        return false
+      }
       if (fieldType === 'booleanFlag') {
         if (operator === 'isTrue') return actual === true
         if (operator === 'isFalse') return actual === false
@@ -1976,7 +2029,11 @@
       makeGroup:makeGroup,
       makeCondition:makeCondition,
       FIELD_META:FIELD_META,
-      OP_META:OP_META
+      OP_META:OP_META,
+      GENRES:GENRES,
+      PAGE_KINDS:PAGE_KINDS,
+      pageContext:pageContext,
+      usesContext:usesContext
     }
   })()
   // BRUSH-060: NG判定結果の記憶（高速非表示）。
@@ -2025,7 +2082,9 @@
       const map = new Map()
       if (!enabled || typeof AdvancedNgRules === 'undefined') return map
       for (const rule of AdvancedNgRules.parse(json)) {
-        if (rule.enabled) map.set(rule.id, 'r:' + hash(rule.id + '\u0000' + JSON.stringify(rule.expression)))
+        // BRUSH-074: a rule that depends on the current page or search is
+        // not a property of the video, so it is never remembered.
+        if (rule.enabled && !(AdvancedNgRules.usesContext && AdvancedNgRules.usesContext(rule.expression))) map.set(rule.id, 'r:' + hash(rule.id + '\u0000' + JSON.stringify(rule.expression)))
       }
       return map
     }
@@ -2547,6 +2606,9 @@
       }
       return {order,sort,partition,release,
         isRejected:id=>parked.has(id) && Boolean(currentReason(parked.get(id))),
+        // BRUSH-075: the parked rows that are still NG, in source order, so
+        // "NG動画を表示" can show them without fetching anything again.
+        rejectedItems:()=>sort([...parked.values()].filter(item=>currentReason(item))),
         clear:()=>parked.clear(),
         snapshot:()=>({retained:parked.size,rejectedTotal,releasedTotal,capacityFallback,limit})}
     }
@@ -3486,6 +3548,7 @@
             m.description = thumbInfo.description
             MetadataReadiness.noteSource(m,'description',m._nrnDetailSource,m._nrnDetailFetchedAt)
           }
+          if (typeof thumbInfo.genre === 'string') m.genre = thumbInfo.genre || '未設定'
           if (Array.isArray(thumbInfo.tags)) {
             m.tags = getTagsBy(thumbInfo.tags)
             MetadataReadiness.noteSource(m,'tags',m._nrnDetailSource,m._nrnDetailFetchedAt)
@@ -3840,6 +3903,7 @@
       this._on('removeButton', 'click', updateButtonsDisabled)
       this._on('removeAllButton', 'click', updateButtonsDisabled)
       this._initAdvancedNgRuleBuilder()
+      this.ruleList = NgRuleList.mount(this)
     }
     ConfigDialog.prototype = createObject(_super.prototype, {
       _e(id) { return this.doc.getElementById(id) },
@@ -3928,6 +3992,17 @@
         return span
       },
       _friendlyOperatorLabel(field, operator) {
+        // BRUSH-074: fixed-choice and page-context fields.
+        if (field === 'pageKind' || field === 'genre') {
+          if (operator === 'eq') return 'である'
+          if (operator === 'neq') return 'ではない'
+        }
+        if (field === 'searchText') {
+          if (operator === 'contains') return '言葉を含む（部分一致）'
+          if (operator === 'notContains') return '言葉を含まない（部分一致）'
+          if (operator === 'eq') return '完全に一致'
+          if (operator === 'neq') return '完全には一致しない'
+        }
         // タグ系は配列中の「タグ名1個」との完全一致。
         // タイトル/説明文/投稿者名/動画IDは通常の文字列比較。
         if (field === 'tag') {
@@ -4002,6 +4077,10 @@
         return generic
       },
       _operatorHelpText(field, operator) {
+        // BRUSH-074
+        if (field === 'pageKind') return 'いま開いている画面の種類で判定します（動画の情報ではありません）。例：「ランキングではない」を組み合わせると、ランキングではこのルールを使いません。画面に左右されるルールはNG記憶に残しません。'
+        if (field === 'searchText') return 'いま検索しているキーワード、またはタグ検索のタグで判定します。ランキングではトレンドタグで絞っているときのタグです。別の界隈で巻き込まないよう、ルールを使う検索を限定できます。NG記憶には残しません。'
+        if (field === 'genre') return '投稿者が設定した動画のジャンル（検索のフィルタと同じ16種類＋未設定）で判定します。動画情報の取得後に判定します。'
         if (field === 'tag' && operator === 'contains')
           return '動画に付いているタグの中に、入力したタグ名と完全に同じタグが1個以上ある場合に一致します。部分一致ではありません。'
         if (field === 'tag' && operator === 'notContains')
@@ -4389,14 +4468,16 @@
       <input class=primary type=button value="閉じる" id=closeButton>
     </div>
     <div class=tabbar role=tablist>
-      <button class="tabButton active" type=button data-tab=filter>NG・フィルター</button>
+      <button class="tabButton active" type=button data-tab=rules>NGルール</button>
+      <button class=tabButton type=button data-tab=filter>詳しいNG設定</button>
       <button class=tabButton type=button data-tab=autofill>自動継ぎ足し</button>
       <button class=tabButton type=button data-tab=display>表示・操作</button>
       <button class=tabButton type=button data-tab=developer>開発者・診断</button>
       <button class=tabButton type=button data-tab=data>データ管理</button>
     </div>
     <div class=content>
-      <div data-tab-panel=filter class=active><details class=card open>
+      <div data-tab-panel=rules class=active><div id=ngRuleListHost></div></div>
+      <div data-tab-panel=filter><details class=card open>
         <summary>NGリスト</summary>
         <div class=sectionBody>
           <div class=row><label>種類 <select id=target>
@@ -4643,10 +4724,15 @@
       ['タイトルとタグの両方で絞る', () => group('AND', [condition('title','contains','実況'), condition('tag','contains','ゲーム')])],
       ['複数の言葉のどれかで絞る', () => group('OR', [condition('title','contains','総集編'), condition('title','contains','切り抜き')])],
       ['好きなタグを除外して絞る', () => group('AND', [condition('title','contains','実況'), condition('tag','notContains','お気に入り')])],
-      ['同じ投稿者の連続投稿を絞る', () => group('AND', [condition('pageContributorCount','gte',5), condition('title','contains','実況')])]
+      ['同じ投稿者の連続投稿を絞る', () => group('AND', [condition('pageContributorCount','gte',5), condition('title','contains','実況')])],
+      // BRUSH-074: limit a rule to where you are.
+      ['ランキングでは使わない', () => group('AND', [condition('lockedTagCount','gte',11), condition('pageKind','neq','ranking')])],
+      ['このタグを検索しているときだけ使う', () => group('AND', [condition('title','contains',''), condition('searchText','eq','')])]
     ]
     const fieldGroups = [
-      ['内容', ['title','tag','lockedTag','description','movieId']],
+      ['内容', ['title','tag','lockedTag','description','movieId','genre']],
+      // BRUSH-074: the page you are on, not the video.
+      ['見ている画面・検索', ['pageKind','searchText']],
       ['個数', ['lockedTagCount','tagCount','pageContributorCount']],
       // BRUSH-037: search-page numbers. Unknown numbers are never treated as 0.
       ['再生・反応数', ['viewCount','likeCount','commentCount','mylistCount','durationSeconds']],
@@ -4867,7 +4953,12 @@
           fields.value=node.field;fields.addEventListener('change',()=>change(()=>{const f=fields.value;node.field=f;node.operator=AdvancedNgRules.FIELD_META[f].operators.includes('gte')?'gte':AdvancedNgRules.FIELD_META[f].operators[0];node.value=f==='lockedTagCount'?11:AdvancedNgRules.FIELD_META[f].type==='number'?1:''}))
           box.append(labeled('何を',fields))
           box.append(labeled('どう比べる',select('条件の比較方法',AdvancedNgRules.FIELD_META[node.field].operators.map(o=>[o,friendly(node.field,o)]),node.operator,v=>change(()=>{node.operator=v}))))
-          if(AdvancedNgRules.OP_META[node.operator].needsValue) {
+          if(AdvancedNgRules.OP_META[node.operator].needsValue && AdvancedNgRules.FIELD_META[node.field].type==='enum') {
+            // BRUSH-074: fixed choices (screen kind, genre) are picked, not typed.
+            const opts=AdvancedNgRules.FIELD_META[node.field].options
+            if(!opts.some(o=>o[0]===node.value))node.value=opts[0][0]
+            box.append(labeled('値',select('条件の値',opts,node.value,v=>change(()=>{node.value=v},false))))
+          } else if(AdvancedNgRules.OP_META[node.operator].needsValue) {
             const numeric=['number','numberOrMissing'].includes(AdvancedNgRules.FIELD_META[node.field].type)
             const value=input('条件の値',node.value??'',v=>change(()=>{node.value=v},false),numeric?'number':'text')
             value.placeholder=numeric?(node.field==='durationSeconds'?'秒数を入力':'数を入力'):'例：実況';if(numeric){value.step='1';value.min=AdvancedNgRules.FIELD_META[node.field].type==='numberOrMissing'||node.field==='pageContributorCount'?'1':'0'}
@@ -4891,7 +4982,12 @@
       // Warn only when leaving this settings document with unapplied edits.
       doc.defaultView.addEventListener('beforeunload',e=>{if(snapshot()!==baseline){e.preventDefault();e.returnValue=''}})
       render()
-      return {validate:()=>validate(draft), canClose:()=>snapshot()===baseline || doc.defaultView.confirm('まだ適用していない変更があります。変更を破棄して閉じますか？')}
+      // BRUSH-074: the NGルール list opens rules here and asks for a reload
+      // after it saved (only when this editor has no unapplied draft).
+      const reload=()=>{if(snapshot()!==baseline)return false;savedRaw=config.advancedNgRulesJson.value;savedEnabled=config.advancedNgRulesEnabled.value;draft=AdvancedNgRules.parse(savedRaw);draftEnabled=savedEnabled;baseline=snapshot();render();return true}
+      const focusRule=ruleId=>{reload();const i=draft.findIndex(r=>r.id===ruleId);if(i>=0){selected=i;render()}host.scrollIntoView({block:'start'})}
+      const addNew=(templateIndex=0)=>{reload();add(templateIndex);host.scrollIntoView({block:'start'})}
+      return {validate:()=>validate(draft), reload, focusRule, addNew, canClose:()=>snapshot()===baseline || doc.defaultView.confirm('まだ適用していない変更があります。変更を破棄して閉じますか？')}
     }
     const CSS = `
       .re-editor{min-width:0}.re-editor button:disabled{opacity:.45;cursor:not-allowed}.re-filter{width:100%;padding:9px;border:1px solid var(--line);border-radius:6px;background:var(--panel);color:var(--text)}.re-intro,.re-summary{padding:12px;background:var(--accent-soft);border-radius:8px;line-height:1.8;overflow-wrap:anywhere}
@@ -4908,6 +5004,384 @@
       @media(max-width:720px){.re-layout{grid-template-columns:1fr}.re-list{max-height:180px}.re-condition,.re-test-fields{grid-template-columns:1fr}.re-group{padding:7px}.re-condition{padding:8px}.re-editor button{min-height:36px}}
     `
     return {mount,validate,describe,verdict,outcomeText}
+  })()
+  // BRUSH-074: one list of every NG rule, written as sentences.
+  //
+  // Storage stays compatible: a one-condition rule (tag, title, owner, video)
+  // is kept in its fast list (ngTags, ngUserIds …) because pre-paint hiding
+  // and the NG memory read those lists directly; everything else is a
+  // compound rule (advancedNgRulesJson). The list shows both the same way.
+  // Pausing a one-condition rule moves it to pausedNgEntriesJson and back.
+  var NgRuleList = (function() {
+    const KINDS = {
+      tag:{label:'タグ', bg:'#e7f0ff', fg:'#0b4fa8'},
+      owner:{label:'投稿者', bg:'#fff1e5', fg:'#8a4200'},
+      title:{label:'タイトル', bg:'#e3f6f3', fg:'#0b6157'},
+      movie:{label:'動画', bg:'#eef0f2', fg:'#3d444d'},
+      combo:{label:'組み合わせ', bg:'#f1ecff', fg:'#5232b8'},
+    }
+    const FILTERS = [['all','すべて'],['tag','タグ'],['owner','投稿者'],['title','タイトル'],['movie','動画'],['combo','組み合わせ']]
+    // One-condition rules and how each reads.
+    const SIMPLE = {
+      ngTags:{kind:'tag', parts:v => ['タグ「', v, '」がある動画を隠す']},
+      ngLockedTags:{kind:'tag', parts:v => ['ロックされたタグ「', v, '」がある動画を隠す']},
+      ngTitles:{kind:'title', parts:v => ['タイトルに「', v, '」を含む動画を隠す']},
+      ngUserIds:{kind:'owner', parts:(v, text) => text ? ['投稿者「', text, '」（ID ' + v + '）の動画を隠す'] : ['ユーザーID「', String(v), '」の動画を隠す']},
+      ngChannelIds:{kind:'owner', parts:(v, text) => text ? ['チャンネル「', text, '」（ch' + v + '）の動画を隠す'] : ['チャンネル「', 'ch' + v, '」の動画を隠す']},
+      ngUserNames:{kind:'owner', parts:v => ['投稿者名に「', v, '」を含む動画を隠す']},
+      ngMovies:{kind:'movie', parts:(v, text) => ['動画「', text || v, '」を隠す']},
+    }
+    const CSS = `
+.nr-wrap{display:flex;flex-direction:column;gap:12px}
+.nr-top{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
+.nr-summary{margin:0;color:var(--muted);font-size:13px}.nr-summary strong{color:var(--text);font-size:17px}
+.nr-add{height:40px;padding:0 18px;border-radius:20px;border:0;background:var(--accent);color:#fff;font-weight:700;font-size:14px;cursor:pointer}
+.nr-tools{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.nr-search{height:34px;border:1px solid var(--line);border-radius:17px;padding:0 14px;min-width:240px;font:inherit;background:var(--panel);color:var(--text)}
+.nr-chip{height:32px;padding:0 12px;border-radius:16px;border:1px solid var(--line);background:var(--panel);color:var(--text);font:inherit;font-size:12px;cursor:pointer}
+.nr-chip[aria-pressed=true]{background:var(--text);color:var(--panel);border-color:var(--text)}
+.nr-head{display:flex;gap:10px;font-size:11px;color:var(--muted);padding:0 4px}
+.nr-head span:first-child{flex:1}.nr-head .n{width:84px;text-align:right}.nr-head .u{width:52px;text-align:center}.nr-head .a{width:72px}
+.nr-list{display:flex;flex-direction:column}
+.nr-row{display:flex;align-items:center;gap:10px;padding:9px 4px;border-top:1px solid var(--line)}
+.nr-row.paused{opacity:.62}
+.nr-kind{flex:0 0 auto;width:76px;text-align:center;padding:3px 0;border-radius:6px;font-size:11px;font-weight:700}
+.nr-text{flex:1;min-width:0;margin:0;font-size:14px;line-height:1.5;overflow-wrap:anywhere}
+.nr-text .nr-name{display:block;font-size:11px;color:var(--muted)}
+.nr-count{width:84px;text-align:right;font-weight:700;font-size:14px;font-variant-numeric:tabular-nums}
+.nr-count.none{font-weight:400;color:var(--muted);font-size:12px}
+.nr-switch{width:52px;display:flex;justify-content:center}
+.nr-switch button{width:42px;height:24px;border-radius:12px;border:0;position:relative;cursor:pointer;background:#b8c0c9;padding:0}
+.nr-switch button[aria-checked=true]{background:var(--accent)}
+.nr-switch button span{position:absolute;top:3px;left:3px;width:18px;height:18px;border-radius:9px;background:#fff;transition:left .12s}
+.nr-switch button[aria-checked=true] span{left:21px}
+.nr-actions{width:92px;flex:none;display:flex;gap:2px;justify-content:flex-end}
+.nr-actions button{height:30px;padding:0 6px;white-space:nowrap;border:1px solid transparent;border-radius:6px;background:transparent;color:var(--muted);font:inherit;font-size:12px;cursor:pointer}
+.nr-actions button:hover{border-color:var(--line);color:var(--text)}
+.nr-inline-num{width:56px;height:26px;margin:0 4px;font:inherit;border:1px solid var(--line);border-radius:6px;padding:0 6px;background:var(--panel);color:var(--text)}
+.nr-empty{color:var(--muted);font-size:13px;padding:18px 4px}
+.nr-panel{border:1px solid var(--line);border-radius:12px;padding:14px;display:grid;grid-template-columns:260px minmax(0,1fr);gap:16px;background:var(--panel)}
+.nr-kinds{display:flex;flex-direction:column;gap:8px}
+.nr-kindbtn{display:flex;align-items:center;gap:10px;padding:10px 12px;border-radius:10px;border:1px solid var(--line);background:var(--panel);color:var(--text);text-align:left;font:inherit;cursor:pointer}
+.nr-kindbtn[aria-pressed=true]{border:2px solid var(--accent);padding:9px 11px}
+.nr-kindbtn b{display:block;font-size:13px}.nr-kindbtn small{display:block;font-size:11px;color:var(--muted)}
+.nr-form{display:flex;flex-direction:column;gap:12px}
+.nr-form label.nr-field{display:flex;flex-direction:column;gap:5px;font-size:12px;color:var(--muted)}
+.nr-form input[type=text],.nr-form input[type=number]{height:40px;border:1px solid var(--line);border-radius:8px;padding:0 12px;font:inherit;font-size:15px;background:var(--panel);color:var(--text)}
+.nr-suggest{display:flex;flex-wrap:wrap;gap:6px}
+.nr-preview{border-radius:10px;background:var(--panel2);padding:10px 12px;font-size:13px}
+.nr-preview strong{font-size:16px}
+.nr-formbar{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap}
+.nr-will{margin:0;font-size:12px;color:var(--muted)}.nr-will strong{color:var(--text)}
+.nr-msg{margin:0;font-size:12px;color:var(--accent);min-height:1em}
+@media (max-width:640px){.nr-panel{grid-template-columns:1fr}}
+`
+    const valueOf = v => v === Object(v) ? v.value : v
+    const textOf = v => v === Object(v) ? (v.text || '') : ''
+    const upper = s => String(s == null ? '' : s).toUpperCase()
+
+    // Plain-language sentence for a compound expression.
+    const condText = function(c) {
+      const v = String(c.value == null ? '' : c.value)
+      const meta = AdvancedNgRules.FIELD_META[c.field]
+      const label = meta ? meta.label.replace(/^🔒\s*/, '') : c.field
+      let t
+      switch (c.field) {
+        case 'tag': t = c.operator === 'contains' ? 'タグ「' + v + '」がある' : c.operator === 'notContains' ? 'タグ「' + v + '」がない' : c.operator === 'exists' ? 'タグがある' : 'タグがない'; break
+        case 'lockedTag': t = c.operator === 'contains' ? 'ロックされたタグ「' + v + '」がある' : c.operator === 'notContains' ? 'ロックされたタグ「' + v + '」がない' : c.operator === 'exists' ? 'ロックされたタグがある' : 'ロックされたタグがない'; break
+        case 'pageKind': {
+          const name = (AdvancedNgRules.PAGE_KINDS.find(k => k[0] === c.value) || [0, v])[1]
+          t = '見ている画面が' + name + (c.operator === 'neq' ? 'ではない' : ''); break
+        }
+        case 'genre': t = 'ジャンルが「' + v + '」' + (c.operator === 'neq' ? 'ではない' : ''); break
+        case 'lockedTagCount': case 'tagCount': {
+          const what = c.field === 'lockedTagCount' ? 'ロックされたタグ' : 'タグ'
+          const ops = {gt:'個より多い', gte:'個以上', lt:'個より少ない', lte:'個以下', eq:'個', neq:'個ではない'}
+          t = what + 'が' + v + (ops[c.operator] || ''); break
+        }
+        default: {
+          const ops = {gt:'より大きい', gte:'以上', lt:'より少ない', lte:'以下', eq:'と同じ', neq:'ではない',
+            contains:'を含む', notContains:'を含まない', exists:'がある', notExists:'がない', isTrue:'が一致', isFalse:'が一致しない'}
+          const isNum = meta && (meta.type === 'number' || meta.type === 'numberOrMissing')
+          if (c.operator === 'exists' || c.operator === 'notExists' || c.operator === 'isTrue' || c.operator === 'isFalse') t = label + ops[c.operator]
+          else if (isNum) t = label + 'が' + v + (c.operator === 'eq' ? '' : ops[c.operator])
+          else t = label + (c.operator === 'contains' || c.operator === 'notContains' ? 'に「' + v + '」' : 'が「' + v + '」') + ops[c.operator]
+        }
+      }
+      return c.not ? '「' + t + '」ではない' : t
+    }
+    const exprText = function(node, depth) {
+      depth = depth || 0
+      if (!node) return ''
+      if (node.kind === 'condition') return condText(node)
+      const kids = (node.children || []).map(n => exprText(n, depth + 1)).filter(Boolean)
+      if (!kids.length) return '（条件なし）'
+      const joined = kids.join(node.op === 'OR' ? '、または' : '、かつ')
+      const wrapped = depth > 0 && kids.length > 1 ? '（' + joined + '）' : joined
+      return node.not ? wrapped + 'に当てはまらない' : wrapped
+    }
+
+    // Interpret what the user typed for an owner.
+    const parseOwner = function(raw) {
+      const s = String(raw || '').trim()
+      let m = /nicovideo\.jp\/user\/(\d+)/.exec(s)
+      if (m) return {store:'ngUserIds', value:m[1], label:'ユーザーID ' + m[1]}
+      m = /ch\.nicovideo\.jp\/(?:channel\/)?ch(\d+)/.exec(s) || /^ch(\d+)$/i.exec(s)
+      if (m) return {store:'ngChannelIds', value:m[1], label:'チャンネル ch' + m[1]}
+      if (/^\d+$/.test(s)) return {store:'ngUserIds', value:s, label:'ユーザーID ' + s}
+      if (s) return {store:'ngUserNames', value:s, label:'名前に「' + s + '」を含む投稿者'}
+      return null
+    }
+    const parseMovie = function(raw) {
+      const m = /\b((?:sm|so|nm|ss)\d+)\b/.exec(String(raw || ''))
+      return m ? m[1] : null
+    }
+
+    function mount(dialog) {
+      const doc = dialog.doc, config = dialog.config
+      const host = doc.getElementById('ngRuleListHost')
+      if (!host) return null
+      const style = doc.createElement('style'); style.textContent = CSS; doc.head.append(style)
+      const el = (tag, text, cls) => { const e = doc.createElement(tag); if (text != null) e.textContent = text; if (cls) e.className = cls; return e }
+      const btn = (text, fn, cls) => { const e = el('button', text, cls); e.type = 'button'; e.addEventListener('click', fn); return e }
+      let filter = 'all', query = '', adding = false, addKind = 'tag', message = ''
+
+      const paused = () => { try { const v = JSON.parse(config.pausedNgEntriesJson.value || '[]'); return Array.isArray(v) ? v : [] } catch (e) { return [] } }
+      const setPaused = list => { config.pausedNgEntriesJson.value = JSON.stringify(list) }
+      const rules = () => AdvancedNgRules.parse(config.advancedNgRulesJson.value)
+      const saveRules = list => { config.advancedNgRulesJson.value = JSON.stringify(list); dialog.ruleEditor?.reload?.() }
+      const previewMovies = () => typeof config._nrnRulePreviewMovies === 'function' ? config._nrnRulePreviewMovies() : []
+      const memCount = (store, value) => typeof NgVerdictCache !== 'undefined' ? NgVerdictCache.countFor(store, value) : null
+
+      const collect = function() {
+        const rows = []
+        for (const [store, def] of Object.entries(SIMPLE)) {
+          for (const entry of config[store].arrayWithText) {
+            const v = valueOf(entry)
+            rows.push({kind:def.kind, parts:def.parts(v, textOf(entry)), count:memCount(store, v), on:true,
+              key:store + ':' + v, toggle:() => pauseSimple(store, entry), remove:() => removeSimple(store, v)})
+          }
+        }
+        for (const p of paused()) {
+          const def = SIMPLE[p.store]; if (!def) continue
+          rows.push({kind:def.kind, parts:def.parts(p.value, p.text), count:null, on:false, paused:true,
+            key:p.store + ':' + p.value, toggle:() => resumeSimple(p), remove:() => setPaused(paused().filter(x => !(x.store === p.store && String(x.value) === String(p.value))))})
+        }
+        // Locked-tag count (a setting of its own, shown as a rule).
+        const n = config.ngLockedTagCountThreshold.value
+        rows.push({kind:'combo', lockCount:true, on:Boolean(config.ngLockedTagCountEnabled.value),
+          count:typeof NgVerdictCache !== 'undefined' && config.ngLockedTagCountEnabled.value ? (NgVerdictCache.groupSummary().find(g => g.key === 'k:' + n)?.count || 0) : null,
+          key:'lockCount', toggle:() => { config.ngLockedTagCountEnabled.value = !config.ngLockedTagCountEnabled.value }, remove:null})
+        const master = Boolean(config.advancedNgRulesEnabled.value)
+        rules().forEach(rule => {
+          const context = AdvancedNgRules.usesContext(rule.expression)
+          rows.push({kind:'combo', name:rule.name, sentence:'『' + exprText(rule.expression) + '』に当てはまる動画を隠す',
+            count:context ? 'context' : (typeof NgVerdictCache !== 'undefined' && rule.enabled && master ? NgVerdictCache.countForRule(rule.id, config) : null),
+            on:rule.enabled && master, key:'rule:' + rule.id, ruleId:rule.id,
+            toggle:() => toggleRule(rule.id), remove:() => saveRules(rules().filter(r => r.id !== rule.id)),
+            edit:() => { activateTab('filter'); dialog.ruleEditor?.focusRule?.(rule.id) }})
+        })
+        return rows
+      }
+      const pauseSimple = async function(store, entry) {
+        const v = valueOf(entry)
+        setPaused(paused().concat({store, value:v, text:textOf(entry)}))
+        await config[store].removeAsync([v])
+        render()
+      }
+      const resumeSimple = async function(p) {
+        await config[p.store].addAsync(p.value, p.text || undefined)
+        setPaused(paused().filter(x => !(x.store === p.store && String(x.value) === String(p.value))))
+        render()
+      }
+      const removeSimple = async function(store, v) { await config[store].removeAsync([v]); render() }
+      const toggleRule = function(id) {
+        const list = rules(), rule = list.find(r => r.id === id); if (!rule) return
+        const master = Boolean(config.advancedNgRulesEnabled.value)
+        const turnOn = !(rule.enabled && master)
+        rule.enabled = turnOn
+        saveRules(list)
+        if (turnOn && !master) config.advancedNgRulesEnabled.value = true
+        render()
+      }
+      const activateTab = name => doc.querySelector('.tabButton[data-tab="' + name + '"]')?.click()
+
+      // ---- add panel ----
+      const ADD_KINDS = [
+        ['tag', 'タグ', '例：ゲーム実況 が付いた動画'],
+        ['owner', '投稿者・チャンネル', 'ID・ページのURL・名前で指定'],
+        ['title', 'タイトルの言葉', '例：「ネタバレ」を含むタイトル'],
+        ['movie', 'この動画だけ', '動画IDかURLを貼り付け'],
+        ['lockCount', 'ロックされたタグの数', '例：11個以上ロックされた動画'],
+        ['combo', '条件を組み合わせる', '「〜で、かつ〜」「ランキング以外」など'],
+      ]
+      const renderAdd = function(box) {
+        box.className = 'nr-panel'
+        const kinds = el('div', null, 'nr-kinds')
+        for (const [k, title, sub] of ADD_KINDS) {
+          const b = btn('', () => { if (k === 'combo') { adding = false; render(); activateTab('filter'); dialog.ruleEditor?.addNew?.(0); return } addKind = k; render() }, 'nr-kindbtn')
+          b.setAttribute('aria-pressed', String(addKind === k))
+          const kind = KINDS[k === 'lockCount' ? 'combo' : k]
+          const chip = el('span', null, 'nr-kind'); chip.style.background = kind.bg; chip.style.color = kind.fg; chip.style.width = '64px'; chip.textContent = k === 'lockCount' ? 'ロック数' : kind.label
+          const t = el('span'); t.append(el('b', title), el('small', sub))
+          b.append(chip, t); kinds.append(b)
+        }
+        const form = el('div', null, 'nr-form')
+        const will = el('p', null, 'nr-will'), preview = el('div', null, 'nr-preview'), msg = el('p', message, 'nr-msg')
+        message = ''
+        const movies = previewMovies()
+        let current = () => null
+        const field = (labelText, input) => { const l = el('label', null, 'nr-field'); l.append(el('span', labelText), input); return l }
+        const textInput = (placeholder) => { const i = el('input'); i.type = 'text'; i.placeholder = placeholder; return i }
+        const showPreview = (matchFn, willText) => {
+          will.textContent = ''; will.append('保存される内容：'); will.append(el('strong', willText || '（入力してください）'))
+          preview.textContent = ''
+          if (!movies.length) { preview.textContent = 'このページの動画で試せます（設定画面をページ上で開いたとき）。'; return }
+          const hit = matchFn ? movies.filter(matchFn).length : 0
+          preview.append('いま開いているページでは '); preview.append(el('strong', hit + '件')); preview.append(' が隠れます')
+        }
+        if (addKind === 'tag') {
+          const input = textInput('隠したいタグ')
+          const lockOnly = el('input'); lockOnly.type = 'checkbox'
+          const lockLabel = el('label'); lockLabel.append(lockOnly, ' ロックされたタグのときだけ隠す')
+          const freq = new Map()
+          for (const m of movies) for (const t of m.tags || []) freq.set(t.name, (freq.get(t.name) || 0) + 1)
+          const suggest = el('div', null, 'nr-suggest')
+          ;[...freq].sort((a, b) => b[1] - a[1]).slice(0, 10).forEach(([name]) => suggest.append(btn(name, () => { input.value = name; update() }, 'nr-chip')))
+          const update = () => {
+            const v = input.value.trim()
+            showPreview(v && (m => (m.tags || []).some(t => upper(t.name) === upper(v) && (!lockOnly.checked || t.lock))),
+              v ? (lockOnly.checked ? 'ロックされたタグ「' + v + '」がある動画を隠す' : 'タグ「' + v + '」がある動画を隠す') : '')
+          }
+          input.addEventListener('input', update); lockOnly.addEventListener('change', update)
+          current = () => { const v = input.value.trim(); return v ? {store:lockOnly.checked ? 'ngLockedTags' : 'ngTags', value:v} : null }
+          form.append(field('タグ', input))
+          if (suggest.children.length) { const s = el('div'); s.append(el('p', 'このページにあるタグから選ぶ', 'nr-will'), suggest); form.append(s) }
+          form.append(lockLabel); update()
+        } else if (addKind === 'owner') {
+          const input = textInput('ユーザーID・チャンネルID・ページのURL・名前')
+          const update = () => {
+            const o = parseOwner(input.value)
+            showPreview(o && (m => {
+              const c = m.contributor || {}
+              if (o.store === 'ngUserNames') return upper(c.name).includes(upper(o.value))
+              return String(c.id) === String(o.value) && (o.store === 'ngChannelIds' ? c.type === 'channel' : c.type !== 'channel')
+            }), o ? o.label + ' の動画を隠す' : '')
+          }
+          input.addEventListener('input', update)
+          current = () => parseOwner(input.value)
+          form.append(field('投稿者', input), el('p', 'URLは https://www.nicovideo.jp/user/… や https://ch.nicovideo.jp/ch… のどちらでも。数字だけならユーザーID、それ以外の文字は名前として扱います。', 'nr-will')); update()
+        } else if (addKind === 'title') {
+          const input = textInput('タイトルに含まれる言葉')
+          const update = () => { const v = input.value.trim(); showPreview(v && (m => upper(m.title).includes(upper(v))), v ? 'タイトルに「' + v + '」を含む動画を隠す' : '') }
+          input.addEventListener('input', update)
+          current = () => { const v = input.value.trim(); return v ? {store:'ngTitles', value:v} : null }
+          form.append(field('言葉', input)); update()
+        } else if (addKind === 'movie') {
+          const input = textInput('sm12345678 や動画のURL')
+          const update = () => { const id = parseMovie(input.value); showPreview(id && (m => m.id === id), id ? '動画「' + id + '」を隠す' : '') }
+          input.addEventListener('input', update)
+          current = () => { const id = parseMovie(input.value); return id ? {store:'ngMovies', value:id} : null }
+          form.append(field('動画', input)); update()
+        } else if (addKind === 'lockCount') {
+          const input = el('input'); input.type = 'number'; input.min = '1'; input.max = '11'; input.value = String(config.ngLockedTagCountThreshold.value || 11)
+          const update = () => { const n = Number(input.value); showPreview(n >= 1 && (m => (m.tags || []).filter(t => t.lock).length >= n), n >= 1 ? 'ロックされたタグが' + n + '個以上ある動画を隠す' : '') }
+          input.addEventListener('input', update)
+          current = () => { const n = Math.trunc(Number(input.value)); return n >= 1 && n <= 11 ? {lockCount:n} : null }
+          form.append(field('ロックされたタグの数（1〜11）', input), el('p', '他の条件と組み合わせたいとき（例：ランキングでは使わない）は「条件を組み合わせる」で作れます。', 'nr-will')); update()
+        }
+        const bar = el('div', null, 'nr-formbar')
+        const buttons = el('div', null, 'nr-tools')
+        buttons.append(btn('キャンセル', () => { adding = false; render() }), btn('追加する', async () => {
+          const r = current()
+          if (!r) { msg.textContent = '入力を確認してください。'; return }
+          if (r.lockCount) { config.ngLockedTagCountThreshold.value = r.lockCount; config.ngLockedTagCountEnabled.value = true }
+          else if (!(await config[r.store].addAsync(r.value))) { msg.textContent = 'すでに登録されています。'; return }
+          adding = false; message = ''; render()
+        }, 'primary'))
+        bar.append(will, buttons)
+        form.append(preview, bar, msg)
+        box.append(kinds, form)
+      }
+
+      // ---- list ----
+      const render = function() {
+        host.textContent = ''
+        const wrap = el('div', null, 'nr-wrap')
+        const rows = collect()
+        const top = el('div', null, 'nr-top')
+        const summary = el('p', null, 'nr-summary')
+        summary.append('NGルール '); summary.append(el('strong', String(rows.length))); summary.append(' 件')
+        if (typeof NgVerdictCache !== 'undefined') { summary.append('　·　記憶しているNG動画 '); summary.append(el('strong', NgVerdictCache.size.toLocaleString())); summary.append(' 件') }
+        top.append(summary, btn('＋ NGルールを追加', () => { adding = !adding; render() }, 'nr-add'))
+        wrap.append(top)
+        if (adding) { const box = el('div'); renderAdd(box); wrap.append(box) }
+        const tools = el('div', null, 'nr-tools')
+        const search = el('input', null, 'nr-search'); search.type = 'search'; search.placeholder = 'ルールを検索（タグ名・投稿者名など）'; search.value = query
+        search.addEventListener('input', () => { query = search.value; renderRows() })
+        tools.append(search)
+        const counts = {all:rows.length}; for (const r of rows) counts[r.kind] = (counts[r.kind] || 0) + 1
+        for (const [k, label] of FILTERS) {
+          const c = btn(label + ' ' + (counts[k] || 0), () => { filter = k; render() }, 'nr-chip')
+          c.setAttribute('aria-pressed', String(filter === k)); tools.append(c)
+        }
+        wrap.append(tools)
+        const head = el('div', null, 'nr-head')
+        head.append(el('span', 'ルール（隠した数が多い順）'), el('span', '隠した動画', 'n'), el('span', '使う', 'u'), el('span', '', 'a'))
+        wrap.append(head)
+        const list = el('div', null, 'nr-list')
+        wrap.append(list)
+        wrap.append(el('p', '数はNG記憶に残っている動画の数です。見ている画面や検索に左右されるルールは記憶しないため「記憶なし」と表示します。細かい編集や従来の一覧は「詳しいNG設定」タブにあります。', 'hint'))
+        host.append(wrap)
+        const renderRows = function() {
+          list.textContent = ''
+          const q = upper(query.trim())
+          const visible = rows.filter(r => (filter === 'all' || r.kind === filter) &&
+            (!q || upper((r.parts || []).join('') + (r.name || '') + (r.sentence || '')).includes(q)))
+            .sort((a, b) => (typeof b.count === 'number' ? b.count : -1) - (typeof a.count === 'number' ? a.count : -1))
+          if (!visible.length) { list.append(el('p', rows.length ? '一致するルールがありません。' : 'まだNGルールがありません。「＋ NGルールを追加」から作れます。', 'nr-empty')); return }
+          for (const r of visible) {
+            const row = el('div', null, 'nr-row' + (r.on ? '' : ' paused'))
+            const kind = KINDS[r.kind]
+            const chip = el('span', r.lockCount ? 'ロック数' : kind.label, 'nr-kind'); chip.style.background = kind.bg; chip.style.color = kind.fg
+            const text = el('p', null, 'nr-text')
+            if (r.lockCount) {
+              const num = el('input', null, 'nr-inline-num'); num.type = 'number'; num.min = '1'; num.max = '11'; num.value = String(config.ngLockedTagCountThreshold.value)
+              num.setAttribute('aria-label', 'ロックされたタグの数')
+              num.addEventListener('change', () => { const n = Math.trunc(Number(num.value)); if (n >= 1 && n <= 11) config.ngLockedTagCountThreshold.value = n; render() })
+              text.append('ロックされたタグが', num, '個以上ある動画を隠す')
+            } else if (r.sentence) {
+              if (r.name) text.append(el('span', r.name, 'nr-name'))
+              text.append(r.sentence)
+            } else {
+              r.parts.forEach((p, i) => text.append(i % 2 ? el('strong', String(p)) : String(p)))
+            }
+            if (r.paused) text.append(el('span', '　一時停止中', 'nr-name'))
+            const count = el('span', null, 'nr-count')
+            if (r.count === 'context') { count.textContent = '記憶なし'; count.classList.add('none') }
+            else if (typeof r.count === 'number') count.textContent = r.count.toLocaleString() + '件'
+            else { count.textContent = '—'; count.classList.add('none') }
+            const sw = el('span', null, 'nr-switch')
+            const toggle = btn('', r.toggle); toggle.setAttribute('role', 'switch'); toggle.setAttribute('aria-checked', String(Boolean(r.on))); toggle.setAttribute('aria-label', 'このルールを使う'); toggle.append(el('span'))
+            sw.append(toggle)
+            const actions = el('span', null, 'nr-actions')
+            if (r.edit) actions.append(btn('編集', r.edit))
+            if (r.remove) actions.append(btn('削除', () => { if (doc.defaultView.confirm('このNGルールを削除しますか？')) { Promise.resolve(r.remove()).then(render) } }))
+            row.append(chip, text, count, sw, actions)
+            list.append(row)
+          }
+        }
+        renderRows()
+      }
+      // Keep the list current when other parts of the dialog change settings.
+      for (const key of ['ngTags','ngLockedTags','ngTitles','ngUserIds','ngChannelIds','ngUserNames','ngMovies',
+        'ngLockedTagCountEnabled','ngLockedTagCountThreshold','advancedNgRulesEnabled','advancedNgRulesJson','pausedNgEntriesJson']) {
+        config[key]?.on?.('changed', () => { if (!host.contains(doc.activeElement) || doc.activeElement?.type === 'button') render() })
+      }
+      render()
+      return {render, exprText}
+    }
+    return {mount, exprText, parseOwner, parseMovie, SIMPLE}
   })()
   var DetailUiTheme = (function() {
     var parseRgb = function(value) {
@@ -12479,7 +12953,9 @@ var CardActionData = (function () {
       // BRUSH-067: candidates AutoFill dropped as NG before they became cards
       // (cheap pre-check incl. NG memory, and Snapshot quick NG). Shown in the
       // bar's NG total; NG cards that did reach the page are counted there.
-      page._autoFillNgExcluded = function() { return totalCheapPrefilteredNg + totalApiPrefilteredNg }
+      // BRUSH-075: rows shown by "NG動画を表示" are on the page and counted there.
+      var revealedNgIds = new Set()
+      page._autoFillNgExcluded = function() { return Math.max(0, totalCheapPrefilteredNg + totalApiPrefilteredNg - revealedNgIds.size) }
       var nextPageToFetch = page._currentPageNumber + 1
       var fetching = false
       var initialized = false
@@ -14381,6 +14857,7 @@ var CardActionData = (function () {
           }
         }
 
+        if (typeof scheduleRevealParkedNg === 'function') scheduleRevealParkedNg()
         return performance.now() - fetchStart
       }
 
@@ -14440,6 +14917,15 @@ var CardActionData = (function () {
       var checkedDetailCacheIds = new Set()
       var checkedOwnerNameCache = new Map()
 
+      var genreRuleCache = {raw:null, enabled:null, value:false}
+      var genreRuleActive = function() {
+        var raw = model.config.advancedNgRulesJson.value, enabled = model.config.advancedNgRulesEnabled.value
+        if (genreRuleCache.raw !== raw || genreRuleCache.enabled !== enabled) {
+          var uses = function(n) { return Boolean(n && ((n.kind === 'condition' && n.field === 'genre') || (n.children || []).some(uses))) }
+          genreRuleCache = {raw:raw, enabled:enabled, value:Boolean(enabled) && AdvancedNgRules.parse(raw).some(function(r) { return r.enabled && uses(r.expression) })}
+        }
+        return genreRuleCache.value
+      }
       var restoreCachedMovieDetails = function(ids, reason) {
         if (!model.config.sessionDetailCacheEnabled.value) {
           return {hits:0, misses:ids.length, restored:0}
@@ -14472,7 +14958,10 @@ var CardActionData = (function () {
               || cached.metadata.tags !== 'known' || cached.metadata.lockedTags !== 'known'
               || cached.metadata.description !== 'known' || !Array.isArray(cached.tags)
               || !cached.tags.every(t => t && typeof t.name === 'string' && typeof t.lock === 'boolean')
-              || typeof cached.description !== 'string')) cached = null
+              || typeof cached.description !== 'string'
+              // BRUSH-074: entries saved before genre was kept are refetched,
+              // but only while an active rule actually uses the genre.
+              || (typeof cached.genre !== 'string' && genreRuleActive()))) cached = null
           if (!cached) {
             misses++
             cacheMisses++
@@ -14492,6 +14981,7 @@ var CardActionData = (function () {
               fetchedAt:cached.cachedAt,
               ownerFetchedAt:Object.fromEntries(['identity','name','visibility'].map(field => [field,cached.ownerFetchedAt?.[field]])),
               description: cached.description,
+              genre: cached.genre,
               tags: cached.tags,
               contributor: cached.contributor ? {...cached.contributor,
                 name:cached.metadata.ownerName === 'known' ? cached.contributor.name : null} : null,
@@ -14560,6 +15050,7 @@ var CardActionData = (function () {
           metadata: {...movie.metadata},
           title: movie.title || '',
           description: movie.description || '',
+          ...(typeof movie.genre === 'string' ? {genre: movie.genre} : {}),
           contributor: movie._nrnDetailContributor ? {...movie._nrnDetailContributor} : null,
           ownerFetchedAt:Object.fromEntries(['identity','name','visibility'].map(field => {
             const at = movie._nrnDetailOwnerEvidence?.[field]?.at
@@ -15949,6 +16440,48 @@ var CardActionData = (function () {
           maybeFetchMore()
         }
       }
+      // BRUSH-075: candidates skipped before the DOM (remembered NG IDs, NG
+      // memory, NG titles, quick API rules) are parked, not fetched again.
+      // While "NG動画を表示" is on they are added as NG cards in their source
+      // position, so an unintended NG can still be noticed.
+      var revealCancel = null
+      var revealParkedNg = function() {
+        revealCancel = null
+        if (page._disposed || !model.config.ngMovieVisible?.value) return
+        var items = candidateFilter.rejectedItems().filter(function(item) {
+          return !revealedNgIds.has(item.id) && !isMovieAlreadyOnPage(item.id)
+        })
+        if (!items.length) return
+        var tiles = page._createInjectedTiles(items)
+        var parsed = items.map(function(item, i) {
+          var tile = tiles[i]
+          var ordinal = candidateFilter.order(item)
+          tile.dataset.nrnCandidateOrder = String(ordinal)
+          tile.dataset.nrnRevealedNg = 'true'
+          var later = connectedInjectedRoots().find(function(root) {
+            return root.elem.parentNode === tile.parentNode && injectedOrder(root) > ordinal
+          })
+          if (later) tile.parentNode.insertBefore(tile, later.elem)
+          revealedNgIds.add(item.id)
+          knownMovieIds.add(item.id)
+          return {type:'main', movie:{id:item.id, title:item.title}, rootElem:tile}
+        })
+        setup(parsed, model, page, controller)
+        restoreCachedMovieDetails(items.map(function(item) { return item.id }), 'NG動画を表示')
+        tiles.forEach(function(tile) { tile.classList.remove('nrn-autofill-pending') })
+        model.requestThumbInfo(true)
+        console.log(LOG, 'NG動画を表示: 読み込み前に除外した動画を追加:', {count:items.length, ids:items.map(function(item) { return item.id })})
+        rebalanceOverflow()
+        if (typeof page._refreshNgCount === 'function') page._refreshNgCount()
+        updateStatus()
+      }
+      var scheduleRevealParkedNg = function() {
+        if (revealCancel || page._disposed || !model.config.ngMovieVisible?.value) return
+        revealCancel = requestAnimationFrame(revealParkedNg)
+      }
+      model.config.ngMovieVisible?.on('changed', scheduleRevealParkedNg)
+      page._revealParkedNg = scheduleRevealParkedNg
+
       for (var key of ['ngMovies','ngTitles','ngTags','ngUserIds','ngChannelIds','advancedNgRulesEnabled','advancedNgRulesJson']) {
         model.config[key].on('changed',restorePrefilteredCandidates)
       }

@@ -23,6 +23,8 @@ try {
   window.config=new api.Config((k,d)=>d,()=>{});await config.sync();
   window.dialog=new api.ConfigDialog(config,document.querySelector('#settings').contentDocument,()=>{});
  });
+ // BRUSH-074: the old NG list and the compound editor live in the 詳しいNG設定 tab.
+ await frame.locator('.tabButton[data-tab=filter]').click();
  await frame.locator('#advancedRuleAddButton').click();
  const field=frame.getByLabel('条件の項目',{exact:true}).first();
  const group=await field.evaluate(s=>[...s.querySelectorAll('optgroup')].find(g=>g.label==='再生・反応数')?.querySelectorAll('option').length);

@@ -214,3 +214,12 @@ test('early hider is installed with nothing known; IDs learned in this tab hide 
   await new Promise(r => setTimeout(r, 0));
   assert.equal(doc.querySelector('[data-decoration-video-id="sm50"]').hasAttribute('data-nrn-prehide'), true);
 });
+
+test('a rule that depends on the current page or search is never remembered', () => {
+  const ctxRules = {parse: AdvancedNgRules.parse, usesContext: e => JSON.stringify(e).includes('pageKind')};
+  const C = load({AdvancedNgRules: ctxRules});
+  const rules = JSON.stringify([{id:'scoped', expression:{kind:'group', children:[{field:'pageKind'}]}}, {id:'plain', expression:{x:1}}]);
+  const idx = C.indexFromConfig(config({rules}));
+  assert.equal(C.reasonOf(movie('sm1', {ng:true, ngByAdvancedRule:true, advancedRuleMatches:[{id:'scoped'}]}), idx), null);
+  assert.match(C.reasonOf(movie('sm1', {ng:true, ngByAdvancedRule:true, advancedRuleMatches:[{id:'plain'}]}), idx), /^r:/);
+});

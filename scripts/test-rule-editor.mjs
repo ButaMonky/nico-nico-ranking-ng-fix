@@ -24,6 +24,8 @@ try {
   config._nrnRulePreviewMovies=()=>[{id:'sm42',title:'ゲーム実況',thumbInfoDone:false,tags:[],contributor:{type:'unknown',id:-1},error:{type:'NO_ERROR'}}];
   window.dialog=new api.ConfigDialog(config,document.querySelector('#settings').contentDocument,()=>{});
  });
+ // BRUSH-074: the old NG list and the compound editor live in the 詳しいNG設定 tab.
+ await frame.locator('.tabButton[data-tab=filter]').click();
  await frame.locator('#advancedRuleSampleButton').click();
  assert.equal(await page.evaluate(()=>config.advancedNgRulesJson.value),'[]','template stays draft');
  await frame.locator('.re-detail').getByLabel('このルールを使う',{exact:true}).check();

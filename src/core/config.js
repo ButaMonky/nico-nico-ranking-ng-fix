@@ -167,6 +167,8 @@
       this.ngVerdictCacheEnabled = store('ngVerdictCacheEnabled', true);
       // BRUSH-064: ニコニコの仕様変更の可能性を右下に知らせる。
       this.siteHealthNoticeEnabled = store('siteHealthNoticeEnabled', true);
+      // BRUSH-074: one-condition NG rules the user paused ([{store, value, text}]).
+      this.pausedNgEntriesJson = store('pausedNgEntriesJson', '[]');
     }
     Config.prototype.sync = function() {
       return Promise.all([
@@ -212,6 +214,7 @@
         this.sessionDetailCacheMaxEntries.sync(),
         this.ngVerdictCacheEnabled.sync(),
         this.siteHealthNoticeEnabled.sync(),
+        this.pausedNgEntriesJson.sync(),
       ])
     }
     Config.prototype.toCSV = async function(targetTypes) {
