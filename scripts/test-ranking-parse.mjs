@@ -11,7 +11,7 @@ const source = await readFile(output, 'utf8');
 const fixture = await readFile(new URL('../tests/fixtures/ranking-genre.html', import.meta.url), 'utf8');
 const browser = await chromium.launch({headless:true, executablePath:process.env.NRN_BROWSER});
 try {
-  for (const path of ['/ranking/genre/all', '/ranking/custom']) {
+  for (const path of ['/ranking', '/ranking/genre/all', '/ranking/custom']) {
     const page = await browser.newPage();
     const errors = [];
     page.on('pageerror', e => errors.push(e.message));
@@ -31,10 +31,11 @@ try {
       };
     });
     await page.addScriptTag({content:source});
-    await page.waitForFunction(() => document.querySelectorAll('.nrn-parsed').length === 3
+    await page.waitForFunction(() => document.querySelectorAll('.nrn-parsed').length === 4
       && [...document.querySelectorAll('.nrn-parsed')].every(c => c.classList.contains('nrn-thumb-info-done')), null, {timeout:5000});
-    const hidden = await page.evaluate(() => [...document.querySelectorAll('.nrn-hide')].map(e => e.dataset.decorationVideoId));
-    assert.deepEqual(hidden, ['sm91000002'], path);
+    const hidden = await page.evaluate(() => [...document.querySelectorAll('.nrn-hide')].map(e => e.dataset.decorationVideoId || e.getAttribute('href')));
+    // Sponsored slot (提供) is NG-checked like a card; 3 cards + 1 sponsored.
+    assert.deepEqual(hidden, ['/watch/sm91000012', 'sm91000002'], path);
     await page.waitForTimeout(500);
     const budget = await page.evaluate(() => ({
       overflow: document.querySelectorAll('.nrn-autofill-overflow').length,
@@ -48,5 +49,5 @@ try {
     assert.deepEqual(errors, [], path);
     await page.close();
   }
-  console.log('Ranking parse PASS: genre/custom ranking cards are parsed and NG-hidden; no target trimming or AutoFill on ranking.');
+  console.log('Ranking parse PASS: genre/custom ranking cards and the sponsored slot are parsed and NG-hidden (/ranking, genre, custom); no target trimming or AutoFill on ranking.');
 } finally { await browser.close(); }

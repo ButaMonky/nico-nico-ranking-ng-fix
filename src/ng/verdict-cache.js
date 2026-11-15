@@ -194,7 +194,7 @@
       for (const [key, list] of buckets) if (valid(key, idx)) for (const id of list) ids.add(id)
       return ids
     }
-    const supportedPath = () => /^\/(search|tag)\/./.test(location.pathname) || /^\/ranking\/(genre|custom)/.test(location.pathname)
+    const supportedPath = () => /^\/(search|tag)\/./.test(location.pathname) || /^\/ranking(\/?$|\/(genre|custom))/.test(location.pathname)
     const mark = function(node, hidden) {
       if (node.nodeType !== 1) return
       const apply = el => {

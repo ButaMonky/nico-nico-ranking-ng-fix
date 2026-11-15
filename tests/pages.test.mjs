@@ -11,7 +11,11 @@ async function load(path){
 for(const [label,path] of [['baseline',baseline],['generated',output]]){
  test(`${label}: existing page URL predicates`,async()=>{
   const {ListPage,SearchPage}=await load(path);
-  const cases=[['/ranking/genre/all',true,false],['/ranking',false,false],['/search/test',false,true],['/tag/test',false,true],['/tag',false,false],['/watch/sm1',false,false]];
+  const cases=[['/ranking/genre/all',true,false],['/search/test',false,true],['/tag/test',false,true],['/tag',false,false],['/watch/sm1',false,false]];
+  // BRUSH-061: /ranking (総合, ?page=N) and /ranking/custom are ranking lists in this fork.
+  cases.push(...(label==='generated'
+    ? [['/ranking',true,false],['/ranking/',true,false],['/ranking/custom',true,false],['/ranking/genre/4eet3ca4',true,false]]
+    : [['/ranking',false,false]]));
   for(const [pathname,list,search] of cases){assert.equal(ListPage.is({pathname}),list);assert.equal(SearchPage.is({pathname}),search);}
  });
  test(`${label}: base page toggle mapping and ad visibility transition`,async()=>{

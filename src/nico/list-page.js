@@ -113,7 +113,7 @@
         get titleElem() {
           let e = this.elem.querySelector('.nrn-movie-title');
           if (!e) {
-            const a = this.elem.querySelector('a[data-anchor-area][href^="/watch/"] > div > p') || (this.elem.matches('a[data-anchor-detail="nicoad"]') ? this.elem.querySelector('p') : null);
+            const a = this.elem.querySelector('a[data-anchor-area][href^="/watch/"] > div > p') || (this.elem.matches('a[data-anchor-detail="nicoad"], a[data-anchor-page^="ranking"]') ? this.elem.querySelector('p') : null);
             e = wrapTitleTextNodeInElement(a);
           }
           return e;
@@ -812,7 +812,7 @@
           }).filter(e => e.movie.id && e.movie.title && !e.rootElem.classList.contains('nrn-parsed'));
       },
       _parseAds(target) {
-        return Array.from(target.querySelectorAll('a[data-anchor-area][href^="/watch/"]:has(> div > p)'))
+        const ads = Array.from(target.querySelectorAll('a[data-anchor-area][href^="/watch/"]:has(> div > p)'))
           .map(function(item) {
             return {
               type: 'ads',
@@ -824,7 +824,19 @@
                       ? item
                       : item.parentNode.parentNode,
             }
-          }).filter(e => e.movie.id && e.movie.title && !e.rootElem.classList.contains('nrn-parsed'));
+          })
+        // BRUSH-061: the ranking sponsored slot (ニコニ広告「提供：」) is one
+        // <a data-anchor-page="ranking_*"> card holding thumbnail and text, with
+        // the title deeper (a > div > div > p). It is outside any decoration card.
+        if (/^\/ranking(\/|$)/.test(location.pathname)) {
+          const seen = new Set(ads.map(e => e.rootElem))
+          for (const item of target.querySelectorAll('a[data-anchor-area="main"][data-anchor-page^="ranking"][href^="/watch/"]')) {
+            if (seen.has(item) || item.closest('[data-decoration-video-id]')) continue
+            const title = Array.from(item.querySelectorAll('p')).map(p => p.textContent.trim()).find(Boolean)
+            ads.push({type: 'ads', movie: {id: movieIdOf(item.href), title}, rootElem: item})
+          }
+        }
+        return ads.filter(e => e.movie.id && e.movie.title && !e.rootElem.classList.contains('nrn-parsed'));
       },
       _configDialogLoaded(doc) {
         // 旧UIでは #togglable が存在したが、v9.3以降の新UIでは廃止。
@@ -1413,8 +1425,9 @@
     Object.assign(ListPage, {
       MovieRoot,
       is(location) {
-        // BRUSH-061: /ranking/custom (カスタムランキング) uses the same cards.
-        return location.pathname.startsWith('/ranking/genre') || location.pathname.startsWith('/ranking/custom');
+        // BRUSH-061: /ranking itself is the 総合 ranking (pages ?page=1..10),
+        // and /ranking/custom (カスタムランキング) uses the same cards.
+        return /^\/ranking\/?$/.test(location.pathname) || location.pathname.startsWith('/ranking/genre') || location.pathname.startsWith('/ranking/custom');
       },
     })
     return ListPage

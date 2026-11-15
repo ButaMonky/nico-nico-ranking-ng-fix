@@ -622,7 +622,7 @@
 
       // BRUSH-063: ranking pages are a fixed list. The display target and
       // AutoFill do not apply there; every native card stays as the site shows it.
-      var isRankingRoute = function() { return typeof location !== 'undefined' && /^\/ranking\//.test(String(location.pathname || '')) }
+      var isRankingRoute = function() { return typeof location !== 'undefined' && /^\/ranking(\/|$)/.test(String(location.pathname || '')) }
       var autoFillActive = function() {
         return Boolean(model.config.autoFillEnabled.value) && !isRankingRoute()
       }
