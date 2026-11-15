@@ -17,6 +17,7 @@ const emitter = () => { const m = new Map(); return {on(n,f){(m.get(n)||m.set(n,
 const store = value => Object.assign(emitter(), {value, set(v){this.value=v;this.emit('changed')}});
 const list = (...values) => Object.assign(emitter(), {array:values, set(v){this.array=v;this.emit('changed')}});
 const config = (o = {}) => ({
+  ngMovies:list(...(o.movies||[])), ngTitles:list(...(o.titles||[])),
   ngUserIds:list(...(o.userIds||[])), ngChannelIds:list(), ngUserNames:list(), ngTags:list(...(o.tags||[])),
   ngLockedTags:list(), ngLockedTagCountEnabled:store(false), ngLockedTagCountThreshold:store(5),
   advancedNgRulesEnabled:store(Boolean(o.rules)), advancedNgRulesJson:store(o.rules || '[]'), ngMovieVisible:store(false),
@@ -155,4 +156,32 @@ test('early hider marks cached NG cards before paint and releases them on settle
   cfg.ngMovieVisible.set(true);
   assert.equal(doc.getElementById('again').hasAttribute('data-nrn-prehide'),false);
   assert.equal(C.stats.earlyActive,false);
+});
+
+test('NG is learned as soon as the movie is NG, without waiting to settle', async () => {
+  const C = load(), cfg = config({tags:['FOO']}), gm = memoryGM();
+  await C.attach(cfg, gm.get, gm.set, fakeDoc()).ready;
+  const m = movie('sm40');
+  C.track(m, cfg, fakeDoc());
+  Object.assign(m, {ng:true, metadataSettled:false, tags:[{name:'foo', ngByNormal:true}]}); m.emit('ngChanged');
+  assert.equal(C.size, 1);
+});
+
+test('early hider hides by NG video ID, owner link and title from markup alone (no memory)', {skip: !jsdom && 'jsdom not installed (set NRN_JSDOM)'}, async () => {
+  const dom = new jsdom.JSDOM('<!doctype html><html><head></head><body></body></html>', {url:'https://www.nicovideo.jp/tag/x'});
+  const {window} = dom, doc = window.document;
+  const gm = memoryGM({ngMovies:'["sm1"]', ngUserIds:'[777]', ngChannelIds:'[55]', ngTitles:'["ネタバレ"]'});
+  const C = load({MutationObserver:window.MutationObserver, location:window.location});
+  assert.equal(C.installEarly(gm.get, doc), true, 'installs with rules even when memory is empty');
+  const card = (id, inner) => `<div data-decoration-video-id="${id}" data-anchor-area="main"><div class="pos_relative"><a href="/watch/${id}">thumb</a></div>${inner}</div>`;
+  doc.body.innerHTML = card('sm1','<a href="/watch/sm1">t</a>') + card('sm2','<a href="/watch/sm2">t</a><a href="https://www.nicovideo.jp/user/777">u</a>')
+    + card('sm3','<a href="/watch/sm3">t</a><a href="https://ch.nicovideo.jp/ch55">c</a>') + card('sm4','<a href="/watch/sm4">最新話ネタバレ注意</a>')
+    + card('sm5','<a href="/watch/sm5">ok</a><a href="https://www.nicovideo.jp/user/1">u</a>') + card('sm6','<a href="/watch/sm6">late owner</a>');
+  await new Promise(r => setTimeout(r, 0));
+  const hidden = () => [...doc.querySelectorAll('[data-nrn-prehide]')].map(e => e.dataset.decorationVideoId);
+  assert.deepEqual(hidden(), ['sm1','sm2','sm3','sm4']);
+  // The owner row arrives after the card: the card is re-checked.
+  doc.querySelector('[data-decoration-video-id="sm6"]').insertAdjacentHTML('beforeend','<a href="https://www.nicovideo.jp/user/777">u</a>');
+  await new Promise(r => setTimeout(r, 0));
+  assert.deepEqual(hidden(), ['sm1','sm2','sm3','sm4','sm6']);
 });

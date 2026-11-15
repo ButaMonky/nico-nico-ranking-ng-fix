@@ -199,16 +199,61 @@
       return ids
     }
     const supportedPath = () => /^\/(search|tag)\/./.test(location.pathname) || /^\/ranking(\/?$|\/(genre|custom))/.test(location.pathname)
-    const mark = function(node, hidden) {
+    // BRUSH-068: besides remembered verdicts, a card's own markup already
+    // carries its video ID, owner link and title when it is inserted, so
+    // NG video IDs, NG user/channel IDs and NG title words hide it before the
+    // first paint too, with no detail request and no memory needed.
+    const OWNER_ID = /\/user\/(\d+)|ch\.nicovideo\.jp\/ch(\d+)/
+    const domMatch = function(el, id, rules) {
+      if (!rules) return false
+      if (rules.movies.has(id)) return true
+      if (rules.owners.size) {
+        for (const a of el.querySelectorAll('a[href*="/user/"], a[href*="ch.nicovideo.jp/ch"]')) {
+          const m = OWNER_ID.exec(a.getAttribute('href') || '')
+          if (m && rules.owners.has(m[1] || m[2])) return true
+        }
+      }
+      if (rules.titles.length) {
+        for (const a of el.querySelectorAll('a[href^="/watch/"]')) {
+          const thumb = a.closest('.pos_relative')
+          if (thumb && el.contains(thumb)) continue
+          const text = a.textContent.trim().toUpperCase()
+          if (text) return rules.titles.some(t => text.includes(t))
+        }
+      }
+      return false
+    }
+    const mark = function(node, hidden, rules) {
       if (node.nodeType !== 1) return
       const apply = el => {
         if (el.dataset.nrnAutofill === 'true' || el.hasAttribute(PREHIDE_ATTR)) return
         const id = el.getAttribute('data-decoration-video-id')
-        if (id && hidden.has(id)) { el.setAttribute(PREHIDE_ATTR, ''); stats.prehidden++ }
+        if (id && (hidden.has(id) || domMatch(el, id, rules))) { el.setAttribute(PREHIDE_ATTR, ''); stats.prehidden++ }
       }
       if (node.hasAttribute('data-decoration-video-id')) apply(node)
+      else {
+        // A late part of a card (e.g. the owner row) re-checks that card.
+        const card = node.parentElement?.closest('[data-decoration-video-id]')
+        if (card) apply(card)
+      }
       if (node.firstElementChild) node.querySelectorAll('[data-decoration-video-id]').forEach(apply)
     }
+    const domRulesFromRaw = function(read) {
+      const list = key => { try { const v = JSON.parse(read(key, '[]')); return Array.isArray(v) ? v.map(valueOf) : [] } catch (e) { return [] } }
+      return {
+        movies: new Set(list('ngMovies').map(String)),
+        owners: new Set([...list('ngUserIds'), ...list('ngChannelIds')].map(String)),
+        titles: list('ngTitles').filter(v => typeof v === 'string' && v).map(v => v.toUpperCase()),
+      }
+    }
+    const domRulesFromConfig = function(config) {
+      return {
+        movies: new Set(config.ngMovies.array.map(String)),
+        owners: new Set([...config.ngUserIds.array, ...config.ngChannelIds.array].map(String)),
+        titles: config.ngTitles.array.filter(v => typeof v === 'string' && v).map(v => v.toUpperCase()),
+      }
+    }
+    const hasRules = r => Boolean(r && (r.movies.size || r.owners.size || r.titles.length))
 
     // Called at document-start with synchronous GM_getValue. Hides cached NG
     // cards as React/SSR inserts them, before their first paint. Never
@@ -229,20 +274,28 @@
         buckets = parse(read(KEY, ''))
         rebuildIndex()
         stats.loaded = byId.size
-        if (!byId.size) return false
-        const hidden = currentValid(indexFromRaw(read))
-        if (!hidden.size) return false
+        const hidden = byId.size ? currentValid(indexFromRaw(read)) : new Set()
+        const rules = domRulesFromRaw(read)
+        if (!hidden.size && !hasRules(rules)) return false
+        // At document-start <html> may not exist yet: observe the document
+        // itself and add the style as soon as there is somewhere to put it.
         const style = doc.createElement('style')
         style.id = 'nrn-verdict-cache-style'
         style.textContent = CSS
-        ;(doc.head || doc.documentElement).appendChild(style)
+        const ensureStyle = function() {
+          if (style.isConnected) return
+          const host = doc.head || doc.documentElement
+          if (host) host.appendChild(style)
+        }
+        ensureStyle()
         const observer = new MutationObserver(function(records) {
+          ensureStyle()
           if (!supportedPath()) return
-          for (const r of records) for (const n of r.addedNodes) mark(n, hidden)
+          for (const r of records) for (const n of r.addedNodes) mark(n, early.hidden, early.rules)
         })
-        observer.observe(doc.documentElement, {childList:true, subtree:true})
-        if (doc.body) mark(doc.body, hidden)
-        early = {observer, hidden, doc}
+        observer.observe(doc, {childList:true, subtree:true})
+        early = {observer, hidden, rules, doc}
+        if (doc.body) mark(doc.body, hidden, rules)
         return true
       } catch (e) {
         console.warn('[NicoNicoRankingNG verdictCache] 早期非表示を開始できません', e)
@@ -311,7 +364,11 @@
         if (!early) return
         if (!enabled() || config.ngMovieVisible.value) { stopEarly(); return }
         const next = currentValid(idx)
-        for (const id of early.hidden) if (!next.has(id)) releaseId(early.doc, id)
+        early.rules = domRulesFromConfig(config)
+        for (const el of early.doc.querySelectorAll('[' + PREHIDE_ATTR + ']')) {
+          const id = el.getAttribute('data-decoration-video-id')
+          if (!next.has(id) && !domMatch(el, id, early.rules)) { el.removeAttribute(PREHIDE_ATTR); stats.released++ }
+        }
         early.hidden = next
       }
       // Without the early path (async-only GM, or nothing to hide), load now.
@@ -319,7 +376,7 @@
         for (const [key, ids] of parse(raw)) for (const id of ids) if (!byId.has(id)) addId(id, key)
         stats.loaded = byId.size
       }).catch(() => {})
-      for (const key of ['ngUserIds','ngChannelIds','ngUserNames','ngTags','ngLockedTags','ngTitles',
+      for (const key of ['ngMovies','ngUserIds','ngChannelIds','ngUserNames','ngTags','ngLockedTags','ngTitles',
         'ngLockedTagCountEnabled','ngLockedTagCountThreshold','advancedNgRulesEnabled','advancedNgRulesJson',
         'ngMovieVisible','ngVerdictCacheEnabled','useGetThumbInfo']) {
         config[key]?.on?.('changed', settingsChanged)
@@ -332,7 +389,10 @@
     const track = function(movie, config, doc) {
       let timer = setTimeout(function() { timer = null; releaseId(doc, movie.id) }, SAFETY_RELEASE_MS)
       const check = function() {
-        if (!movie.metadataSettled) return
+        // An NG verdict is final as soon as it exists (the script may skip
+        // further lookups for NG videos, so they need not "settle"); a
+        // not-NG verdict waits until the metadata has settled.
+        if (!movie.metadataSettled && !movie.ng) return
         if (timer !== null) { clearTimeout(timer); timer = null }
         const wasHidden = Boolean(early && early.hidden.has(movie.id))
         if (config.ngVerdictCacheEnabled.value) {
