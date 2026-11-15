@@ -175,6 +175,7 @@
       initNumberInput(config, doc, 'sessionDetailCacheTtlMinutes', 1, 1440)
       initNumberInput(config, doc, 'sessionDetailCacheMaxEntries', 100, 4000)
       initCheckbox(config, doc, 'ngVerdictCacheEnabled')
+      initCheckbox(config, doc, 'siteHealthNoticeEnabled')
       var verdictCount = doc.getElementById('ngVerdictCacheCount')
       var showVerdictCount = function() {
         if (verdictCount) verdictCount.textContent = '記憶中 ' + NgVerdictCache.size + ' 件（' + NgVerdictCache.stats.groups + ' 設定）'
@@ -828,6 +829,7 @@
             </label></div>
             <div class=row><label>取得済み範囲の後に表示 <input type=number id=pagerPreviewCount min=0 max=6> ページ（標準 2）</label></div>
             <div class=row><label><input type=checkbox id=statusAnimationEnabled>処理中ステータスをアニメーション表示</label></div>
+            <div class=row><label><input type=checkbox id=siteHealthNoticeEnabled>ニコニコの仕様変更の可能性を知らせる</label></div>
           </div>
           <div class=hint>取得方式の変更は、次の検索移動または再読み込みから反映されます。API高速でもタグロック・複合NGなどの詳細判定は省略しません。追加取得上限は、従来方式ではHTMLのページ数、API方式では最大100件の取得回数です。</div>
           <div class=sectionTitle>通信・キャッシュ</div>
@@ -931,6 +933,7 @@
     sessionDetailCacheEnabled: '取得済みのタグ・投稿者情報を同じタブに保存して、再読み込み後も再利用します。保存中に情報が変わると、有効期限まで古い情報で判定する場合があります。OFFでもSPA移動中は直近2分・最大512件をメモリに保持します。NG判定は常に現在の設定でやり直します。',
     sessionDetailCacheTtlMinutes: 'キャッシュを何分まで有効とみなすかです。期限切れは自動削除します。',
     sessionDetailCacheMaxEntries: 'キャッシュ件数の上限です。古いものから削除します。',
+    siteHealthNoticeEnabled: '画面を開いて約6秒後に、カードの読み取り・ページ内データ・動画情報の取得が想定どおりか点検し、合わない箇所があれば右下に表示します。「診断をコピー」の内容（URL・動画ID・名前は含みません）を開発者に渡すと原因を特定しやすくなります。',
     ngVerdictCacheEnabled: 'タグ・投稿者・ロックタグ数・複合NGでNGと確定した動画IDを、NGの理由になった設定ごとに記憶し、次回は詳細取得を待たずに表示前から隠します。AutoFillも記憶済みの候補を通信せずに除外します。その設定を削除・変更すると、その設定の記憶だけをまとめて消します（複合NGはルール1件ごと）。通常の判定でNGでなくなった動画は記憶から消えて表示に戻ります。日時では消しません。手動の「NG動画ID」一覧には追加しません。上限20万件（約2MB）。',
     autoFillAdMode: '追加動画の広告リボン・提供者表示の取得範囲です。広告者照合の警告・複合NGとは独立しています。無駄を抑えるには「表示動画のみ」を選んでください。',
     selfAdWarningEnabled: '広告者一覧を確認し、投稿者本人によるニコニ広告の可能性を警告します。追加通信が発生します。',

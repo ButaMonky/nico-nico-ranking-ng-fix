@@ -165,6 +165,8 @@
       this.sessionDetailCacheMaxEntries = store('sessionDetailCacheMaxEntries', 1500);
       // BRUSH-060: 一度NGと確定した動画を理由つきで記憶し、次回から詳細取得前に仮非表示にする。
       this.ngVerdictCacheEnabled = store('ngVerdictCacheEnabled', true);
+      // BRUSH-064: ニコニコの仕様変更の可能性を右下に知らせる。
+      this.siteHealthNoticeEnabled = store('siteHealthNoticeEnabled', true);
     }
     Config.prototype.sync = function() {
       return Promise.all([
@@ -209,6 +211,7 @@
         this.sessionDetailCacheTtlMinutes.sync(),
         this.sessionDetailCacheMaxEntries.sync(),
         this.ngVerdictCacheEnabled.sync(),
+        this.siteHealthNoticeEnabled.sync(),
       ])
     }
     Config.prototype.toCSV = async function(targetTypes) {

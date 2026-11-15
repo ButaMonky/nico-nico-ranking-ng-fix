@@ -2,7 +2,11 @@
       try {
         const initialSourceUrl = initialDocumentUrl
         let initialOwners = OwnerEvidence.initialDocument(document)
-        let initialSearchValues = SearchItemAdapter.valuesById(SearchItemAdapter.readDocument(document).items)
+        const initialSearchItems = SearchItemAdapter.readDocument(document).items
+        let initialSearchValues = SearchItemAdapter.valuesById(initialSearchItems)
+        // BRUSH-064: only the first document of a search/tag route carries
+        // server-response; SPA-entered routes are not checked.
+        let initialPageData = SearchPage.is(location) ? {checked:true, items:initialSearchItems.length} : null
         const config = new Config(gmGetValue(), gmSetValue())
         await config.sync()
         if (typeof nrnSetConsoleConfig === 'function') nrnSetConsoleConfig(config)
@@ -12,6 +16,7 @@
         addStyle(CardEnhancements.css)
         addStyle(HoverPreview.css)
         addStyle(CardActions.css)
+        addStyle(SiteHealth.CSS)
         var verdictCache = NgVerdictCache.attach(config, gmGetValue(), gmSetValue(), document)
         config.detailUiTheme.on('changed', function(v) {
           DetailUiTheme.apply(config, document, 'setting-changed:' + v)
@@ -33,8 +38,9 @@
           const subscriptions = Object.values(config).filter(store => store?._eventNameToListeners)
             .map(store => [store, new Map(Array.from(store._eventNameToListeners,
               ([name, listeners]) => [name, new Set(listeners)]))])
-          var model, ctrl, verdictTrackers = []
+          var model, ctrl, verdictTrackers = [], cancelHealth = null
           dispose = function() {
+            cancelHealth?.()
             for (const untrack of verdictTrackers) untrack()
             verdictTrackers.length = 0
             page._disposed = true
@@ -82,8 +88,19 @@
             view.observeMutation(model)
             setupAutoFill(model, page, ctrl)
             model.requestThumbInfo()
+            cancelHealth = SiteHealth.schedule(document, page, {
+              enabled: () => config.siteHealthNoticeEnabled.value,
+              initialPageData: initialSourceUrl === location.href ? initialPageData : null,
+            })
+            initialPageData = null
             console.log('[NicoNicoRankingNG SPA]', 'Start NG checks', page._sourceUrl)
-          } catch (e) { console.error(e); Diagnostics.problem('routeSetup'); stop() }
+          } catch (e) {
+            console.error(e); Diagnostics.problem('routeSetup'); stop()
+            if (config.siteHealthNoticeEnabled.value) {
+              const input = SiteHealth.collect(document, null)
+              SiteHealth.showNotice(document, input, SiteHealth.evaluate(input))
+            }
+          }
         }
         const configure = function() {
           window.__nrnConfigureSpaNavigationGuard?.({enabled:config.spaNavigationFix.value, start, stop})
@@ -94,6 +111,11 @@
       } catch (e) {
         console.error(e)
         Diagnostics.problem('startup')
+        try {
+          addStyle(SiteHealth.CSS)
+          const input = SiteHealth.collect(document, null)
+          SiteHealth.showNotice(document, input, SiteHealth.evaluate(input))
+        } catch (ignored) {}
       }
     }
     var getPage = function() {
